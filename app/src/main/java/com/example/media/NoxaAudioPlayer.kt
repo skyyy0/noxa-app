@@ -313,6 +313,22 @@ class NoxaAudioPlayer(private val context: Context) {
         persistSession(force = true)
     }
 
+    /**
+     * Replaces the queued media item for [song] with its freshly resolved
+     * stream URL (YouTube tracks resolve lazily, one by one, after playback
+     * already started). The currently playing item is never touched — it is
+     * already streaming from its own URL.
+     */
+    fun updateSongStream(song: Song) {
+        if (!isPlayable(song.streamUrl)) return
+        val index = (0 until exoPlayer.mediaItemCount)
+            .firstOrNull { exoPlayer.getMediaItemAt(it).mediaId == song.id } ?: return
+        if (index == exoPlayer.currentMediaItemIndex) return
+        songsById[song.id] = song
+        exoPlayer.replaceMediaItem(index, song.toMediaItem())
+        syncQueueFromPlayer()
+    }
+
     /** Jumps straight to a queue position. */
     fun playQueueIndex(index: Int) {
         if (index !in 0 until exoPlayer.mediaItemCount) return
@@ -425,6 +441,22 @@ class NoxaAudioPlayer(private val context: Context) {
 
     fun clearError() {
         _uiState.update { it.copy(errorMessage = null) }
+    }
+
+    /**
+     * Shows the buffering state while a stream URL is being resolved (e.g. a
+     * YouTube track's audio fetched from an instance) so the UI never looks
+     * frozen between the tap and the actual playback.
+     */
+    fun showResolving() {
+        _uiState.update { it.copy(isBuffering = true, errorMessage = null) }
+    }
+
+    /** Surfaces an honest, user-visible playback problem (e.g. all instances down). */
+    fun showError(message: String) {
+        _uiState.update {
+            it.copy(isBuffering = false, isPlaying = false, errorMessage = message)
+        }
     }
 
     /**

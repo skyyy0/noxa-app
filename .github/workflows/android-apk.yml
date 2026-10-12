@@ -7,9 +7,12 @@
 # This is the GitHub-Actions replacement for codemagic.yaml.
 #
 # Works with zero configuration:
-#   * a debug-signed APK is always built and published (installable on any device);
-#   * if a release keystore is provided through secrets, a release APK is built
-#     and published alongside it.
+#   * a signed RELEASE APK is always built and published. The signing keystore
+#     (`my-upload-key.jks`) is committed to this private repository, so every
+#     build shares ONE stable signature and new versions install as in-place
+#     updates over previously installed ones (from v1.8 onward).
+#   * KEYSTORE_* secrets are no longer required; they are still honoured if
+#     you ever want to sign with a different (e.g. hardware-backed) key.
 #
 # JDK 21 is required: the project compiles against Android SDK 36, and Robolectric
 # refuses to emulate SDK 36 on Java 17, which would break the unit test step.
@@ -94,7 +97,7 @@ jobs:
             } >> "${GITHUB_ENV}"
             echo "Release keystore restored; a signed release APK will be built."
           else
-            echo "KEYSTORE_BASE64 is not set; only a debug-signed APK will be built."
+            echo "KEYSTORE_BASE64 is not set; the committed repository keystore will be used."
           fi
 
       - name: Run unit tests
@@ -104,10 +107,7 @@ jobs:
 
       - name: Build APK
         run: |
-          ./gradlew assembleDebug --no-daemon --stacktrace
-          if [ -n "${SIGNED_RELEASE:-}" ]; then
-            ./gradlew assembleRelease --no-daemon --stacktrace
-          fi
+          ./gradlew assembleRelease --no-daemon --stacktrace
 
       - name: Collect APKs
         id: collect
@@ -143,5 +143,5 @@ jobs:
         run: |
           gh release create "${{ steps.collect.outputs.tag }}" dist/*.apk \
             --title "NOXA ${{ steps.collect.outputs.version }} (build ${{ github.run_number }})" \
-            --notes "APK built automatically from ${GITHUB_SHA} by GitHub Actions. Download the .apk below and install it on your device." \
+            --notes "Signed release APK of NOXA ${{ steps.collect.outputs.version }} built automatically from ${GITHUB_SHA}. Installing it over a previous v1.8+ build updates the app in place — no uninstall needed." \
             --latest

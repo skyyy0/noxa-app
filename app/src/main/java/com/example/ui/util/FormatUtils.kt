@@ -20,4 +20,11 @@ object FormatUtils {
             else -> "$count views"
         }
     }
+
+    /** Indonesian short scale for listener/fan counts: 950, 12,4 rb, 3,2 jt. */
+    fun formatCount(count: Long): String = when {
+        count >= 1_000_000 -> String.format(Locale.US, "%.1f jt", count / 1_000_000.0)
+        count >= 1_000 -> String.format(Locale.US, "%.1f rb", count / 1_000.0)
+        else -> "$count"
+    }
 }

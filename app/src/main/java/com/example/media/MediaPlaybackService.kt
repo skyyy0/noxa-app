@@ -3,6 +3,7 @@ package com.example.media
 import android.app.PendingIntent
 import android.content.Intent
 import android.net.Uri
+import android.os.Bundle
 import android.util.Log
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
@@ -11,6 +12,9 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.CommandButton
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
+import androidx.media3.session.SessionCommand
+import androidx.media3.session.SessionCommands
+import androidx.media3.session.SessionResult
 import com.example.MainActivity
 import com.example.NoxaApplication
 import com.example.data.model.Song
@@ -27,8 +31,8 @@ import com.google.common.util.concurrent.ListenableFuture
  * any custom overlay of its own.
  *
  * [ResumptionCallback] additionally lets the system offer to continue the last
- * session after the app process is killed or the device is rebooted, which is the
- * only reboot-survival path Android allows for media playback (an app is not
+ * session after the app process is killed or the device is rebooted, which is
+ * the only reboot-survival path Android allows for media playback (an app is not
  * allowed to start a `mediaPlayback` foreground service from `BOOT_COMPLETED`).
  */
 @UnstableApi
@@ -52,28 +56,58 @@ class MediaPlaybackService : MediaSessionService() {
 
         mediaSession = MediaSession.Builder(this, player)
             .setSessionActivity(sessionActivity)
-            // Media3 derives the System UI media controls from the session, so the
-            // player's own commands (seek, next/previous, stop) must stay enabled.
+            // The custom shuffle/repeat session commands are granted in
+            // ResumptionCallback.onConnect; without them the System UI could never
+            // dispatch the notification's shuffle/repeat buttons.
             .setCallback(ResumptionCallback(app))
-            // Extra buttons next to the transport controls. Play/pause and
-            // previous/next come from the player's own commands; shuffle and
-            // repeat have to be declared explicitly for Android 13+ System UI.
-            .setMediaButtonPreferences(extraButtons)
+            .setMediaButtonPreferences(mediaButtonPreferences(player))
             .build()
+
+        // The shuffle/repeat notification buttons are custom commands, so Media3
+        // cannot redraw their icons by itself: refresh the preferences whenever
+        // the underlying player state changes (from the app, the notification or
+        // a headset).
+        player.addListener(object : Player.Listener {
+            override fun onShuffleModeEnabledChanged(shuffleModeEnabled: Boolean) {
+                mediaSession?.setMediaButtonPreferences(mediaButtonPreferences(player))
+            }
+
+            override fun onRepeatModeChanged(repeatMode: Int) {
+                mediaSession?.setMediaButtonPreferences(mediaButtonPreferences(player))
+            }
+        })
     }
 
-    private companion object {
-        /**
-         * Shown in the media notification / lock screen in addition to the
-         * transport controls, matching what other music apps expose.
-         */
-        val extraButtons: List<CommandButton> = listOf(
-            CommandButton.Builder(CommandButton.ICON_SHUFFLE_OFF)
-                .setPlayerCommand(Player.COMMAND_SET_SHUFFLE_MODE)
+    /**
+     * Shuffle and repeat for the expanded notification / lock screen.
+     *
+     * They **must be custom session commands**: `DefaultMediaNotificationProvider`
+     * only renders media-button preferences whose `sessionCommand` is custom —
+     * it silently filters out player-command buttons (see
+     * `mediaButtonPreferencesWithEnabledCommandButtonsOnly` in its source), which
+     * is why an earlier version that used `setPlayerCommand` never showed them.
+     * Taps arrive in [ResumptionCallback.onCustomCommand]. Play/pause and
+     * previous/next are added automatically by the provider from the player's
+     * own commands.
+     */
+    private fun mediaButtonPreferences(player: Player): List<CommandButton> {
+        val shuffleIcon = if (player.shuffleModeEnabled) {
+            CommandButton.ICON_SHUFFLE_ON
+        } else {
+            CommandButton.ICON_SHUFFLE_OFF
+        }
+        val repeatIcon = when (player.repeatMode) {
+            Player.REPEAT_MODE_ONE -> CommandButton.ICON_REPEAT_ONE
+            Player.REPEAT_MODE_ALL -> CommandButton.ICON_REPEAT_ALL
+            else -> CommandButton.ICON_REPEAT_OFF
+        }
+        return listOf(
+            CommandButton.Builder(shuffleIcon)
+                .setSessionCommand(SessionCommand(ACTION_SHUFFLE, Bundle.EMPTY))
                 .setDisplayName("Acak")
                 .build(),
-            CommandButton.Builder(CommandButton.ICON_REPEAT_OFF)
-                .setPlayerCommand(Player.COMMAND_SET_REPEAT_MODE)
+            CommandButton.Builder(repeatIcon)
+                .setSessionCommand(SessionCommand(ACTION_REPEAT, Bundle.EMPTY))
                 .setDisplayName("Ulangi")
                 .build()
         )
@@ -102,13 +136,69 @@ class MediaPlaybackService : MediaSessionService() {
         super.onDestroy()
     }
 
+    private companion object {
+        /** Custom session actions handled in [ResumptionCallback.onCustomCommand]. */
+        const val ACTION_SHUFFLE = "com.example.noxa.action.TOGGLE_SHUFFLE"
+        const val ACTION_REPEAT = "com.example.noxa.action.TOGGLE_REPEAT"
+    }
+
     /**
      * Serves the "continue listening" affordance the system shows after the app
-     * was terminated or the device rebooted.
+     * was terminated or the device rebooted, and routes the notification's
+     * custom shuffle/repeat buttons back into the shared player.
      */
     private class ResumptionCallback(
         private val app: NoxaApplication
     ) : MediaSession.Callback {
+
+        /**
+         * Accepts every controller with the default command set plus NOXA's
+         * custom shuffle/repeat actions. Without this the system UI could not
+         * dispatch those custom commands at all.
+         */
+        override fun onConnect(
+            session: MediaSession,
+            controller: MediaSession.ControllerInfo
+        ): MediaSession.ConnectionResult {
+            val sessionCommands = SessionCommands.Builder()
+                .addSessionCommands(
+                    MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.commands
+                )
+                .add(SessionCommand(ACTION_SHUFFLE, Bundle.EMPTY))
+                .add(SessionCommand(ACTION_REPEAT, Bundle.EMPTY))
+                .build()
+            return MediaSession.ConnectionResult.accept(
+                sessionCommands,
+                MediaSession.ConnectionResult.DEFAULT_PLAYER_COMMANDS
+            )
+        }
+
+        /** Toggles the shared player for the notification's custom buttons. */
+        override fun onCustomCommand(
+            session: MediaSession,
+            controller: MediaSession.ControllerInfo,
+            customCommand: SessionCommand,
+            args: Bundle
+        ): ListenableFuture<SessionResult> {
+            val player = session.player
+            when (customCommand.customAction) {
+                ACTION_SHUFFLE -> {
+                    player.shuffleModeEnabled = !player.shuffleModeEnabled
+                    return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+                }
+
+                ACTION_REPEAT -> {
+                    // Same off -> all -> one cycle as the in-app button.
+                    player.repeatMode = when (player.repeatMode) {
+                        Player.REPEAT_MODE_OFF -> Player.REPEAT_MODE_ALL
+                        Player.REPEAT_MODE_ALL -> Player.REPEAT_MODE_ONE
+                        else -> Player.REPEAT_MODE_OFF
+                    }
+                    return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+                }
+            }
+            return super.onCustomCommand(session, controller, customCommand, args)
+        }
 
         override fun onPlaybackResumption(
             mediaSession: MediaSession,

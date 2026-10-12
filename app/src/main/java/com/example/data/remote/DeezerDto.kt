@@ -56,7 +56,10 @@ data class DeezerArtist(
     @Json(name = "picture_small") val pictureSmall: String? = null,
     @Json(name = "picture_medium") val pictureMedium: String? = null,
     @Json(name = "picture_big") val pictureBig: String? = null,
-    @Json(name = "picture_xl") val pictureXl: String? = null
+    @Json(name = "picture_xl") val pictureXl: String? = null,
+    /** Present on `search/artist` and `artist/{id}` items. */
+    @Json(name = "nb_fan") val nbFan: Long? = null,
+    @Json(name = "nb_album") val nbAlbum: Int? = null
 )
 
 @JsonClass(generateAdapter = true)
@@ -66,5 +69,55 @@ data class DeezerAlbum(
     @Json(name = "cover_small") val coverSmall: String? = null,
     @Json(name = "cover_medium") val coverMedium: String? = null,
     @Json(name = "cover_big") val coverBig: String? = null,
-    @Json(name = "cover_xl") val coverXl: String? = null
+    @Json(name = "cover_xl") val coverXl: String? = null,
+    /** Discography fields: present on album endpoints, absent on track.album. */
+    @Json(name = "release_date") val releaseDate: String? = null,
+    @Json(name = "nb_tracks") val nbTracks: Int? = null,
+    @Json(name = "record_type") val recordType: String? = null,
+    @Json(name = "artist") val artist: DeezerArtist? = null
 )
+
+/**
+ * `GET /artist/{id}` — the artist page header. Deezer returns a bare artist
+ * object (or an `error` inside a 200 body), so this is a flat response model
+ * rather than a wrapper.
+ */
+@JsonClass(generateAdapter = true)
+data class DeezerArtistDetailResponse(
+    @Json(name = "id") val id: Long? = null,
+    @Json(name = "name") val name: String? = null,
+    @Json(name = "link") val link: String? = null,
+    @Json(name = "picture_medium") val pictureMedium: String? = null,
+    @Json(name = "picture_big") val pictureBig: String? = null,
+    @Json(name = "picture_xl") val pictureXl: String? = null,
+    @Json(name = "nb_fan") val nbFan: Long? = null,
+    @Json(name = "nb_album") val nbAlbum: Int? = null,
+    @Json(name = "error") val error: DeezerError? = null
+) {
+    val isFailure: Boolean get() = error != null
+}
+
+/** `GET /artist/{id}/albums` — the discography shelf. */
+@JsonClass(generateAdapter = true)
+data class DeezerAlbumListResponse(
+    @Json(name = "data") val data: List<DeezerAlbum>? = null,
+    @Json(name = "error") val error: DeezerError? = null
+) {
+    val isFailure: Boolean get() = error != null
+}
+
+/** `GET /album/{id}` — the album header (tracks come from album/{id}/tracks). */
+@JsonClass(generateAdapter = true)
+data class DeezerAlbumDetailResponse(
+    @Json(name = "id") val id: Long? = null,
+    @Json(name = "title") val title: String? = null,
+    @Json(name = "cover_medium") val coverMedium: String? = null,
+    @Json(name = "cover_big") val coverBig: String? = null,
+    @Json(name = "cover_xl") val coverXl: String? = null,
+    @Json(name = "release_date") val releaseDate: String? = null,
+    @Json(name = "nb_tracks") val nbTracks: Int? = null,
+    @Json(name = "artist") val artist: DeezerArtist? = null,
+    @Json(name = "error") val error: DeezerError? = null
+) {
+    val isFailure: Boolean get() = error != null
+}

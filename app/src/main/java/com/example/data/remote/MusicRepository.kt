@@ -1,5 +1,8 @@
 package com.example.data.remote
 
+import com.example.data.model.AlbumDetail
+import com.example.data.model.AlbumInfo
+import com.example.data.model.ArtistProfile
 import com.example.data.model.Song
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -64,6 +67,24 @@ class MusicRepository(
 
         (deezerResults + audiusResults).distinctBy { it.id }
     }
+
+    // ----------------------------------------------------- artist / album pages
+
+    /** Deezer artist id for a name, cached after the first hit. */
+    suspend fun findArtistId(artistName: String): Long? = deezer.artistIdFor(artistName)
+
+    /** Artist page header (picture, listeners, release count). */
+    suspend fun artistProfile(artistId: Long): ArtistProfile? = deezer.artistProfile(artistId)
+
+    /** Top tracks of an artist by id — the artist page's song list. */
+    suspend fun artistTopTracks(artistId: Long, limit: Int = 25): List<Song> =
+        deezer.topTracksForArtist(artistId, limit)
+
+    /** Discography of an artist. */
+    suspend fun artistAlbums(artistId: Long): List<AlbumInfo> = deezer.artistAlbums(artistId)
+
+    /** Album header plus full tracklist, in track order. */
+    suspend fun albumDetail(albumId: Long): AlbumDetail? = deezer.albumDetail(albumId)
 
     /** Builds the whole home feed from live API data. */
     suspend fun getHomeFeed(): HomeFeed = coroutineScope {

@@ -81,6 +81,7 @@ fun LibraryScreen(
     onAddToQueue: (Song) -> Unit,
     onAddToPlaylist: (Song) -> Unit,
     onShare: (Song) -> Unit,
+    onOpenArtist: (String, String) -> Unit = { _, _ -> },
     onCreatePlaylist: (String, String) -> Unit,
     onDeletePlaylist: (Long) -> Unit,
     onOpenPlaylist: (Long) -> Unit,
@@ -250,6 +251,7 @@ fun LibraryScreen(
                                 onAddToQueue = { onAddToQueue(song) },
                                 onAddToPlaylist = { onAddToPlaylist(song) },
                                 onShare = { onShare(song) },
+                                onOpenArtist = onOpenArtist,
                                 modifier = Modifier.padding(horizontal = 4.dp)
                             )
                         }
@@ -358,6 +360,7 @@ fun LibraryScreen(
                                 onAddToQueue = { onAddToQueue(song) },
                                 onAddToPlaylist = { onAddToPlaylist(song) },
                                 onShare = { onShare(song) },
+                                onOpenArtist = onOpenArtist,
                                 modifier = Modifier.padding(horizontal = 4.dp)
                             )
                         }

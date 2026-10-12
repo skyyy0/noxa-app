@@ -44,12 +44,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.example.data.model.Song
 import com.example.ui.theme.NoxaBlack
 import com.example.ui.theme.NoxaBorder
@@ -120,8 +122,15 @@ fun HeroSpotlightCard(
             .clickable { onPlay() }
             .testTag("hero_spotlight_card")
     ) {
+        val context = LocalContext.current
         AsyncImage(
-            model = song.artworkUrl,
+            // Capped decode size: the card is 200dp tall, so decoding a
+            // 1000x1000 cover for it was wasted work on every home load.
+            model = ImageRequest.Builder(context)
+                .data(song.artworkUrl)
+                .size(512, 512)
+                .crossfade(true)
+                .build(),
             contentDescription = "Spotlight Artwork",
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize()
@@ -213,6 +222,8 @@ fun SongListItem(
     onAddToQueue: (() -> Unit)? = null,
     onAddToPlaylist: (() -> Unit)? = null,
     onShare: (() -> Unit)? = null,
+    /** Opens the artist profile; the artist name becomes tappable when set. */
+    onOpenArtist: ((String, String) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     var menuOpen by remember { mutableStateOf(false) }
@@ -258,21 +269,38 @@ fun SongListItem(
                 overflow = TextOverflow.Ellipsis
             )
             Spacer(modifier = Modifier.height(2.dp))
-            Text(
-                text = buildString {
-                    append(song.artist)
-                    append(" • ")
-                    append(FormatUtils.formatDuration(song.durationMs))
-                    if (song.isPreview) {
-                        append(" • ")
-                        append(PREVIEW_LABEL)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // Artist name doubles as the entry point to the artist profile.
+                Text(
+                    text = song.artist,
+                    color = NoxaTextSecondary,
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = if (onOpenArtist != null) {
+                        Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .clickable { onOpenArtist(song.artistId, song.artist) }
+                            .padding(vertical = 1.dp, horizontal = 2.dp)
+                    } else {
+                        Modifier
                     }
-                },
-                color = NoxaTextSecondary,
-                fontSize = 12.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
+                )
+                Text(
+                    text = buildString {
+                        append(" • ")
+                        append(FormatUtils.formatDuration(song.durationMs))
+                        if (song.isPreview) {
+                            append(" • ")
+                            append(PREVIEW_LABEL)
+                        }
+                    },
+                    color = NoxaTextSecondary,
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
         }
 
         IconButton(

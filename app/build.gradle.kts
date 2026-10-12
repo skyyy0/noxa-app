@@ -1,5 +1,12 @@
 import com.google.gms.googleservices.GoogleServicesPlugin.MissingGoogleServicesStrategy
 
+// Fallback signing credentials for the repository's own keystore
+// (`my-upload-key.jks`). This is a personal, privately hosted app: committing
+// the keystore + password is what lets every CI build produce APKs with ONE
+// stable signature, so each new version installs as an in-place UPDATE instead
+// of requiring an uninstall. Environment variables still take precedence.
+val COMMITTED_KEYSTORE_PASSWORD = "noxa-local-signing"
+
 plugins {
   alias(libs.plugins.android.application)
   alias(libs.plugins.kotlin.compose)
@@ -16,8 +23,8 @@ android {
     applicationId = "com.aistudio.noxa.music"
     minSdk = 24
     targetSdk = 36
-    versionCode = 3
-    versionName = "1.7"
+    versionCode = 5
+    versionName = "1.9"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -41,9 +48,13 @@ android {
     if (releaseKeystoreFile.exists()) {
       create("release") {
         storeFile = releaseKeystoreFile
-        storePassword = System.getenv("STORE_PASSWORD") ?: System.getenv("CM_KEYSTORE_PASSWORD")
+        storePassword = System.getenv("STORE_PASSWORD")
+          ?: System.getenv("CM_KEYSTORE_PASSWORD")
+          ?: COMMITTED_KEYSTORE_PASSWORD
         keyAlias = System.getenv("KEY_ALIAS") ?: System.getenv("CM_KEY_ALIAS") ?: "upload"
-        keyPassword = System.getenv("KEY_PASSWORD") ?: System.getenv("CM_KEY_PASSWORD")
+        keyPassword = System.getenv("KEY_PASSWORD")
+          ?: System.getenv("CM_KEY_PASSWORD")
+          ?: COMMITTED_KEYSTORE_PASSWORD
       }
     }
 

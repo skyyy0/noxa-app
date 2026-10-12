@@ -18,9 +18,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -35,7 +37,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -45,6 +50,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.model.MusicSource
 import com.example.data.model.Song
 import com.example.ui.components.SongListItem
 import com.example.ui.theme.NoxaBlack
@@ -62,6 +68,14 @@ data class BrowseGenre(
     val color: Color
 )
 
+/** Source filter chips above the results. */
+private enum class SourceFilter(val label: String, val source: MusicSource?) {
+    ALL("Semua", null),
+    YOUTUBE("YouTube", MusicSource.YOUTUBE),
+    DEEZER("Deezer", MusicSource.DEEZER),
+    AUDIUS("Audius", MusicSource.AUDIUS)
+}
+
 @Composable
 fun SearchScreen(
     searchQuery: String,
@@ -77,6 +91,7 @@ fun SearchScreen(
     onAddToQueue: (Song) -> Unit,
     onAddToPlaylist: (Song) -> Unit,
     onShare: (Song) -> Unit,
+    onOpenArtist: (String, String) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
     val genres = remember {
@@ -161,6 +176,47 @@ fun SearchScreen(
 
         Spacer(modifier = Modifier.height(10.dp))
 
+        // Source filter — the merged list spans several providers.
+        var sourceFilter by remember { mutableStateOf(SourceFilter.ALL) }
+        val filteredResults = remember(searchResults, sourceFilter) {
+            sourceFilter.source?.let { source -> searchResults.filter { it.source == source } }
+                ?: searchResults
+        }
+
+        if (searchResults.isNotEmpty() && !isSearching) {
+            LazyRow(
+                modifier = Modifier.fillMaxWidth(),
+                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 2.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(SourceFilter.entries) { filter ->
+                    val isSelected = filter == sourceFilter
+                    Box(
+                        modifier = Modifier
+                            .clip(CircleShape)
+                            .background(if (isSelected) NoxaLime else NoxaSurfaceSecondary)
+                            .border(
+                                1.dp,
+                                if (isSelected) NoxaLime else NoxaBorder,
+                                CircleShape
+                            )
+                            .clickable { sourceFilter = filter }
+                            .padding(horizontal = 14.dp, vertical = 7.dp)
+                            .testTag("source_chip_${filter.label}")
+                    ) {
+                        Text(
+                            text = filter.label,
+                            color = if (isSelected) NoxaBlack else NoxaTextPrimary,
+                            fontSize = 12.sp,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
+        }
+
         // Body: Results or Browse Genres
         if (isSearching) {
             Box(
@@ -215,19 +271,34 @@ fun SearchScreen(
                     )
                 }
             }
-        } else if (searchResults.isNotEmpty()) {
+        } else if (searchResults.isNotEmpty() && filteredResults.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(32.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "Tidak ada hasil dari ${sourceFilter.label} untuk \"$searchQuery\"",
+                    color = NoxaTextTertiary,
+                    fontSize = 14.sp,
+                    textAlign = TextAlign.Center
+                )
+            }
+        } else if (filteredResults.isNotEmpty()) {
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(bottom = 120.dp, start = 8.dp, end = 8.dp)
             ) {
-                itemsIndexed(searchResults, key = { _, song -> song.id }) { index, song ->
+                itemsIndexed(filteredResults, key = { _, song -> song.id }) { index, song ->
                     SongListItem(
                         song = song,
                         isPlaying = song.id == currentPlayingSongId,
                         isFavorite = favoriteIds.contains(song.id),
-                        onPlay = { onPlaySong(song, searchResults, index) },
+                        onPlay = { onPlaySong(song, filteredResults, index) },
                         onToggleFavorite = { onToggleFavorite(song) },
                         onPlayNext = { onPlayNext(song) },
+                        onOpenArtist = onOpenArtist,
                         onAddToQueue = { onAddToQueue(song) },
                         onAddToPlaylist = { onAddToPlaylist(song) },
                         onShare = { onShare(song) },

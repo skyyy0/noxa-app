@@ -1,6 +1,9 @@
 package com.example.data.remote
 
 import android.util.Log
+import com.example.data.model.AlbumDetail
+import com.example.data.model.AlbumInfo
+import com.example.data.model.ArtistProfile
 import com.example.data.model.MusicSource
 import com.example.data.model.Song
 import com.squareup.moshi.Moshi
@@ -70,9 +73,76 @@ class DeezerRepository {
     suspend fun artistTopTracks(artistName: String, limit: Int = SEARCH_LIMIT): List<Song> =
         withContext(Dispatchers.IO) {
             val artistId = resolveArtistId(artistName) ?: return@withContext emptyList()
+            topTracksForArtist(artistId, limit)
+        }
+
+    /** Top tracks of an artist, when the id is already known (artist page). */
+    suspend fun topTracksForArtist(artistId: Long, limit: Int = SEARCH_LIMIT): List<Song> =
+        withContext(Dispatchers.IO) {
             val response = safeCall { api.artistTopTracks(artistId, limit) }
             response?.data.orEmpty().mapNotNull { it.toSong() }.distinctBy { it.id }
         }
+
+    /** Public artist-id lookup used to open an artist page from any track. */
+    suspend fun artistIdFor(artistName: String): Long? = resolveArtistId(artistName)
+
+    /**
+     * Artist page header: picture, listener count and release count.
+     * The listener count (`nb_fan`) is also what decides the red vs blue check.
+     */
+    suspend fun artistProfile(artistId: Long): ArtistProfile? = withContext(Dispatchers.IO) {
+        val body = safeResponse(
+            block = { api.artistDetail(artistId) },
+            isFailure = { it.isFailure }
+        ) ?: return@withContext null
+        val id = body.id?.takeIf { it > 0 } ?: return@withContext null
+        ArtistProfile(
+            id = id,
+            name = body.name?.trim().orEmpty().ifEmpty { "Unknown Artist" },
+            pictureUrl = body.pictureXl ?: body.pictureBig ?: body.pictureMedium ?: "",
+            fanCount = body.nbFan ?: 0L,
+            albumCount = body.nbAlbum ?: 0,
+            link = body.link ?: ""
+        )
+    }
+
+    /** The artist's discography, newest first when Deezer provides dates. */
+    suspend fun artistAlbums(artistId: Long): List<AlbumInfo> = withContext(Dispatchers.IO) {
+        val body = safeResponse(
+            block = { api.artistAlbums(artistId, ALBUM_LIMIT) },
+            isFailure = { it.isFailure }
+        ) ?: return@withContext emptyList()
+        body.data.orEmpty()
+            .mapNotNull { it.toAlbumInfo(fallbackArtistId = artistId) }
+            .distinctBy { it.id }
+    }
+
+    /** Album header plus its full tracklist (tracks come back in track order). */
+    suspend fun albumDetail(albumId: Long): AlbumDetail? = withContext(Dispatchers.IO) {
+        val header = safeResponse(
+            block = { api.albumDetail(albumId) },
+            isFailure = { it.isFailure }
+        ) ?: return@withContext null
+        val id = header.id?.takeIf { it > 0 } ?: return@withContext null
+        val albumTitle = header.title?.trim().orEmpty().ifEmpty { "Album" }
+        val cover = header.coverXl ?: header.coverBig ?: header.coverMedium ?: ""
+        val trackResponse = safeCall { api.albumTracks(albumId, ALBUM_TRACK_LIMIT) }
+        val tracks = trackResponse?.data.orEmpty().mapNotNull {
+            it.toSong(defaultAlbum = albumTitle, defaultCover = cover)
+        }
+        AlbumDetail(
+            album = AlbumInfo(
+                id = id,
+                title = albumTitle,
+                coverUrl = cover,
+                releaseYear = header.releaseDate?.take(4).orEmpty(),
+                trackCount = header.nbTracks ?: tracks.size,
+                artistName = header.artist?.name?.trim().orEmpty().ifEmpty { "Unknown Artist" },
+                artistId = header.artist?.id ?: 0L
+            ),
+            tracks = tracks
+        )
+    }
 
     private suspend fun resolveArtistId(artistName: String): Long? {
         artistIdMutex.withLock { artistIdCache[artistName] }?.let { return it }
@@ -82,6 +152,32 @@ class DeezerRepository {
             ?.id
         artistIdMutex.withLock { artistIdCache[artistName] = found }
         return found
+    }
+
+    /**
+     * Generic Deezer call guard: HTTP failures and Deezer's in-body errors both
+     * come back as `null`, so callers never branch on error shapes themselves.
+     */
+    private suspend fun <T> safeResponse(
+        block: suspend () -> Response<T>,
+        isFailure: (T) -> Boolean
+    ): T? = try {
+        val response = block()
+        val body = response.body()
+        when {
+            !response.isSuccessful -> {
+                Log.w(TAG, "HTTP ${response.code()}")
+                null
+            }
+            body == null || isFailure(body) -> {
+                Log.w(TAG, "API error on ${response.raw().request.url.encodedPath}")
+                null
+            }
+            else -> body
+        }
+    } catch (e: Exception) {
+        Log.w(TAG, "Request failed: ${e.message}")
+        null
     }
 
     private suspend fun safeCall(
@@ -122,24 +218,34 @@ class DeezerRepository {
      *
      * A track is only kept when Deezer actually handed back a playable preview
      * URL; otherwise it would be a silent, unplayable entry in the list.
-     * Internal so the mapping can be unit-tested.
+     * [defaultAlbum] / [defaultCover] fill in what `album/{id}/tracks` leaves
+     * out (its track objects carry no `album` block). Internal so the mapping
+     * can be unit-tested.
      */
-    internal fun DeezerTrack.toSong(): Song? {
+    internal fun DeezerTrack.toSong(
+        defaultAlbum: String = "",
+        defaultCover: String = ""
+    ): Song? {
         val remoteId = id?.takeIf { it > 0 } ?: return null
         val previewUrl = preview?.takeIf { it.startsWith("https://") } ?: return null
 
         val artwork = album?.coverXl
             ?: album?.coverBig
             ?: album?.coverMedium
+            ?: defaultCover.takeIf { it.isNotBlank() }
             ?: artist?.pictureXl
             ?: artist?.pictureBig
             ?: ""
+
+        val albumTitle = album?.title?.trim().orEmpty().ifEmpty {
+            defaultAlbum.trim().ifEmpty { "Single" }
+        }
 
         return Song(
             id = "$ID_PREFIX$remoteId",
             title = title?.trim().orEmpty().ifEmpty { "Untitled" },
             artist = artist?.name?.trim().orEmpty().ifEmpty { "Unknown Artist" },
-            album = album?.title?.trim().orEmpty().ifEmpty { "Single" },
+            album = albumTitle,
             artworkUrl = artwork,
             streamUrl = previewUrl,
             durationMs = (duration ?: 0).toLong() * 1000L,
@@ -148,7 +254,22 @@ class DeezerRepository {
             source = MusicSource.DEEZER,
             remoteId = remoteId.toString(),
             isPreview = true,
-            shareUrl = link ?: SHARE_URL_PREFIX + remoteId
+            shareUrl = link ?: SHARE_URL_PREFIX + remoteId,
+            artistId = artist?.id?.toString().orEmpty()
+        )
+    }
+
+    /** Maps a discography entry; entries without an id are dropped. */
+    private fun DeezerAlbum.toAlbumInfo(fallbackArtistId: Long): AlbumInfo? {
+        val albumId = id?.takeIf { it > 0 } ?: return null
+        return AlbumInfo(
+            id = albumId,
+            title = title?.trim().orEmpty().ifEmpty { "Untitled" },
+            coverUrl = coverXl ?: coverBig ?: coverMedium ?: coverSmall ?: "",
+            releaseYear = releaseDate?.take(4).orEmpty(),
+            trackCount = nbTracks ?: 0,
+            artistName = artist?.name?.trim().orEmpty(),
+            artistId = artist?.id ?: fallbackArtistId
         )
     }
 
@@ -158,5 +279,7 @@ class DeezerRepository {
         private const val TAG = "DeezerRepo"
         private const val BASE_URL = "https://api.deezer.com/"
         private const val SEARCH_LIMIT = 25
+        private const val ALBUM_LIMIT = 50
+        private const val ALBUM_TRACK_LIMIT = 100
     }
 }

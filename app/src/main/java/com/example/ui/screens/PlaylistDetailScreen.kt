@@ -67,6 +67,7 @@ fun PlaylistDetailScreen(
     onPlayNext: (Song) -> Unit,
     onAddToQueue: (Song) -> Unit,
     onShare: (Song) -> Unit,
+    onOpenArtist: (String, String) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
     val songs by songsFlow.collectAsStateWithLifecycle(initialValue = emptyList())
@@ -204,6 +205,7 @@ fun PlaylistDetailScreen(
                         onPlayNext = { onPlayNext(song) },
                         onAddToQueue = { onAddToQueue(song) },
                         onShare = { onShare(song) },
+                        onOpenArtist = onOpenArtist,
                         modifier = Modifier.weight(1f)
                     )
                     IconButton(

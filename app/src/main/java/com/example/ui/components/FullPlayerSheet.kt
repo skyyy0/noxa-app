@@ -1,5 +1,6 @@
 package com.example.ui.components
 
+import android.view.SurfaceView
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -70,8 +71,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.runtime.collectAsState
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.Player
 import coil.compose.AsyncImage
+import com.example.data.model.MusicSource
 import com.example.data.model.Song
 import com.example.media.PlaybackProgress
 import com.example.media.PlayerUiState
@@ -86,7 +89,11 @@ import com.example.ui.theme.NoxaTextSecondary
 import com.example.ui.theme.NoxaTextTertiary
 import com.example.ui.util.FormatUtils
 import com.example.ui.viewmodel.LyricsUiState
+import com.example.ui.viewmodel.VideoUiState
 import kotlinx.coroutines.flow.StateFlow
+
+/** 16:9 frame for the music-video view (photos stay square). */
+private const val VIDEO_ASPECT_RATIO = 16f / 9f
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -95,6 +102,7 @@ fun FullPlayerSheet(
     playerState: PlayerUiState,
     progressFlow: StateFlow<PlaybackProgress>,
     lyricsState: LyricsUiState,
+    videoUiState: VideoUiState,
     isFavorite: Boolean,
     onClose: () -> Unit,
     onTogglePlayPause: () -> Unit,
@@ -109,11 +117,19 @@ fun FullPlayerSheet(
     onSelectQueueItem: (Song, Int) -> Unit,
     onShare: () -> Unit,
     onRetryLyrics: () -> Unit,
+    onSetVideoMode: (Boolean) -> Unit,
+    onAttachVideoSurface: (SurfaceView?) -> Unit,
+    /** Opens the artist profile from the now-playing artist line (nullable). */
+    onOpenArtist: ((String, String) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     var showQueueSheet by remember { mutableStateOf(false) }
     var showLyricsSheet by remember { mutableStateOf(false) }
     var showSleepTimerDialog by remember { mutableStateOf(false) }
+
+    // Foto vs Video MV: the video view exists while the stream is resolving
+    // (spinner) or ready (surface).
+    val isVideoActive = videoUiState is VideoUiState.Loading || videoUiState is VideoUiState.Ready
 
     AnimatedVisibility(
         visible = visible && playerState.currentSong != null,
@@ -217,25 +233,66 @@ fun FullPlayerSheet(
                     }
                 }
 
-                // Artwork Card
+                // Artwork Card — or the music video when "Video MV" is selected.
                 Box(
                     modifier = Modifier
                         .fillMaxWidth(0.85f)
-                        .aspectRatio(1f)
+                        .aspectRatio(if (isVideoActive) VIDEO_ASPECT_RATIO else 1f)
                         .clip(RoundedCornerShape(24.dp))
                         .background(NoxaSurfaceElevated)
                         .border(1.dp, NoxaBorder, RoundedCornerShape(24.dp)),
                     contentAlignment = Alignment.Center
                 ) {
-                    AsyncImage(
-                        model = song.artworkUrl,
-                        contentDescription = "Full player artwork",
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize()
-                    )
+                    when {
+                        isVideoActive && videoUiState is VideoUiState.Ready -> {
+                            // A separate muted player renders here; the main audio
+                            // (and the notification controls) never pause.
+                            AndroidView(
+                                factory = { context -> SurfaceView(context) },
+                                update = { surface -> onAttachVideoSurface(surface) },
+                                onRelease = { onAttachVideoSurface(null) },
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+
+                        isVideoActive -> {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(34.dp),
+                                color = NoxaLime,
+                                strokeWidth = 3.dp
+                            )
+                        }
+
+                        else -> {
+                            AsyncImage(
+                                model = song.artworkUrl,
+                                contentDescription = "Full player artwork",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+                    }
                 }
 
-                Spacer(modifier = Modifier.height(28.dp))
+                // Foto / Video MV switch — only tracks that can have an MV.
+                if (song.source == MusicSource.YOUTUBE) {
+                    Spacer(modifier = Modifier.height(14.dp))
+                    PhotoVideoToggle(
+                        videoSelected = isVideoActive,
+                        onSelectVideo = { onSetVideoMode(true) },
+                        onSelectPhoto = { onSetVideoMode(false) }
+                    )
+                    if (videoUiState is VideoUiState.Unavailable) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = videoUiState.message,
+                            color = NoxaTextTertiary,
+                            fontSize = 11.sp
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(if (song.source == MusicSource.YOUTUBE) 14.dp else 28.dp))
 
                 // Title & Artist & Favorite
                 Row(
@@ -259,10 +316,18 @@ fun FullPlayerSheet(
                                 color = NoxaTextSecondary,
                                 fontSize = 15.sp,
                                 maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = if (onOpenArtist != null) {
+                                    Modifier
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .clickable { onOpenArtist(song.artistId, song.artist) }
+                                        .padding(vertical = 2.dp, horizontal = 2.dp)
+                                } else {
+                                    Modifier
+                                }
                             )
                             Spacer(modifier = Modifier.width(8.dp))
-                            AudioQualityBadge(isPreview = song.isPreview)
+                            AudioQualityBadge(song = song)
                         }
                     }
 
@@ -660,13 +725,51 @@ private fun SleepTimerLabel(progressFlow: StateFlow<PlaybackProgress>) {
     )
 }
 
-/**
- * Tells the truth about the audio: Audius serves the full track, Deezer legally
- * only allows a 30 second clip.
- */
+/** The Foto / Video MV segmented switch under the artwork. */
 @Composable
-private fun AudioQualityBadge(isPreview: Boolean) {
-    val label = if (isPreview) "PREVIEW 30s" else "FULL TRACK"
+private fun PhotoVideoToggle(
+    videoSelected: Boolean,
+    onSelectVideo: () -> Unit,
+    onSelectPhoto: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .clip(CircleShape)
+            .background(NoxaSurfaceSecondary)
+            .padding(3.dp),
+        horizontalArrangement = Arrangement.spacedBy(2.dp)
+    ) {
+        listOf(
+            "Foto" to onSelectPhoto,
+            "Video MV" to onSelectVideo
+        ).forEach { (label, onSelect) ->
+            val isSelected = (label == "Video MV") == videoSelected
+            Box(
+                modifier = Modifier
+                    .clip(CircleShape)
+                    .background(if (isSelected) NoxaLime else Color.Transparent)
+                    .clickable { onSelect() }
+                    .padding(horizontal = 16.dp, vertical = 6.dp)
+                    .testTag("player_mode_${label.replace(' ', '_')}")
+            ) {
+                Text(
+                    text = label,
+                    color = if (isSelected) NoxaBlack else NoxaTextSecondary,
+                    fontSize = 12.sp,
+                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AudioQualityBadge(song: Song) {
+    val label = when {
+        song.source == MusicSource.YOUTUBE -> "YOUTUBE • FULL"
+        song.isPreview -> "PREVIEW 30s"
+        else -> "FULL TRACK"
+    }
     Box(
         modifier = Modifier
             .clip(RoundedCornerShape(4.dp))

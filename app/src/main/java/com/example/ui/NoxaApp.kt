@@ -2,6 +2,12 @@ package com.example.ui
 
 import android.app.Activity
 import android.widget.Toast
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -52,7 +58,10 @@ import com.example.data.model.Song
 import com.example.ui.components.AddToPlaylistDialog
 import com.example.ui.components.FullPlayerSheet
 import com.example.ui.components.MiniPlayer
+import com.example.ui.components.YouTubePolicyDialog
 import com.example.ui.screens.AboutSkyScreen
+import com.example.ui.screens.AlbumScreen
+import com.example.ui.screens.ArtistScreen
 import com.example.ui.screens.EqualizerScreen
 import com.example.ui.screens.HomeScreen
 import com.example.ui.screens.LibraryScreen
@@ -68,6 +77,7 @@ import com.example.ui.theme.NoxaTextSecondary
 import com.example.ui.theme.NoxaTextTertiary
 import com.example.ui.util.ShareUtils
 import com.example.ui.viewmodel.MusicViewModel
+import com.example.ui.viewmodel.VideoUiState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -85,6 +95,20 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector)
         const val ARG_ID = "playlistId"
         const val ROUTE = "playlist/{$ARG_ID}"
         fun routeFor(id: Long) = "playlist/$id"
+    }
+
+    /** Artist profile: `artist/{artistId}` (Deezer artist id). */
+    object Artist : Screen("artist", "Artist", Icons.Default.Person) {
+        const val ARG_ID = "artistId"
+        const val ROUTE = "artist/{$ARG_ID}"
+        fun routeFor(id: Long) = "artist/$id"
+    }
+
+    /** Album detail: `album/{albumId}`. */
+    object Album : Screen("album", "Album", Icons.Default.LibraryMusic) {
+        const val ARG_ID = "albumId"
+        const val ROUTE = "album/{$ARG_ID}"
+        fun routeFor(id: Long) = "album/$id"
     }
 }
 
@@ -116,6 +140,10 @@ fun NoxaApp(
 
     val lyricsState by viewModel.lyricsState.collectAsStateWithLifecycle()
     val isFullPlayerVisible by viewModel.isFullPlayerVisible.collectAsStateWithLifecycle()
+    val videoUiState by viewModel.videoUiState.collectAsStateWithLifecycle()
+    val pendingYouTubePlay by viewModel.pendingYouTubePlay.collectAsStateWithLifecycle()
+    val artistUiState by viewModel.artistUiState.collectAsStateWithLifecycle()
+    val albumUiState by viewModel.albumUiState.collectAsStateWithLifecycle()
 
     val context = LocalContext.current
 
@@ -132,6 +160,15 @@ fun NoxaApp(
 
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route ?: Screen.Home.route
+
+    // Tapping an artist name anywhere: resolve id (or name) -> open the page.
+    val openArtistProfile: (String, String) -> Unit = { artistId, artistName ->
+        viewModel.openArtistProfile(artistId, artistName) { resolvedId ->
+            navController.navigate(Screen.Artist.routeFor(resolvedId)) {
+                launchSingleTop = true
+            }
+        }
+    }
 
     val bottomNavItems = listOf(
         Screen.Home,
@@ -165,58 +202,66 @@ fun NoxaApp(
                         onClick = { viewModel.openFullPlayer() }
                     )
 
+                    // Floating pill navigation: the bar itself is a rounded card
+                    // instead of a full-width box, and the selected tab gets an
+                    // animated lime pill with its label — the modern iOS/Android
+                    // hybrid look rather than the old squared-off row.
+                    val navigate: (Screen) -> Unit = { screen ->
+                        navController.navigate(screen.route) {
+                            popUpTo(navController.graph.findStartDestination().id) {
+                                saveState = true
+                            }
+                            launchSingleTop = true
+                            restoreState = true
+                        }
+                    }
+
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(64.dp)
-                            .background(NoxaBlack)
-                            .border(width = 0.8.dp, color = NoxaBorder)
-                            .padding(horizontal = 8.dp),
-                        horizontalArrangement = Arrangement.SpaceAround,
+                            .padding(horizontal = 16.dp, vertical = 8.dp)
+                            .clip(RoundedCornerShape(28.dp))
+                            .background(NoxaSurfaceElevated)
+                            .border(1.dp, NoxaBorder.copy(alpha = 0.7f), RoundedCornerShape(28.dp))
+                            .padding(horizontal = 6.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         bottomNavItems.forEach { screen ->
                             val isSelected = currentRoute == screen.route
-                            Column(
+                            val pillColor by animateColorAsState(
+                                targetValue = if (isSelected) NoxaLime else Color.Transparent,
+                                label = "nav_pill"
+                            )
+                            Row(
                                 modifier = Modifier
-                                    .weight(1f)
-                                    .clickable {
-                                        navController.navigate(screen.route) {
-                                            popUpTo(navController.graph.findStartDestination().id) {
-                                                saveState = true
-                                            }
-                                            launchSingleTop = true
-                                            restoreState = true
-                                        }
-                                    }
-                                    .padding(vertical = 6.dp)
+                                    .clip(CircleShape)
+                                    .background(pillColor)
+                                    .clickable { navigate(screen) }
+                                    .padding(horizontal = 14.dp, vertical = 8.dp)
                                     .testTag("nav_item_${screen.route}"),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.Center
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .background(if (isSelected) NoxaLime.copy(alpha = 0.15f) else Color.Transparent)
-                                        .padding(horizontal = 14.dp, vertical = 4.dp),
-                                    contentAlignment = Alignment.Center
+                                Icon(
+                                    imageVector = screen.icon,
+                                    contentDescription = screen.title,
+                                    tint = if (isSelected) NoxaBlack else NoxaTextTertiary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                AnimatedVisibility(
+                                    visible = isSelected,
+                                    enter = fadeIn() + expandHorizontally(expandFrom = Alignment.Start),
+                                    exit = fadeOut() + shrinkHorizontally(shrinkTowards = Alignment.Start)
                                 ) {
-                                    Icon(
-                                        imageVector = screen.icon,
-                                        contentDescription = screen.title,
-                                        tint = if (isSelected) NoxaLime else NoxaTextTertiary,
-                                        modifier = Modifier.size(22.dp)
+                                    Text(
+                                        text = screen.title,
+                                        color = NoxaBlack,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1,
+                                        modifier = Modifier.padding(start = 6.dp)
                                     )
                                 }
-
-                                Spacer(modifier = Modifier.height(2.dp))
-
-                                Text(
-                                    text = screen.title,
-                                    color = if (isSelected) NoxaLime else NoxaTextTertiary,
-                                    fontSize = 11.sp,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
-                                )
                             }
                         }
                     }
@@ -264,7 +309,8 @@ fun NoxaApp(
                         onPlayNext = { viewModel.playNext(it) },
                         onAddToQueue = { viewModel.addToQueue(it) },
                         onAddToPlaylist = { songPendingPlaylist = it },
-                        onShare = { ShareUtils.shareSong(context, it) }
+                        onShare = { ShareUtils.shareSong(context, it) },
+                        onOpenArtist = openArtistProfile
                     )
                 }
 
@@ -284,7 +330,8 @@ fun NoxaApp(
                         onCreatePlaylist = { name, desc -> viewModel.createPlaylist(name, desc) },
                         onDeletePlaylist = { viewModel.deletePlaylist(it) },
                         onOpenPlaylist = { navController.navigate(Screen.Playlist.routeFor(it)) },
-                        onClearHistory = { viewModel.clearHistory() }
+                        onClearHistory = { viewModel.clearHistory() },
+                        onOpenArtist = openArtistProfile
                     )
                 }
 
@@ -308,7 +355,57 @@ fun NoxaApp(
                             onRemoveSong = { songId -> viewModel.removeSongFromPlaylist(playlistId, songId) },
                             onPlayNext = { viewModel.playNext(it) },
                             onAddToQueue = { viewModel.addToQueue(it) },
-                            onShare = { ShareUtils.shareSong(context, it) }
+                            onShare = { ShareUtils.shareSong(context, it) },
+                            onOpenArtist = openArtistProfile
+                        )
+                    }
+                }
+
+                composable(Screen.Artist.ROUTE) { entry ->
+                    val artistId = entry.arguments?.getString(Screen.Artist.ARG_ID)?.toLongOrNull()
+                    if (artistId == null) {
+                        navController.popBackStack()
+                    } else {
+                        LaunchedEffect(artistId) { viewModel.loadArtist(artistId) }
+                        ArtistScreen(
+                            state = artistUiState,
+                            favoriteIds = favoriteIds,
+                            currentPlayingSongId = playerState.currentSong?.id,
+                            onBack = { navController.popBackStack() },
+                            onPlaySong = { song, queue, idx -> viewModel.playSong(song, queue, idx) },
+                            onToggleFavorite = { viewModel.toggleFavorite(it) },
+                            onPlayNext = { viewModel.playNext(it) },
+                            onAddToQueue = { viewModel.addToQueue(it) },
+                            onAddToPlaylist = { songPendingPlaylist = it },
+                            onShare = { ShareUtils.shareSong(context, it) },
+                            onOpenAlbum = { albumId ->
+                                navController.navigate(Screen.Album.routeFor(albumId))
+                            },
+                            onOpenArtist = openArtistProfile,
+                            onRetry = { viewModel.loadArtist(artistId) }
+                        )
+                    }
+                }
+
+                composable(Screen.Album.ROUTE) { entry ->
+                    val albumId = entry.arguments?.getString(Screen.Album.ARG_ID)?.toLongOrNull()
+                    if (albumId == null) {
+                        navController.popBackStack()
+                    } else {
+                        LaunchedEffect(albumId) { viewModel.loadAlbum(albumId) }
+                        AlbumScreen(
+                            state = albumUiState,
+                            favoriteIds = favoriteIds,
+                            currentPlayingSongId = playerState.currentSong?.id,
+                            onBack = { navController.popBackStack() },
+                            onPlaySong = { song, queue, idx -> viewModel.playSong(song, queue, idx) },
+                            onToggleFavorite = { viewModel.toggleFavorite(it) },
+                            onPlayNext = { viewModel.playNext(it) },
+                            onAddToQueue = { viewModel.addToQueue(it) },
+                            onAddToPlaylist = { songPendingPlaylist = it },
+                            onShare = { ShareUtils.shareSong(context, it) },
+                            onOpenArtist = openArtistProfile,
+                            onRetry = { viewModel.loadAlbum(albumId) }
                         )
                     }
                 }
@@ -353,6 +450,7 @@ fun NoxaApp(
             playerState = playerState,
             progressFlow = viewModel.playbackProgress,
             lyricsState = lyricsState,
+            videoUiState = videoUiState,
             isFavorite = isCurrentFavorite,
             onClose = { viewModel.closeFullPlayer() },
             onTogglePlayPause = { viewModel.togglePlayPause() },
@@ -375,8 +473,26 @@ fun NoxaApp(
             onShare = {
                 playerState.currentSong?.let { ShareUtils.shareSong(context, it) }
             },
-            onRetryLyrics = { viewModel.retryLyrics() }
+            onRetryLyrics = { viewModel.retryLyrics() },
+            onSetVideoMode = { enabled -> viewModel.setVideoMode(enabled) },
+            onAttachVideoSurface = { surface -> viewModel.attachMvSurface(surface) },
+            onOpenArtist = { artistId, artistName ->
+                viewModel.openArtistProfile(artistId, artistName) { resolvedId ->
+                    viewModel.closeFullPlayer()
+                    navController.navigate(Screen.Artist.routeFor(resolvedId)) {
+                        launchSingleTop = true
+                    }
+                }
+            }
         )
+
+        // One-time YouTube usage policy, shown before the first YouTube play.
+        if (pendingYouTubePlay != null) {
+            YouTubePolicyDialog(
+                onAccept = { viewModel.acceptYouTubePolicy() },
+                onDecline = { viewModel.declineYouTubePolicy() }
+            )
+        }
 
         // "Which playlist?" picker, triggered from any song's overflow menu.
         songPendingPlaylist?.let { song ->

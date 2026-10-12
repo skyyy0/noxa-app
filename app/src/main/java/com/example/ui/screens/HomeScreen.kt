@@ -179,7 +179,10 @@ fun HomeScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     AsyncImage(
-                        model = resumeSong.artworkUrl,
+                        model = ImageRequest.Builder(context)
+                            .data(resumeSong.artworkUrl)
+                            .size(128, 128)
+                            .build(),
                         contentDescription = null,
                         contentScale = ContentScale.Crop,
                         modifier = Modifier
