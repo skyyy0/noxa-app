@@ -78,6 +78,7 @@ fun HomeScreen(
     onDismissResume: () -> Unit,
     onSignInWithGoogle: (Activity) -> Unit,
     onRetry: () -> Unit,
+    onOpenArtist: (String, String) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -514,7 +515,13 @@ fun HomeScreen(
                                     color = NoxaTextSecondary,
                                     fontSize = 11.sp,
                                     maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
+                                    overflow = TextOverflow.Ellipsis,
+                                    // Shelf cards are narrow, so the artist name
+                                    // itself is the entry point to their profile.
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .clickable { onOpenArtist(song.artistId, song.artist) }
+                                        .padding(vertical = 1.dp, horizontal = 2.dp)
                                 )
                             }
                         }

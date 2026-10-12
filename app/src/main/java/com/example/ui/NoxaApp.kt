@@ -291,7 +291,8 @@ fun NoxaApp(
                         onResume = { viewModel.resumeLastSession() },
                         onDismissResume = { viewModel.dismissResume() },
                         onSignInWithGoogle = { activity -> viewModel.signInWithGoogle(activity) },
-                        onRetry = { viewModel.loadHome() }
+                        onRetry = { viewModel.loadHome() },
+                        onOpenArtist = openArtistProfile
                     )
                 }
 

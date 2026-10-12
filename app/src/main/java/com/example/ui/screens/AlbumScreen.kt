@@ -172,29 +172,27 @@ fun AlbumScreen(
                                 overflow = TextOverflow.Ellipsis
                             )
                             Spacer(modifier = Modifier.height(8.dp))
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    text = album.artistName,
-                                    color = NoxaTextSecondary,
-                                    fontSize = 14.sp,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(6.dp))
-                                        .clickable {
-                                            onOpenArtist(
-                                                album.artistId.toString(),
-                                                album.artistName
-                                            )
-                                        }
-                                        .padding(vertical = 2.dp, horizontal = 2.dp)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                VerifiedArtistBadge(
-                                    isBigArtist = false,
-                                    sizeDp = 15
-                                )
-                            }
+                            // No verified badge here on purpose: the album
+                            // payload does not carry the artist's listener
+                            // count, so the check color would be a guess.
+                            // Tapping the name opens the profile, where the
+                            // real red/blue badge lives.
+                            Text(
+                                text = album.artistName,
+                                color = NoxaTextSecondary,
+                                fontSize = 14.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .clickable {
+                                        onOpenArtist(
+                                            album.artistId.toString(),
+                                            album.artistName
+                                        )
+                                    }
+                                    .padding(vertical = 2.dp, horizontal = 2.dp)
+                            )
                             Spacer(modifier = Modifier.height(6.dp))
                             Text(
                                 text = buildString {
