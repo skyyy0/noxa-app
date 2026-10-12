@@ -89,10 +89,34 @@ class YouTubeSourceRepository {
         val fromPiped = runCatching { pipedSearch(trimmed) }.getOrDefault(emptyList())
         val fromInvidious = runCatching { invidiousSearch(trimmed) }.getOrDefault(emptyList())
 
-        (fromDataApi + fromPiped + fromInvidious)
+        val merged = (fromDataApi + fromPiped + fromInvidious)
             .distinctBy { it.id }
-            .take(MAX_SEARCH_RESULTS)
+            .toMutableList()
+
+        // When every instance endpoint is down and no API key is set, the
+        // on-device extractor's own search keeps matching — and playback —
+        // fully functional without any server dependency.
+        if (merged.size < MIN_RESULTS_BEFORE_DEVICE_SEARCH) {
+            merged += runCatching { deviceSearch(trimmed) }.getOrDefault(emptyList())
+        }
+
+        merged.distinctBy { it.id }.take(MAX_SEARCH_RESULTS)
     }
+
+    /** Maps the on-device extractor's results onto the app model. */
+    private suspend fun deviceSearch(query: String): List<Song> =
+        DeviceYouTubeExtractor.searchVideos(query).map { result ->
+            Song(
+                id = Song.idFor(MusicSource.YOUTUBE, result.videoId),
+                title = result.title.ifBlank { "YouTube video" },
+                artist = result.uploader.ifBlank { "YouTube" },
+                album = ALBUM_LABEL,
+                artworkUrl = thumbnailFor(result.videoId),
+                durationMs = result.durationMs,
+                source = MusicSource.YOUTUBE,
+                remoteId = result.videoId
+            )
+        }
 
     private fun dataApiSearch(query: String): List<Song> {
         val key = dataApiKey ?: return emptyList()
@@ -157,11 +181,12 @@ class YouTubeSourceRepository {
      *
      * Only call this once the usage policy has been accepted.
      */
-    suspend fun findFullAudio(song: Song): Song? {
-        synchronized(cacheLock) { matchCache[song.id] }?.let { videoId ->
-            val cachedAudio = streamsFor(videoId)?.audioUrl
+    suspend fun findFullAudio(song: Song): Song? = withContext(Dispatchers.IO) {
+        val cachedVideoId = synchronized(cacheLock) { matchCache[song.id] }
+        if (cachedVideoId != null) {
+            val cachedAudio = streamsFor(cachedVideoId)?.audioUrl
             if (cachedAudio != null) {
-                return song.copy(streamUrl = cachedAudio, isPreview = false)
+                return@withContext song.copy(streamUrl = cachedAudio, isPreview = false)
             }
             synchronized(cacheLock) { matchCache.remove(song.id) }
         }
@@ -170,7 +195,7 @@ class YouTubeSourceRepository {
             .filter { it.isNotBlank() }
             .joinToString(" ")
             .trim()
-        if (query.isBlank()) return null
+        if (query.isBlank()) return@withContext null
 
         val best = runCatching { search(query) }
             .getOrDefault(emptyList())
@@ -188,11 +213,11 @@ class YouTubeSourceRepository {
             .filter { (_, score) -> score >= MIN_MATCH_SCORE }
             .maxByOrNull { (_, score) -> score }
             ?.first
-            ?: return null
+            ?: return@withContext null
 
-        val audioUrl = streamsFor(best.remoteId)?.audioUrl ?: return null
+        val audioUrl = streamsFor(best.remoteId)?.audioUrl ?: return@withContext null
         synchronized(cacheLock) { matchCache[song.id] = best.remoteId }
-        return song.copy(streamUrl = audioUrl, isPreview = false)
+        song.copy(streamUrl = audioUrl, isPreview = false)
     }
 
     // -------------------------------------------------------------- resolution
@@ -202,11 +227,11 @@ class YouTubeSourceRepository {
      * [song] pointing at the resolved stream, or `null` when no instance could
      * provide one (the caller shows an honest error).
      */
-    suspend fun resolveAudio(song: Song): Song? {
+    suspend fun resolveAudio(song: Song): Song? = withContext(Dispatchers.IO) {
         val streams = streamsFor(song.remoteId.ifBlank { song.id.removePrefix(ID_PREFIX) })
-            ?: return null
-        val audioUrl = streams.audioUrl ?: return null
-        return song.copy(streamUrl = audioUrl, isPreview = false)
+            ?: return@withContext null
+        val audioUrl = streams.audioUrl ?: return@withContext null
+        song.copy(streamUrl = audioUrl, isPreview = false)
     }
 
     /**
@@ -214,24 +239,51 @@ class YouTubeSourceRepository {
      * view. Played on a separate muted player so the main audio — and the
      * notification controls — keep running untouched.
      */
-    suspend fun resolveVideoUrl(song: Song): String? {
+    suspend fun resolveVideoUrl(song: Song): String? = withContext(Dispatchers.IO) {
         val videoId = song.remoteId.ifBlank { song.id.removePrefix(ID_PREFIX) }
-        return streamsFor(videoId)?.videoUrl
+        streamsFor(videoId, requireVideo = true)?.videoUrl
     }
 
-    /** Fetches (or returns cached) audio+video URLs for one video id. */
-    private fun streamsFor(videoId: String): CachedStreams? {
+    /**
+     * Fetches (or returns cached) audio+video URLs for one video id.
+     *
+     * Audio resolution tries the **on-device extractor first** (no instance
+     * dependency at all), then Piped (proxied URLs), then Invidious. Callers
+     * must already be on [Dispatchers.IO] — this performs blocking network I/O.
+     */
+    private suspend fun streamsFor(videoId: String, requireVideo: Boolean = false): CachedStreams? {
         if (videoId.isBlank()) return null
 
         synchronized(cacheLock) {
             streamCache[videoId]?.let { cached ->
-                if (System.currentTimeMillis() - cached.fetchedAtMs < CACHE_TTL_MS) return cached
+                val freshEnough =
+                    System.currentTimeMillis() - cached.fetchedAtMs < CACHE_TTL_MS
+                if (freshEnough && (!requireVideo || cached.videoUrl != null)) {
+                    return cached
+                }
             }
         }
 
-        val fresh = pipedStreams(videoId) ?: invidiousStreams(videoId) ?: return null
+        // Audio: device extractor first (no instance dependency). Video (MV):
+        // instances only — the device path is audio-focused.
+        val deviceAudio = runCatching { deviceStreams(videoId) }.getOrNull()
+        val fresh = if (requireVideo) {
+            pipedStreams(videoId) ?: invidiousStreams(videoId) ?: deviceAudio ?: return null
+        } else {
+            deviceAudio ?: pipedStreams(videoId) ?: invidiousStreams(videoId) ?: return null
+        }
         synchronized(cacheLock) { streamCache[videoId] = fresh }
         return fresh
+    }
+
+    /** Audio-only streams straight from the device extractor (full duration). */
+    private suspend fun deviceStreams(videoId: String): CachedStreams? {
+        val audioUrl = DeviceYouTubeExtractor.extractAudioUrl(videoId) ?: return null
+        return CachedStreams(
+            audioUrl = audioUrl,
+            videoUrl = null,
+            fetchedAtMs = System.currentTimeMillis()
+        )
     }
 
     private fun pipedStreams(videoId: String): CachedStreams? =
@@ -436,6 +488,7 @@ class YouTubeSourceRepository {
         private const val ID_PREFIX = "youtube:"
         private const val ALBUM_LABEL = "YouTube"
         private const val MAX_SEARCH_RESULTS = 30
+        private const val MIN_RESULTS_BEFORE_DEVICE_SEARCH = 3
         private const val MAX_CACHE_ENTRIES = 48
         private const val CACHE_TTL_MS = 4L * 60L * 60L * 1000L
         private const val MV_TARGET_HEIGHT = 360

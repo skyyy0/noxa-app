@@ -64,9 +64,6 @@ import com.example.ui.theme.NoxaTextSecondary
 import com.example.ui.theme.NoxaTextTertiary
 import com.example.ui.util.FormatUtils
 
-/** Shown next to tracks that Deezer only allows to be streamed as a 30s clip. */
-private const val PREVIEW_LABEL = "PREVIEW 30s"
-
 @Composable
 fun CategoryChipsRow(
     categories: List<String>,
@@ -287,14 +284,10 @@ fun SongListItem(
                     }
                 )
                 Text(
-                    text = buildString {
-                        append(" • ")
-                        append(FormatUtils.formatDuration(song.durationMs))
-                        if (song.isPreview) {
-                            append(" • ")
-                            append(PREVIEW_LABEL)
-                        }
-                    },
+                    // Deezer tracks resolve to full-length audio at play time
+                    // (YouTube matcher + on-device extractor), so the old
+                    // "PREVIEW 30s" suffix would now be misleading.
+                    text = " • " + FormatUtils.formatDuration(song.durationMs),
                     color = NoxaTextSecondary,
                     fontSize = 12.sp,
                     maxLines = 1,

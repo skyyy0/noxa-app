@@ -767,7 +767,9 @@ private fun PhotoVideoToggle(
 private fun AudioQualityBadge(song: Song) {
     val label = when {
         song.source == MusicSource.YOUTUBE -> "YOUTUBE • FULL"
-        song.isPreview -> "PREVIEW 30s"
+        // Deezer previews resolve to full-length audio at play time; the
+        // badge names the source, not a (now obsolete) 30 second limitation.
+        song.isPreview -> "DEEZER"
         else -> "FULL TRACK"
     }
     Box(

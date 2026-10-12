@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -97,6 +98,9 @@ fun ArtistScreen(
         modifier = modifier
             .fillMaxSize()
             .background(NoxaBlack)
+            // Keeps the back button clear of the status bar/clock on every
+            // device (notches, punch holes, edge-to-edge).
+            .statusBarsPadding()
     ) {
         when (state) {
             is ArtistUiState.Loading -> {

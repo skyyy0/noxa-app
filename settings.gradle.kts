@@ -19,6 +19,8 @@ dependencyResolutionManagement {
   repositories {
     google()
     mavenCentral()
+    // NewPipeExtractor (on-device YouTube audio extraction) is published on JitPack.
+    maven("https://jitpack.io")
   }
 }
 

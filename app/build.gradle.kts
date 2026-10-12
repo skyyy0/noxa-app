@@ -23,8 +23,8 @@ android {
     applicationId = "com.aistudio.noxa.music"
     minSdk = 24
     targetSdk = 36
-    versionCode = 5
-    versionName = "1.9"
+    versionCode = 6
+    versionName = "1.9.1"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -86,6 +86,9 @@ android {
   compileOptions {
     sourceCompatibility = JavaVersion.VERSION_11
     targetCompatibility = JavaVersion.VERSION_11
+    // NewPipeExtractor uses java.nio.file APIs that need core-library
+    // desugaring on minSdk < 33 (per the library's README).
+    isCoreLibraryDesugaringEnabled = true
   }
   buildFeatures {
     compose = true
@@ -140,7 +143,10 @@ dependencies {
   implementation(libs.androidx.media3.ui)
   implementation(libs.androidx.media3.common)
   implementation(libs.firebase.ai)
-  implementation(libs.firebase.firestore)
+  // firebase-firestore removed in v1.9.1: it is unused in app code and its
+  // transitive protolite-well-known-types duplicates protobuf classes that
+  // NewPipeExtractor needs at a newer version (release builds failed the
+  // duplicate-class check). Auth is unaffected.
   implementation(libs.firebase.auth)
   implementation(libs.androidx.credentials)
   implementation(libs.androidx.credentials.play.services)
@@ -150,6 +156,10 @@ dependencies {
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
   implementation(libs.logging.interceptor)
+  // On-device YouTube audio extraction: full-length streams without any
+  // Piped/Invidious instance. License GPL-3.0 — fine for this private app.
+  implementation("com.github.teamnewpipe:NewPipeExtractor:v0.26.5")
+  coreLibraryDesugaring("com.android.tools:desugar_jdk_libs_nio:2.0.1")
   implementation(libs.moshi.kotlin)
   implementation(libs.okhttp)
   // implementation(libs.play.services.location)

@@ -180,6 +180,19 @@ fun NoxaApp(
 
     val isCurrentFavorite = playerState.currentSong?.id?.let { favoriteIds.contains(it) } ?: false
 
+    // Hoisted tab navigation: tapping any bottom-nav tab always runs this,
+    // from every route (home, search, library, equalizer, profile, artist,
+    // album, playlist). Popping to the start destination keeps the stack flat.
+    val navigateToTab: (Screen) -> Unit = { screen ->
+        navController.navigate(screen.route) {
+            popUpTo(navController.graph.findStartDestination().id) {
+                saveState = true
+            }
+            launchSingleTop = true
+            restoreState = true
+        }
+    }
+
     Box(modifier = Modifier.fillMaxSize().background(NoxaBlack)) {
         Scaffold(
             bottomBar = {
@@ -206,16 +219,6 @@ fun NoxaApp(
                     // instead of a full-width box, and the selected tab gets an
                     // animated lime pill with its label — the modern iOS/Android
                     // hybrid look rather than the old squared-off row.
-                    val navigate: (Screen) -> Unit = { screen ->
-                        navController.navigate(screen.route) {
-                            popUpTo(navController.graph.findStartDestination().id) {
-                                saveState = true
-                            }
-                            launchSingleTop = true
-                            restoreState = true
-                        }
-                    }
-
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -237,7 +240,7 @@ fun NoxaApp(
                                 modifier = Modifier
                                     .clip(CircleShape)
                                     .background(pillColor)
-                                    .clickable { navigate(screen) }
+                                    .clickable { navigateToTab(screen) }
                                     .padding(horizontal = 14.dp, vertical = 8.dp)
                                     .testTag("nav_item_${screen.route}"),
                                 verticalAlignment = Alignment.CenterVertically

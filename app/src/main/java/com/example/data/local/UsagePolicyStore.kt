@@ -14,9 +14,15 @@ class UsagePolicyStore(context: Context) {
 
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
-    /** True once the user has read and accepted the policy at least once. */
+    /**
+     * True by default: the app owner distributes this build privately (not on
+     * Play Store) and explicitly wants every track to play full-length through
+     * the YouTube matcher/extractor, so the one-time consent dialog no longer
+     * gates playback. The flag is kept so a future build can flip the default
+     * back without touching call sites.
+     */
     var isYouTubePolicyAccepted: Boolean
-        get() = prefs.getBoolean(KEY_YOUTUBE_ACCEPTED, false)
+        get() = prefs.getBoolean(KEY_YOUTUBE_ACCEPTED, true)
         private set(value) {
             prefs.edit().putBoolean(KEY_YOUTUBE_ACCEPTED, value).apply()
         }

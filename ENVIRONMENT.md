@@ -81,6 +81,25 @@ pengguna sebelum pemutaran pertama.
   Pengguna yang menolak kebijakan tidak ditanya lagi dan lagu tetap preview.
   `STREAM_RESOLVER_URL`, bila diisi, tetap didahulukan untuk semua lagu.
 
+### v1.9.1 — audio utuh tanpa instance & perbaikan UI
+
+* **NewPipeExtractor (ekstraksi di perangkat)** — library open-source (GPL-3)
+  yang mengekstrak URL audio YouTube **langsung dari HP**, tanpa server
+  Piped/Invidious. Urutan resolusi audio kini: `STREAM_RESOLVER_URL` →
+  ekstraktor perangkat → Piped → Invidious. Pencarian YouTube juga punya
+  jaring pengaman ekstraktor perangkat saat semua instance pencarian mati.
+* **Semua lagu utuh, tanpa dialog** — kebijakan penggunaan kini diterima
+  bawaan (keputusan pemilik: distribusi privat, tidak masuk Play Store).
+  Lagu Deezer diputar **utuh**; badge menampilkan sumber ("DEEZER"), bukan
+  "PREVIEW 30s". Bila kecocokan benar-benar gagal, lagu tetap diputar
+  apa adanya — tidak pernah memutar audio yang salah.
+* **Perbaikan UI** — halaman artis/album tidak lagi tertutup status bar
+  (inset otomatis semua perangkat); navigasi bawah di-hoist agar selalu
+  aktif dari setiap halaman.
+* **Catatan teknis** — seluruh jaringan resolusi dipindah ke thread I/O;
+  sebelumnya sebagian berjalan di main thread sehingga sentuhan bisa
+  membeku seketika dan fallback gagal diam-diam ke preview 30 detik.
+
 ## Variabel `.env` (semuanya opsional)
 
 | Variabel | Wajib | Keterangan |
