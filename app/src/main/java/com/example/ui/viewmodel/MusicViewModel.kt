@@ -41,6 +41,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     private val player = app.player
     private val repository = app.musicRepository
     private val lyricsRepository = app.lyricsRepository
+    private val streamResolver = app.streamResolver
     private val dao = app.database.noxaDao()
     val authManager = app.authManager
 
@@ -245,10 +246,33 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // Playback delegation
+    /** True when a full-length stream resolver is configured for this build. */
+    val isFullTrackResolverConfigured: Boolean get() = streamResolver.isConfigured
+
+    /**
+     * Playback delegation.
+     *
+     * When a stream resolver is configured, the track is first offered to it so a
+     * full-length audio URL can replace the short preview. The lookup has to
+     * finish before playback starts, otherwise ExoPlayer would already be
+     * buffering the preview. If the resolver declines (or is unreachable) the
+     * original source is played unchanged.
+     */
     fun playSong(song: Song, queue: List<Song> = listOf(song), index: Int = 0) {
-        player.playSong(song, queue, index)
         _resumableSong.value = null
+        if (!streamResolver.isConfigured) {
+            player.playSong(song, queue, index)
+            return
+        }
+        viewModelScope.launch {
+            val resolved = streamResolver.resolve(song)
+            if (resolved == null) {
+                player.playSong(song, queue, index)
+            } else {
+                val resolvedQueue = queue.map { if (it.id == resolved.id) resolved else it }
+                player.playSong(resolved, resolvedQueue, index)
+            }
+        }
     }
 
     fun playNext(song: Song) {

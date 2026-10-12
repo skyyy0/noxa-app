@@ -14,6 +14,7 @@ import coil.request.CachePolicy
 import com.example.data.local.NoxaDatabase
 import com.example.data.remote.LyricsRepository
 import com.example.data.remote.MusicRepository
+import com.example.data.remote.StreamResolver
 import com.example.media.MediaPlaybackService
 import com.example.media.NoxaAudioPlayer
 import com.google.common.util.concurrent.ListenableFuture
@@ -29,6 +30,9 @@ class NoxaApplication : Application(), ImageLoaderFactory {
         private set
 
     lateinit var lyricsRepository: LyricsRepository
+        private set
+
+    lateinit var streamResolver: StreamResolver
         private set
 
     lateinit var player: NoxaAudioPlayer
@@ -56,6 +60,7 @@ class NoxaApplication : Application(), ImageLoaderFactory {
         database = NoxaDatabase.getDatabase(this)
         musicRepository = MusicRepository()
         lyricsRepository = LyricsRepository()
+        streamResolver = StreamResolver()
         player = NoxaAudioPlayer(this)
         authManager = com.example.data.auth.AuthManager(this)
         connectMediaSession()

@@ -6,7 +6,9 @@ import android.net.Uri
 import android.util.Log
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.session.CommandButton
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import com.example.MainActivity
@@ -53,7 +55,28 @@ class MediaPlaybackService : MediaSessionService() {
             // Media3 derives the System UI media controls from the session, so the
             // player's own commands (seek, next/previous, stop) must stay enabled.
             .setCallback(ResumptionCallback(app))
+            // Extra buttons next to the transport controls. Play/pause and
+            // previous/next come from the player's own commands; shuffle and
+            // repeat have to be declared explicitly for Android 13+ System UI.
+            .setMediaButtonPreferences(extraButtons)
             .build()
+    }
+
+    private companion object {
+        /**
+         * Shown in the media notification / lock screen in addition to the
+         * transport controls, matching what other music apps expose.
+         */
+        val extraButtons: List<CommandButton> = listOf(
+            CommandButton.Builder(CommandButton.ICON_SHUFFLE_OFF)
+                .setPlayerCommand(Player.COMMAND_SET_SHUFFLE_MODE)
+                .setDisplayName("Acak")
+                .build(),
+            CommandButton.Builder(CommandButton.ICON_REPEAT_OFF)
+                .setPlayerCommand(Player.COMMAND_SET_REPEAT_MODE)
+                .setDisplayName("Ulangi")
+                .build()
+        )
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? =

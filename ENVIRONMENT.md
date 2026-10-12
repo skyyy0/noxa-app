@@ -39,12 +39,52 @@ pada field `Song.streamUrl` — pemutar Media3 akan memakainya apa adanya.
 | Variabel | Wajib | Keterangan |
 | --- | --- | --- |
 | `AUDIUS_API_KEY` | Tidak | Kunci developer Audius. Tanpa ini pun Audius tetap bisa dibaca (anonim). Bila diisi, dikirim sebagai header `x-api-key`. |
+| `STREAM_RESOLVER_URL` | Tidak | Endpoint milik Anda sendiri. Bila diisi, setiap lagu yang mau diputar ditawarkan ke resolver ini untuk mendapatkan URL audio **utuh** (lihat di bawah). |
 
 Contoh isi `.env`:
 
 ```dotenv
 AUDIUS_API_KEY=
+STREAM_RESOLVER_URL=https://backend-anda.example/api/resolve
 ```
+
+### Cara kerja `STREAM_RESOLVER_URL` (jalur lagu utuh)
+
+Deezer hanya mengizinkan klip 30 detik, dan Audius tidak punya katalog
+mainstream Indonesia. Satu-satunya jalur legal untuk memutar lagu **utuh** dari
+katalog mainstream adalah backend milik Anda sendiri (mis. CDN berlisensi atau
+layanan berlangganan Anda). NOXA tidak menyertakan scraper apa pun; ia hanya
+menanyakan URL ke endpoint yang Anda tentukan.
+
+Saat pengguna menekan play, NOXA memanggil:
+
+```
+GET <STREAM_RESOLVER_URL>?id=<song id>&source=<AUDIUS|DEEZER>&title=<judul>
+                         &artist=<artis>&durationMs=<ms>&remoteId=<id provider>
+Accept: application/json
+```
+
+Resolver menjawab salah satu dari ini:
+
+```json
+{ "streamUrl": "https://cdn.anda/lagu-utuh.mp3" }
+```
+
+```json
+{ "url": "https://cdn.anda/lagu-utuh.mp3" }
+```
+
+Kalau resolver membalas 404, badan kosong, atau tanpa URL, lagu tetap diputar
+dari sumber aslinya (preview Deezer / Audius). URL harus `https://` dan
+langsung bisa diputar Media3 (mp3/aac/ogg; HLS `.m3u8` juga didukung ExoPlayer).
+
+Karena pencarian menunggu jawaban resolver sebelum mulai memutar, buat resolver
+Anda cepat (di bawah ~1 detik). Batas waktu di aplikasi: 6 detik koneksi,
+10 detik baca.
+
+> Tanggung jawab Anda: apa pun yang Anda taruh di balik endpoint itu. NOXA tidak
+> mengambil audio dari YouTube/Deezer/Spotify secara langsung — itu melanggar
+> Terms of Service mereka dan hak cipta, dan juga cepat rusak.
 
 ## Membaca konfigurasi dengan aman
 
