@@ -175,7 +175,7 @@ fun SearchScreen(
                         strokeWidth = 2.dp
                     )
                     Text(
-                        text = "Searching YouTube...",
+                        text = "Mencari musik...",
                         color = NoxaTextSecondary,
                         fontSize = 14.sp
                     )

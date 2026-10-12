@@ -22,21 +22,39 @@ android {
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
 
-  // Do not remove or modify these signingConfigs. They are necessary for building, installing,
-  // and updating Android apps in AI Studio.
+  // Signing configuration.
+  //
+  // AI Studio ships the release keystore at ${rootDir}/my-upload-key.jks and passes
+  // KEYSTORE_PATH / STORE_PASSWORD / KEY_PASSWORD. Codemagic instead exports
+  // CM_KEYSTORE_PATH / CM_KEYSTORE_PASSWORD / CM_KEY_ALIAS / CM_KEY_PASSWORD through
+  // its `android_signing` integration. Both are supported here.
+  //
+  // A signing config is only registered when its keystore actually exists, so the
+  // project can also be compiled on CI without any keystore (the release APK is then
+  // simply left unsigned instead of failing the build).
   signingConfigs {
-    create("release") {
-      val keystorePath = System.getenv("KEYSTORE_PATH") ?: "${rootDir}/my-upload-key.jks"
-      storeFile = file(keystorePath)
-      storePassword = System.getenv("STORE_PASSWORD")
-      keyAlias = "upload"
-      keyPassword = System.getenv("KEY_PASSWORD")
+    val releaseKeystoreFile = file(
+      System.getenv("KEYSTORE_PATH")
+        ?: System.getenv("CM_KEYSTORE_PATH")
+        ?: "${rootDir}/my-upload-key.jks"
+    )
+    if (releaseKeystoreFile.exists()) {
+      create("release") {
+        storeFile = releaseKeystoreFile
+        storePassword = System.getenv("STORE_PASSWORD") ?: System.getenv("CM_KEYSTORE_PASSWORD")
+        keyAlias = System.getenv("KEY_ALIAS") ?: System.getenv("CM_KEY_ALIAS") ?: "upload"
+        keyPassword = System.getenv("KEY_PASSWORD") ?: System.getenv("CM_KEY_PASSWORD")
+      }
     }
-    create("debugConfig") {
-      storeFile = file("${rootDir}/debug.keystore")
-      storePassword = "android"
-      keyAlias = "androiddebugkey"
-      keyPassword = "android"
+
+    val debugKeystoreFile = file("${rootDir}/debug.keystore")
+    if (debugKeystoreFile.exists()) {
+      create("debugConfig") {
+        storeFile = debugKeystoreFile
+        storePassword = "android"
+        keyAlias = "androiddebugkey"
+        keyPassword = "android"
+      }
     }
   }
 
@@ -45,14 +63,13 @@ android {
       isCrunchPngs = false
       isMinifyEnabled = false
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-      // Do not remove or modify this signingConfig assignment. It is necessary for Android apps in
-      // AI Studio.
-      signingConfig = signingConfigs.getByName("release")
+      // Signed when a release keystore is available, otherwise left unsigned.
+      signingConfigs.findByName("release")?.let { signingConfig = it }
     }
     debug {
-      // Do not remove or modify this signingConfig assignment. It is necessary for Android apps in
-      // AI Studio.
-      signingConfig = signingConfigs.getByName("debugConfig")
+      // Uses the AI Studio debug keystore when present, otherwise falls back to the
+      // standard auto-generated Android debug keystore.
+      signingConfigs.findByName("debugConfig")?.let { signingConfig = it }
     }
   }
   compileOptions {

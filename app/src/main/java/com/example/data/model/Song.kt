@@ -12,7 +12,4 @@ data class Song(
     val lyrics: String? = null,
     val channelId: String? = null,
     val viewCount: String? = null
-) {
-    val isYouTubeTrack: Boolean
-        get() = !streamUrl.startsWith("http://") && !streamUrl.startsWith("https://") || id.length == 11 && !id.startsWith("about_sky")
-}
+) {}

@@ -40,6 +40,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -62,12 +63,15 @@ import java.util.Calendar
 fun HomeScreen(
     heroSong: Song?,
     sections: List<HomeMusicSection>,
+    isLoading: Boolean,
+    errorMessage: String?,
     currentUser: FirebaseUser?,
     isGuestMode: Boolean,
     isSigningIn: Boolean,
     currentPlayingSongId: String?,
     onPlaySong: (Song, List<Song>, Int) -> Unit,
     onSignInWithGoogle: (Activity) -> Unit,
+    onRetry: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -208,6 +212,56 @@ fun HomeScreen(
                                 )
                             } else {
                                 Text("Masuk", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Real loading / error state for the API-backed home feed.
+        if (isLoading || errorMessage != null) {
+            item {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp, vertical = 28.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        if (isLoading) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(28.dp),
+                                color = NoxaLime,
+                                strokeWidth = 3.dp
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Text(
+                                text = "Memuat musik...",
+                                color = NoxaTextSecondary,
+                                fontSize = 14.sp
+                            )
+                        } else {
+                            Text(
+                                text = errorMessage ?: "",
+                                color = NoxaTextSecondary,
+                                fontSize = 14.sp,
+                                textAlign = TextAlign.Center
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Button(
+                                onClick = onRetry,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = NoxaLime,
+                                    contentColor = NoxaBlack
+                                ),
+                                shape = RoundedCornerShape(16.dp)
+                            ) {
+                                Text(
+                                    text = "Coba lagi",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 13.sp
+                                )
                             }
                         }
                     }

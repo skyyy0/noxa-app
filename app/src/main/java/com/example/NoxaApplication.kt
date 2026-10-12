@@ -8,7 +8,7 @@ import coil.memory.MemoryCache
 import coil.request.CachePolicy
 import coil.util.DebugLogger
 import com.example.data.local.NoxaDatabase
-import com.example.data.remote.YouTubeRepository
+import com.example.data.remote.AudiusRepository
 import com.example.media.NoxaAudioPlayer
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
@@ -18,7 +18,7 @@ class NoxaApplication : Application(), ImageLoaderFactory {
     lateinit var database: NoxaDatabase
         private set
 
-    lateinit var youTubeRepository: YouTubeRepository
+    lateinit var musicRepository: AudiusRepository
         private set
 
     lateinit var player: NoxaAudioPlayer
@@ -36,7 +36,7 @@ class NoxaApplication : Application(), ImageLoaderFactory {
             // Handled gracefully in test environment
         }
         database = NoxaDatabase.getDatabase(this)
-        youTubeRepository = YouTubeRepository()
+        musicRepository = AudiusRepository()
         player = NoxaAudioPlayer(this)
         authManager = com.example.data.auth.AuthManager(this)
     }

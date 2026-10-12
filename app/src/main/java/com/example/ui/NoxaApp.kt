@@ -30,13 +30,16 @@ import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import android.widget.Toast
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -84,6 +87,8 @@ fun NoxaApp(
     val playerState by viewModel.playerState.collectAsStateWithLifecycle()
     val heroSong by viewModel.heroSong.collectAsStateWithLifecycle()
     val homeSections by viewModel.homeSections.collectAsStateWithLifecycle()
+    val isHomeLoading by viewModel.isHomeLoading.collectAsStateWithLifecycle()
+    val homeError by viewModel.homeError.collectAsStateWithLifecycle()
     val currentUser by viewModel.currentUser.collectAsStateWithLifecycle()
     val isGuestMode by viewModel.isGuestMode.collectAsStateWithLifecycle()
     val isSigningIn by viewModel.isSigningIn.collectAsStateWithLifecycle()
@@ -97,6 +102,17 @@ fun NoxaApp(
     val playlists by viewModel.playlists.collectAsStateWithLifecycle()
 
     val isFullPlayerVisible by viewModel.isFullPlayerVisible.collectAsStateWithLifecycle()
+
+    // Surface real playback errors (e.g. no audio source available) instead of
+    // silently pretending something is playing.
+    val context = LocalContext.current
+    LaunchedEffect(playerState.errorMessage) {
+        val message = playerState.errorMessage
+        if (message != null) {
+            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+            viewModel.clearPlayerError()
+        }
+    }
 
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route ?: Screen.Home.route
@@ -211,12 +227,15 @@ fun NoxaApp(
                     HomeScreen(
                         heroSong = heroSong,
                         sections = homeSections,
+                        isLoading = isHomeLoading,
+                        errorMessage = homeError,
                         currentUser = currentUser,
                         isGuestMode = isGuestMode,
                         isSigningIn = isSigningIn,
                         currentPlayingSongId = playerState.currentSong?.id,
                         onPlaySong = { song, queue, idx -> viewModel.playSong(song, queue, idx) },
-                        onSignInWithGoogle = { activity -> viewModel.signInWithGoogle(activity) }
+                        onSignInWithGoogle = { activity -> viewModel.signInWithGoogle(activity) },
+                        onRetry = { viewModel.loadHome() }
                     )
                 }
 

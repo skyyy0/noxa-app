@@ -1,6 +1,7 @@
 package com.example.media
 
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import android.os.CountDownTimer
 import android.util.Log
@@ -37,9 +38,23 @@ data class PlayerUiState(
     val repeatMode: Int = Player.REPEAT_MODE_OFF,
     val sleepTimerMinutes: Int? = null,
     val sleepTimerRemainingSeconds: Long? = null,
+    /** Honest error surfaced to the UI (never hidden behind simulated playback). */
+    val errorMessage: String? = null,
     val equalizerState: EqualizerState = EqualizerState()
 )
 
+/**
+ * The single playback facade used by the whole UI.
+ *
+ * There is exactly one audio engine: **Media3 ExoPlayer streaming a real audio
+ * URL**. Every [Song] produced by the repository carries a genuine, playable
+ * [Song.streamUrl], so:
+ *
+ * - the mini player, full player and lock screen all reflect the same player,
+ * - the [MediaPlaybackService] MediaSession drives the system media notification
+ *   and background playback,
+ * - nothing is ever faked: if a track has no playable URL an error is reported.
+ */
 class NoxaAudioPlayer(private val context: Context) {
 
     private val scope = CoroutineScope(Dispatchers.Main + Job())
@@ -52,9 +67,11 @@ class NoxaAudioPlayer(private val context: Context) {
                 .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
                 .setUsage(C.USAGE_MEDIA)
                 .build(),
-            true
+            /* handleAudioFocus = */ true
         )
         .setHandleAudioBecomingNoisy(true)
+        // Keeps network streaming alive while the app is in the background.
+        .setWakeMode(C.WAKE_MODE_NETWORK)
         .build()
 
     private val _uiState = MutableStateFlow(PlayerUiState())
@@ -73,31 +90,33 @@ class NoxaAudioPlayer(private val context: Context) {
         exoPlayer.addListener(object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 _uiState.update { it.copy(isPlaying = isPlaying) }
-                if (isPlaying) {
-                    startPositionUpdater()
-                } else {
-                    stopPositionUpdater()
-                }
+                if (isPlaying) startPositionUpdater() else stopPositionUpdater()
             }
 
             override fun onPlaybackStateChanged(playbackState: Int) {
                 val isBuffering = playbackState == Player.STATE_BUFFERING
-                val duration = if (exoPlayer.duration > 0) exoPlayer.duration else _uiState.value.currentSong?.durationMs ?: 0L
-                _uiState.update {
-                    it.copy(
-                        isBuffering = isBuffering,
-                        durationMs = duration
-                    )
+                val duration = if (exoPlayer.duration > 0) {
+                    exoPlayer.duration
+                } else {
+                    _uiState.value.currentSong?.durationMs ?: 0L
                 }
+                _uiState.update { it.copy(isBuffering = isBuffering, durationMs = duration) }
 
                 if (playbackState == Player.STATE_ENDED) {
+                    stopPositionUpdater()
                     handleTrackEnded()
                 }
             }
 
             override fun onPlayerError(error: PlaybackException) {
                 Log.e("NoxaAudioPlayer", "Playback error: ${error.message}", error)
-                _uiState.update { it.copy(isBuffering = false, isPlaying = false) }
+                _uiState.update {
+                    it.copy(
+                        isBuffering = false,
+                        isPlaying = false,
+                        errorMessage = "Gagal memutar audio (${error.errorCodeName}). Periksa koneksi internet."
+                    )
+                }
             }
         })
     }
@@ -113,15 +132,32 @@ class NoxaAudioPlayer(private val context: Context) {
                 queueIndex = validIndex,
                 durationMs = song.durationMs,
                 currentPositionMs = 0L,
-                isBuffering = true
+                isBuffering = true,
+                isPlaying = false,
+                errorMessage = null
             )
+        }
+
+        scope.launch(Dispatchers.IO) {
+            database.noxaDao().insertHistory(HistorySongEntity.fromSong(song))
+        }
+
+        if (!isPlayable(song.streamUrl)) {
+            _uiState.update {
+                it.copy(
+                    isBuffering = false,
+                    isPlaying = false,
+                    errorMessage = "Lagu ini tidak memiliki sumber audio yang bisa diputar."
+                )
+            }
+            return
         }
 
         val metadata = MediaMetadata.Builder()
             .setTitle(song.title)
             .setArtist(song.artist)
             .setAlbumTitle(song.album)
-            .setArtworkUri(Uri.parse(song.artworkUrl))
+            .setArtworkUri(song.artworkUrl.takeIf { it.isNotBlank() }?.let { Uri.parse(it) })
             .build()
 
         val mediaItem = MediaItem.Builder()
@@ -134,13 +170,20 @@ class NoxaAudioPlayer(private val context: Context) {
         exoPlayer.prepare()
         exoPlayer.play()
 
-        // Reconnect equalizer to session if needed
+        // Reconnect the equalizer to the (possibly new) audio session.
         equalizerManager.init(exoPlayer.audioSessionId)
         _uiState.update { it.copy(equalizerState = equalizerManager.currentState) }
 
-        // Record to Room history
-        scope.launch(Dispatchers.IO) {
-            database.noxaDao().insertHistory(HistorySongEntity.fromSong(song))
+        // The MediaSession lives in the service; starting it enables the system
+        // media notification, lock screen controls and background playback.
+        startPlaybackService()
+    }
+
+    private fun startPlaybackService() {
+        try {
+            context.startService(Intent(context, MediaPlaybackService::class.java))
+        } catch (e: Exception) {
+            Log.w("NoxaAudioPlayer", "Could not start MediaPlaybackService: ${e.message}")
         }
     }
 
@@ -166,7 +209,7 @@ class NoxaAudioPlayer(private val context: Context) {
         val state = _uiState.value
         if (state.queue.isEmpty()) return
         val nextIndex = if (state.isShuffle) {
-            (state.queue.indices).random()
+            state.queue.indices.random()
         } else {
             (state.queueIndex + 1) % state.queue.size
         }
@@ -177,9 +220,9 @@ class NoxaAudioPlayer(private val context: Context) {
     fun previous() {
         val state = _uiState.value
         if (state.queue.isEmpty()) return
-        // If played more than 3 seconds, replay current song
-        if (exoPlayer.currentPosition > 3000) {
-            exoPlayer.seekTo(0)
+        // If played more than 3 seconds, replay the current song.
+        if (state.currentPositionMs > 3000) {
+            seekTo(0L)
             return
         }
         val prevIndex = if (state.queueIndex - 1 < 0) state.queue.size - 1 else state.queueIndex - 1
@@ -191,12 +234,10 @@ class NoxaAudioPlayer(private val context: Context) {
         val state = _uiState.value
         when (state.repeatMode) {
             Player.REPEAT_MODE_ONE -> {
-                exoPlayer.seekTo(0)
-                exoPlayer.play()
+                val current = state.currentSong
+                if (current != null) playSong(current, state.queue, state.queueIndex.coerceAtLeast(0))
             }
-            Player.REPEAT_MODE_ALL -> {
-                next()
-            }
+            Player.REPEAT_MODE_ALL -> next()
             else -> {
                 if (state.queueIndex < state.queue.size - 1) {
                     next()
@@ -211,13 +252,17 @@ class NoxaAudioPlayer(private val context: Context) {
         _uiState.update { it.copy(isShuffle = !it.isShuffle) }
     }
 
+    /**
+     * Repeat is handled entirely at app-queue level (see [handleTrackEnded]).
+     * ExoPlayer only ever holds a single media item, so its own repeat modes
+     * would loop that one item instead of advancing the real queue.
+     */
     fun toggleRepeat() {
         val nextMode = when (_uiState.value.repeatMode) {
             Player.REPEAT_MODE_OFF -> Player.REPEAT_MODE_ALL
             Player.REPEAT_MODE_ALL -> Player.REPEAT_MODE_ONE
             else -> Player.REPEAT_MODE_OFF
         }
-        exoPlayer.repeatMode = nextMode
         _uiState.update { it.copy(repeatMode = nextMode) }
     }
 
@@ -232,17 +277,12 @@ class NoxaAudioPlayer(private val context: Context) {
 
         val totalMs = minutes * 60 * 1000L
         _uiState.update {
-            it.copy(
-                sleepTimerMinutes = minutes,
-                sleepTimerRemainingSeconds = totalMs / 1000
-            )
+            it.copy(sleepTimerMinutes = minutes, sleepTimerRemainingSeconds = totalMs / 1000)
         }
 
         sleepTimer = object : CountDownTimer(totalMs, 1000) {
             override fun onTick(millisUntilFinished: Long) {
-                _uiState.update {
-                    it.copy(sleepTimerRemainingSeconds = millisUntilFinished / 1000)
-                }
+                _uiState.update { it.copy(sleepTimerRemainingSeconds = millisUntilFinished / 1000) }
             }
 
             override fun onFinish() {
@@ -273,18 +313,17 @@ class NoxaAudioPlayer(private val context: Context) {
         _uiState.update { it.copy(equalizerState = equalizerManager.currentState) }
     }
 
+    fun clearError() {
+        _uiState.update { it.copy(errorMessage = null) }
+    }
+
     private fun startPositionUpdater() {
         positionUpdateJob?.cancel()
         positionUpdateJob = scope.launch {
             while (isActive) {
                 val current = exoPlayer.currentPosition
                 val duration = if (exoPlayer.duration > 0) exoPlayer.duration else _uiState.value.durationMs
-                _uiState.update {
-                    it.copy(
-                        currentPositionMs = current,
-                        durationMs = duration
-                    )
-                }
+                _uiState.update { it.copy(currentPositionMs = current, durationMs = duration) }
                 delay(250)
             }
         }
@@ -294,6 +333,9 @@ class NoxaAudioPlayer(private val context: Context) {
         positionUpdateJob?.cancel()
         positionUpdateJob = null
     }
+
+    private fun isPlayable(url: String): Boolean =
+        url.startsWith("http://") || url.startsWith("https://")
 
     fun release() {
         stopPositionUpdater()

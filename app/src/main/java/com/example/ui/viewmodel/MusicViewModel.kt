@@ -25,7 +25,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
 
     private val app = application as NoxaApplication
     private val player = app.player
-    private val repository = app.youTubeRepository
+    private val repository = app.musicRepository
     private val dao = app.database.noxaDao()
     val authManager = app.authManager
 
@@ -44,14 +44,18 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     private val _isLyricsVisible = MutableStateFlow(false)
     val isLyricsVisible: StateFlow<Boolean> = _isLyricsVisible.asStateFlow()
 
-    // Home Sections
-    private val _homeSections = MutableStateFlow<List<HomeMusicSection>>(repository.getHomeMusicSections())
+    // Home Sections — loaded from the live music API.
+    private val _homeSections = MutableStateFlow<List<HomeMusicSection>>(emptyList())
     val homeSections: StateFlow<List<HomeMusicSection>> = _homeSections.asStateFlow()
 
+    private val _isHomeLoading = MutableStateFlow(false)
+    val isHomeLoading: StateFlow<Boolean> = _isHomeLoading.asStateFlow()
+
+    private val _homeError = MutableStateFlow<String?>(null)
+    val homeError: StateFlow<String?> = _homeError.asStateFlow()
+
     // Hero Song
-    private val _heroSong = MutableStateFlow<Song?>(
-        _homeSections.value.firstOrNull()?.songs?.firstOrNull()
-    )
+    private val _heroSong = MutableStateFlow<Song?>(null)
     val heroSong: StateFlow<Song?> = _heroSong.asStateFlow()
 
     // Search
@@ -80,6 +84,27 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         authManager.attemptSilentAutoSignIn(viewModelScope)
+        loadHome()
+    }
+
+    /**
+     * Loads the home feed from the API with a real loading state. Never falls
+     * back to simulated songs: on failure [homeError] is populated instead.
+     */
+    fun loadHome() {
+        viewModelScope.launch {
+            _isHomeLoading.value = true
+            _homeError.value = null
+
+            val sections = repository.getHomeMusicSections()
+            _homeSections.value = sections
+            _heroSong.value = sections.firstOrNull()?.songs?.firstOrNull()
+            if (sections.isEmpty()) {
+                _homeError.value =
+                    "Tidak ada data dari server musik. Periksa koneksi internet lalu coba lagi."
+            }
+            _isHomeLoading.value = false
+        }
     }
 
     fun signInWithGoogle(
@@ -134,6 +159,10 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
 
     fun togglePlayPause() {
         player.togglePlayPause()
+    }
+
+    fun clearPlayerError() {
+        player.clearError()
     }
 
     fun seekTo(positionMs: Long) {
