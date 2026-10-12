@@ -51,15 +51,18 @@ jobs:
           distribution: temurin
           java-version: "21"
 
+      # `packages` must be overridden: the action's default list still contains the
+      # retired legacy `tools` package, which no longer exists in the SDK repository
+      # and makes the action fail with "Failed to find package 'tools'".
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: "platform-tools"
 
       - name: Install required SDK packages
         run: |
-          sdkmanager --install \
-            "platform-tools" \
-            "platforms;android-36.1" \
-            "build-tools;36.1.0"
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager --install "platforms;android-36.1" "build-tools;36.1.0"
 
       - name: Point Gradle at the Android SDK
         run: echo "sdk.dir=${ANDROID_SDK_ROOT}" > local.properties
