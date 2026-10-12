@@ -100,6 +100,95 @@ pengguna sebelum pemutaran pertama.
   sebelumnya sebagian berjalan di main thread sehingga sentuhan bisa
   membeku seketika dan fallback gagal diam-diam ke preview 30 detik.
 
+### v1.10 — Pin by Sky, akun email + username unik, pemutar lebih hidup
+
+* **Kata Sky (pinned)** — "ada lagu yang cuma berdurasi beberapa menit, tapi
+  bisa membawa kita kembali ke masa yang udah ga mungkin diulang." Lagu pin
+  (Dewa 19 — Kangen) mendapat **rak khusus `📌 Pinned by Sky`** di Home lengkap
+  dengan quote-nya, badge `⭐ Pinned` pada kartunya, bintang di pemutar penuh &
+  antrian, serta blok quote "PINNED BY SKY" di bawah kontrol pemutar penuh.
+* **Username unik (Firestore)** — pendaftaran email/password mendaftarkan
+  username unik lewat Firestore: nama diklaim sebagai document id
+  `usernames/{nama-huruf-kecil}` **di dalam transaksi**, jadi dua orang tidak
+  bisa memilih nama yang sama. Masuk/daftar dengan email+password tanpa Google.
+  **API key tambahan tidak diperlukan** — SDK Firestore pakai konfigurasi
+  Firebase project yang sama dengan Auth. Bila Firestore belum di-setup atau
+  offline, pendaftaran tetap jalan (username disimpan sebagai display name)
+  dan aplikasi tidak pernah crash.
+* **Lirik karaoke** — di pemutar penuh, baris lirik sinkron tampil di atas
+  artwork (baris sekarang warna lime, baris berikutnya redup di bawahnya).
+  Mengikuti posisi playback sungguhan; bisa dimatikan di Pengaturan.
+* **Autoplay lagu serupa** — ~15 detik sebelum lagu terakhir sebuah antrian
+  habis, sampai 5 lagu teratas artis yang sama ditambahkan ke antrian. Audio
+  sudah diresolusi dulu, jadi yang masuk antrian benar-benar bisa diputar.
+* **Rekap mingguan mini** — kartu "Rekap Minggu Ini" di Profile: jumlah lagu
+  yang diputar 7 hari terakhir, artis teratas, dan lagu paling sering. Data dari
+  tabel Room baru `play_records` (migrasi `MIGRATION_2_3` — favorit, history dan
+  playlist lama tetap aman; record lebih tua dari 30 hari dibersihkan otomatis).
+* **Pengaturan pemutar (baru)** — kualitas video MV (360p / 480p / 720p, pilihan
+  mengikuti stream terdekat dan di-cache per kualitas), toggle **Autoplay lagu
+  serupa**, toggle **Lirik karaoke**, dan toggle **Mulai otomatis saat dibuka**
+  (melanjutkan sesi terakhir begitu aplikasi dibuka).
+* **MV untuk lagu yang di-match** — video MV kini juga tersedia untuk lagu
+  Deezer yang audionya sudah cocok ke video YouTube (`Song.matchedVideoId`);
+  kualitasnya mengikuti pilihan di Pengaturan. Toggle MV kini rail vertikal di
+  samping artwork (Foto / MV).
+* **5 lagu pin Sky** — Kangen (Dewa 19), Pupus (Dewa 19), Dan (Sheila On 7),
+  Terlalu Manis (Slank), dan Laskar Pelangi (Nidji), masing-masing dengan
+  kata-kata Sky sendiri yang tampil di rak pin, di kartu, dan di pemutar penuh.
+
+### Berbagi lagu: link NOXA & kartu canvas (v1.10)
+
+Sebelumnya membagikan lagu mengirim link Deezer (`deezer.com/track/…`). Sejak
+v1.10 tombol bagikan memakai sheet NOXA sendiri dengan dua pilihan:
+
+1. **Bagikan sebagai gambar** — kartu canvas ala Spotify (artwork membulat,
+   judul, artis, badge ⭐ untuk lagu pin, branding NOXA + skyvibes.my.id)
+   dirender sebagai gambar 1080×1080, **otomatis tersimpan ke galeri**
+   (`Pictures/NOXA`, tanpa izin di Android 10+), lalu dikirim lewat share
+   sheet sistem (WhatsApp dll) memakai FileProvider.
+2. **Salin link NOXA** — menyalin deep link `https://skyvibes.my.id/track/<id>`
+   (contoh: `…/track/deezer%3A76056788`).
+
+Link tersebut dibuka **langsung di pemutar NOXA** lewat intent-filter
+(`https://skyvibes.my.id/track/*` dan skema cadangan `noxa://play/<id>`,
+`launchMode=singleTask` supaya app yang sedang terbuka tidak dibuat ulang).
+Lagu di-resolve ulang berdasarkan id: `deezer:<id>` lewat `GET /track/{id}`,
+`audius:<id>` lewat `GET /v1/tracks/{id}`, dan `youtube:<id>` lewat ekstraktor
+di perangkat (judul/artis ikut terbawa).
+
+> Catatan Android: untuk https tanpa verifikasi App Links, Android menampilkan
+> pilihan aplikasi (chooser) saat link diketuk — pilih NOXA dan ingat pilihan
+> itu. Agar tanpa chooser, host `assetlinks.json` di `skyvibes.my.id`
+> (package `com.aistudio.noxa.music`) sesuai docs Android App Links.
+> Pesan teks share tetap memakai format `🎵 Judul — Artis` + link +
+> `Didengarkan lewat NOXA Music`.
+
+Aturan Firestore yang disarankan untuk registry username (console → Firestore
+→ Rules) — pembuatan nama hanya untuk pemiliknya, nama yang sudah diklaim tidak
+bisa diambil alih:
+
+```
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /usernames/{name} {
+      allow read: if true;
+      allow create: if request.auth != null &&
+        request.resource.data.uid == request.auth.uid;
+      allow update, delete: if request.auth != null &&
+        resource.data.uid == request.auth.uid;
+    }
+  }
+}
+```
+
+> Catatan jujur: Firestore menjamin uniqueness lewat document id dalam
+> transaksi, sehingga registry tetap benar bahkan dengan rules test-mode;
+> rules di atas hanya mencegah orang lain mengubah/menghapus nama yang sudah
+> diklaim. Tanpa `google-services.json`, email/password juga tidak tersedia
+> (build tetap jalan sebagai mode tamu).
+
 ## Variabel `.env` (semuanya opsional)
 
 | Variabel | Wajib | Keterangan |

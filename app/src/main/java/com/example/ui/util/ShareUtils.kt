@@ -8,27 +8,13 @@ import com.example.data.model.Song
 /**
  * Shares a track through the system share sheet.
  *
- * The link is the provider's own public page (Deezer track page or Audius page),
- * falling back to the raw stream URL, so the recipient gets something playable
- * in a browser even if they do not have NOXA installed.
+ * The link is NOXA's own deep link ([NoxaLinks.songLink]) so recipients land
+ * straight in the app's player when NOXA is installed.
  */
 object ShareUtils {
 
     fun shareSong(context: Context, song: Song) {
-        val link = song.shareUrl.takeIf { it.isNotBlank() }
-            ?: song.streamUrl.takeIf { it.isNotBlank() }
-
-        val body = buildString {
-            append("🎵 ")
-            append(song.title)
-            append(" — ")
-            append(song.artist)
-            if (!link.isNullOrBlank()) {
-                append('\n')
-                append(link)
-            }
-            append("\n\nDidengarkan lewat NOXA Music")
-        }
+        val body = NoxaLinks.shareText(song)
 
         val send = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"

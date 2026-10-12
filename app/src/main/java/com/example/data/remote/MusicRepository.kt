@@ -3,6 +3,7 @@ package com.example.data.remote
 import com.example.data.model.AlbumDetail
 import com.example.data.model.AlbumInfo
 import com.example.data.model.ArtistProfile
+import com.example.data.model.PinnedTracks
 import com.example.data.model.Song
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -20,7 +21,11 @@ data class HomeMusicSection(
 /** Everything the home screen needs, in one immutable snapshot. */
 data class HomeFeed(
     val hero: Song? = null,
-    val sections: List<HomeMusicSection> = emptyList()
+    val sections: List<HomeMusicSection> = emptyList(),
+    /** Sky's pinned pick(s) — rendered as their own shelf at the top of Home. */
+    val pinned: List<Song> = emptyList(),
+    /** Profiles behind the "Artis Populer" avatar shelf. */
+    val artists: List<ArtistProfile> = emptyList()
 )
 
 private data class ArtistShelf(
@@ -66,6 +71,23 @@ class MusicRepository(
         val audiusResults = runCatching { audiusDeferred.await() }.getOrDefault(emptyList())
 
         (deezerResults + audiusResults).distinctBy { it.id }
+    }
+
+    // ----------------------------------------------------- shared NOXA links
+
+    /**
+     * Resolves the song behind a shared NOXA link id (`deezer:<id>`,
+     * `audius:<id>`) into something playable. YouTube ids are handled by
+     * [YouTubeSourceRepository.songByVideoId] in the view model.
+     */
+    suspend fun songFromDeepLink(songId: String): Song? = when {
+        songId.startsWith("deezer:") -> {
+            val remote = songId.removePrefix("deezer:").toLongOrNull()
+            if (remote == null) null else deezer.trackById(remote)
+        }
+
+        songId.startsWith("audius:") -> audius.trackById(songId.removePrefix("audius:"))
+        else -> null
     }
 
     // ----------------------------------------------------- artist / album pages
@@ -126,13 +148,39 @@ class MusicRepository(
             }
         }
 
+        // Sky's pinned pick + artist avatars, fetched in the same pass so the
+        // Home screen still renders from one snapshot.
+        val pinnedDeferred = async { gate.withPermit { loadPinned() } }
+        val artistsDeferred = async { gate.withPermit { loadPopularArtists() } }
+
         val sections = (shelfDeferred + chartDeferred + audiusDeferred)
             .awaitAll()
             .filter { it.songs.isNotEmpty() }
             .distinctBy { it.title }
 
-        HomeFeed(hero = heroDeferred.await(), sections = sections)
+        HomeFeed(
+            hero = heroDeferred.await(),
+            sections = sections,
+            pinned = pinnedDeferred.await(),
+            artists = artistsDeferred.await()
+        )
     }
+
+    /** Sky's pinned track(s), fetched live so the shelf shows real artwork. */
+    private suspend fun loadPinned(): List<Song> =
+        PinnedTracks.ALL.mapNotNull { pin ->
+            deezer.search("${pin.artist} ${pin.title}", limit = 10)
+                .firstOrNull { PinnedTracks.matchesResult(it.title, it.artist) }
+        }
+
+    /** Artist profiles for the Home avatar shelf (the shelf artists themselves). */
+    private suspend fun loadPopularArtists(): List<ArtistProfile> =
+        ARTIST_SHELVES.mapNotNull { shelf ->
+            runCatching {
+                val id = deezer.artistIdFor(shelf.artistName) ?: return@runCatching null
+                deezer.artistProfile(id)
+            }.getOrNull()
+        }
 
     /**
      * The hero banner always shows "Blinding Lights" by The Weeknd. The track is

@@ -45,7 +45,9 @@ data class DeezerTrack(
     @Json(name = "rank") val rank: Long? = null,
     @Json(name = "readable") val readable: Boolean? = null,
     @Json(name = "artist") val artist: DeezerArtist? = null,
-    @Json(name = "album") val album: DeezerAlbum? = null
+    @Json(name = "album") val album: DeezerAlbum? = null,
+    /** Present on `GET /track/{id}` error bodies (a bare track object). */
+    @Json(name = "error") val error: DeezerError? = null
 )
 
 @JsonClass(generateAdapter = true)

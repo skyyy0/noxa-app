@@ -24,13 +24,54 @@
             android:name=".MainActivity"
             android:exported="true"
             android:label="@string/app_name"
+            android:launchMode="singleTask"
             android:theme="@style/Theme.MyApplication">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
 
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+
+            <!--
+                Shared NOXA links open straight in the player. Two forms are
+                registered: the noxa:// scheme (always unambiguous) and the
+                https form on Sky's domain, so a pasted link in WhatsApp is
+                tappable and lands in NOXA.
+            -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="noxa"
+                    android:host="play" />
+            </intent-filter>
+
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="skyvibes.my.id"
+                    android:pathPrefix="/track/" />
+                <data
+                    android:scheme="https"
+                    android:host="www.skyvibes.my.id"
+                    android:pathPrefix="/track/" />
+            </intent-filter>
         </activity>
+
+        <!-- Hands the canvas share card to other apps (WhatsApp, etc.). -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
 
         <service
             android:name=".media.MediaPlaybackService"

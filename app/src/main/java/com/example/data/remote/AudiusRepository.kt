@@ -73,6 +73,21 @@ class AudiusRepository {
             response?.data.orEmpty().mapNotNull { it.toSong() }
         }
 
+    /**
+     * A single track by Audius id — what resolves a shared NOXA link
+     * (`audius:<id>`) back into a playable song.
+     */
+    suspend fun trackById(trackId: String): Song? = withContext(Dispatchers.IO) {
+        if (trackId.isBlank()) return@withContext null
+        val body = try {
+            apiService.getTrack(trackId, APP_NAME, developerKey).body()
+        } catch (e: Exception) {
+            Log.w("AudiusRepo", "Track lookup failed: ${e.message}")
+            null
+        }
+        body?.data?.toSong()
+    }
+
     /** Real global trending chart. */
     suspend fun trending(limit: Int = SEARCH_LIMIT): List<Song> = withContext(Dispatchers.IO) {
         val response = safeCall {

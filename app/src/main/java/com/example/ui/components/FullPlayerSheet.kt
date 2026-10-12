@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.NightsStay
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.QueueMusic
@@ -45,6 +46,7 @@ import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Subject
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -64,9 +66,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -75,7 +80,9 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.Player
 import coil.compose.AsyncImage
 import com.example.data.model.MusicSource
+import com.example.data.model.PinnedTracks
 import com.example.data.model.Song
+import com.example.data.model.TrackLyrics
 import com.example.media.PlaybackProgress
 import com.example.media.PlayerUiState
 import com.example.ui.theme.NoxaBlack
@@ -119,6 +126,8 @@ fun FullPlayerSheet(
     onRetryLyrics: () -> Unit,
     onSetVideoMode: (Boolean) -> Unit,
     onAttachVideoSurface: (SurfaceView?) -> Unit,
+    /** Karaoke-style synced lyric line over the artwork (setting toggle). */
+    karaokeOverlayEnabled: Boolean = true,
     /** Opens the artist profile from the now-playing artist line (nullable). */
     onOpenArtist: ((String, String) -> Unit)? = null,
     modifier: Modifier = Modifier
@@ -138,6 +147,10 @@ fun FullPlayerSheet(
         modifier = modifier
     ) {
         val song = playerState.currentSong ?: return@AnimatedVisibility
+
+        // Tracks that can show a music video: native YouTube, or a Deezer track
+        // that was matched to a YouTube video when its full audio was resolved.
+        val canHaveMv = song.source == MusicSource.YOUTUBE || song.matchedVideoId.isNotBlank()
 
         Box(
             modifier = Modifier
@@ -231,68 +244,85 @@ fun FullPlayerSheet(
                             )
                         }
                     }
-                }
-
-                // Artwork Card — or the music video when "Video MV" is selected.
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth(0.85f)
-                        .aspectRatio(if (isVideoActive) VIDEO_ASPECT_RATIO else 1f)
-                        .clip(RoundedCornerShape(24.dp))
-                        .background(NoxaSurfaceElevated)
-                        .border(1.dp, NoxaBorder, RoundedCornerShape(24.dp)),
-                    contentAlignment = Alignment.Center
+                }                // Artwork Card — or the music video when "Video MV" is selected.
+                // MV-capable tracks get a vertical Foto/Video rail beside the art.
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    when {
-                        isVideoActive && videoUiState is VideoUiState.Ready -> {
-                            // A separate muted player renders here; the main audio
-                            // (and the notification controls) never pause.
-                            AndroidView(
-                                factory = { context -> SurfaceView(context) },
-                                update = { surface -> onAttachVideoSurface(surface) },
-                                onRelease = { onAttachVideoSurface(null) },
-                                modifier = Modifier.fillMaxSize()
-                            )
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(horizontal = if (canHaveMv) 0.dp else 14.dp)
+                            .aspectRatio(if (isVideoActive) VIDEO_ASPECT_RATIO else 1f)
+                            .clip(RoundedCornerShape(24.dp))
+                            .background(NoxaSurfaceElevated)
+                            .border(1.dp, NoxaBorder, RoundedCornerShape(24.dp)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        when {
+                            isVideoActive && videoUiState is VideoUiState.Ready -> {
+                                // A separate muted player renders here; the main audio
+                                // (and the notification controls) never pause.
+                                AndroidView(
+                                    factory = { context -> SurfaceView(context) },
+                                    update = { surface -> onAttachVideoSurface(surface) },
+                                    onRelease = { onAttachVideoSurface(null) },
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
+
+                            isVideoActive -> {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(34.dp),
+                                    color = NoxaLime,
+                                    strokeWidth = 3.dp
+                                )
+                            }
+
+                            else -> {
+                                AsyncImage(
+                                    model = song.artworkUrl,
+                                    contentDescription = "Full player artwork",
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
                         }
 
-                        isVideoActive -> {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(34.dp),
-                                color = NoxaLime,
-                                strokeWidth = 3.dp
-                            )
-                        }
-
-                        else -> {
-                            AsyncImage(
-                                model = song.artworkUrl,
-                                contentDescription = "Full player artwork",
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier.fillMaxSize()
+                        // Karaoke: the current (and next) synced line rides over
+                        // the artwork, following the playback position.
+                        if (!isVideoActive && karaokeOverlayEnabled &&
+                            lyricsState is LyricsUiState.Ready
+                        ) {
+                            KaraokeOverlay(
+                                lyrics = (lyricsState as LyricsUiState.Ready).lyrics,
+                                progressFlow = progressFlow
                             )
                         }
                     }
-                }
 
-                // Foto / Video MV switch — only tracks that can have an MV.
-                if (song.source == MusicSource.YOUTUBE) {
-                    Spacer(modifier = Modifier.height(14.dp))
-                    PhotoVideoToggle(
-                        videoSelected = isVideoActive,
-                        onSelectVideo = { onSetVideoMode(true) },
-                        onSelectPhoto = { onSetVideoMode(false) }
-                    )
-                    if (videoUiState is VideoUiState.Unavailable) {
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Text(
-                            text = videoUiState.message,
-                            color = NoxaTextTertiary,
-                            fontSize = 11.sp
+                    if (canHaveMv) {
+                        Spacer(modifier = Modifier.width(14.dp))
+                        MediaModeRail(
+                            videoSelected = isVideoActive,
+                            onSelectVideo = { onSetVideoMode(true) },
+                            onSelectPhoto = { onSetVideoMode(false) }
                         )
                     }
                 }
 
-                Spacer(modifier = Modifier.height(if (song.source == MusicSource.YOUTUBE) 14.dp else 28.dp))
+                if (videoUiState is VideoUiState.Unavailable) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = videoUiState.message,
+                        color = NoxaTextTertiary,
+                        fontSize = 11.sp
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(if (canHaveMv) 14.dp else 28.dp))
 
                 // Title & Artist & Favorite
                 Row(
@@ -328,6 +358,14 @@ fun FullPlayerSheet(
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             AudioQualityBadge(song = song)
+                            if (PinnedTracks.isPinned(song)) {
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "⭐",
+                                    fontSize = 13.sp,
+                                    modifier = Modifier.testTag("pinned_star")
+                                )
+                            }
                         }
                     }
 
@@ -458,8 +496,16 @@ fun FullPlayerSheet(
                                 tint = if (playerState.sleepTimerMinutes != null) NoxaLime else NoxaTextSecondary,
                                 modifier = Modifier.size(22.dp)
                             )
+                            Spacer(modifier = Modifier.height(3.dp))
                             if (playerState.sleepTimerMinutes != null) {
                                 SleepTimerLabel(progressFlow)
+                            } else {
+                                Text(
+                                    text = "Tidur",
+                                    color = NoxaTextTertiary,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
                             }
                         }
                     }
@@ -468,26 +514,47 @@ fun FullPlayerSheet(
                         onClick = { showLyricsSheet = true },
                         modifier = Modifier.testTag("full_player_lyrics_btn")
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Subject,
-                            contentDescription = "Lyrics",
-                            tint = if (lyricsState is LyricsUiState.Ready) NoxaLime else NoxaTextSecondary,
-                            modifier = Modifier.size(22.dp)
-                        )
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(
+                                imageVector = Icons.Default.Subject,
+                                contentDescription = "Lyrics",
+                                tint = if (lyricsState is LyricsUiState.Ready) NoxaLime else NoxaTextSecondary,
+                                modifier = Modifier.size(22.dp)
+                            )
+                            Spacer(modifier = Modifier.height(3.dp))
+                            Text(
+                                text = "Lirik",
+                                color = NoxaTextTertiary,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
                     }
 
                     IconButton(
                         onClick = { showQueueSheet = true },
                         modifier = Modifier.testTag("full_player_queue_btn")
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.QueueMusic,
-                            contentDescription = "Queue",
-                            tint = NoxaTextSecondary,
-                            modifier = Modifier.size(24.dp)
-                        )
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(
+                                imageVector = Icons.Default.QueueMusic,
+                                contentDescription = "Queue",
+                                tint = NoxaTextSecondary,
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Spacer(modifier = Modifier.height(3.dp))
+                            Text(
+                                text = "Antrian",
+                                color = NoxaTextTertiary,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
                     }
                 }
+
+                // Sky's words for a pinned track — the "why", under the controls.
+                PinnedQuoteBlock(song = song)
             }
         }
 
@@ -586,11 +653,10 @@ fun FullPlayerSheet(
                                         overflow = TextOverflow.Ellipsis
                                     )
                                 }
-                                if (queueSong.isPreview) {
+                                if (PinnedTracks.isPinned(queueSong)) {
                                     Text(
-                                        text = "30s",
-                                        color = NoxaTextTertiary,
-                                        fontSize = 10.sp,
+                                        text = "⭐",
+                                        fontSize = 11.sp,
                                         fontWeight = FontWeight.Bold
                                     )
                                 }
@@ -725,41 +791,165 @@ private fun SleepTimerLabel(progressFlow: StateFlow<PlaybackProgress>) {
     )
 }
 
-/** The Foto / Video MV segmented switch under the artwork. */
+/** Foto / Video MV as a vertical rail beside the artwork (MV-capable tracks). */
 @Composable
-private fun PhotoVideoToggle(
+private fun MediaModeRail(
     videoSelected: Boolean,
     onSelectVideo: () -> Unit,
     onSelectPhoto: () -> Unit
 ) {
-    Row(
-        modifier = Modifier
-            .clip(CircleShape)
-            .background(NoxaSurfaceSecondary)
-            .padding(3.dp),
-        horizontalArrangement = Arrangement.spacedBy(2.dp)
+    Column(
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        listOf(
-            "Foto" to onSelectPhoto,
-            "Video MV" to onSelectVideo
-        ).forEach { (label, onSelect) ->
-            val isSelected = (label == "Video MV") == videoSelected
-            Box(
-                modifier = Modifier
-                    .clip(CircleShape)
-                    .background(if (isSelected) NoxaLime else Color.Transparent)
-                    .clickable { onSelect() }
-                    .padding(horizontal = 16.dp, vertical = 6.dp)
-                    .testTag("player_mode_${label.replace(' ', '_')}")
-            ) {
+        MediaModeChip(
+            label = "Foto",
+            icon = Icons.Default.Image,
+            selected = !videoSelected,
+            onClick = onSelectPhoto,
+            tag = "player_mode_Foto"
+        )
+        MediaModeChip(
+            label = "MV",
+            icon = Icons.Default.Videocam,
+            selected = videoSelected,
+            onClick = onSelectVideo,
+            tag = "player_mode_Video_MV"
+        )
+    }
+}
+
+@Composable
+private fun MediaModeChip(
+    label: String,
+    icon: ImageVector,
+    selected: Boolean,
+    onClick: () -> Unit,
+    tag: String
+) {
+    Column(
+        modifier = Modifier
+            .clip(RoundedCornerShape(14.dp))
+            .background(if (selected) NoxaLime else NoxaSurfaceElevated)
+            .border(
+                width = if (selected) 0.dp else 1.dp,
+                color = NoxaBorder,
+                shape = RoundedCornerShape(14.dp)
+            )
+            .clickable { onClick() }
+            .padding(horizontal = 9.dp, vertical = 9.dp)
+            .testTag(tag),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = label,
+            tint = if (selected) NoxaBlack else NoxaTextSecondary,
+            modifier = Modifier.size(18.dp)
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = label,
+            color = if (selected) NoxaBlack else NoxaTextSecondary,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Bold
+        )
+    }
+}
+
+/**
+ * Karaoke overlay: the synced line being sung rides over the artwork in lime,
+ * with the next line fading in below — so eyes can follow without a sheet.
+ */
+@Composable
+private fun KaraokeOverlay(
+    lyrics: TrackLyrics,
+    progressFlow: StateFlow<PlaybackProgress>
+) {
+    if (!lyrics.isSynced) return
+    val progress by progressFlow.collectAsState()
+    val index = lyrics.indexAt(progress.positionMs)
+    val current = lyrics.lines.getOrNull(index) ?: return
+    val next = lyrics.lines.getOrNull(index + 1)
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(
+                Brush.verticalGradient(
+                    colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.78f))
+                )
+            ),
+        contentAlignment = Alignment.BottomCenter
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 14.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = current.text.ifBlank { "♪" },
+                color = NoxaLime,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (next != null && next.text.isNotBlank()) {
+                Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = label,
-                    color = if (isSelected) NoxaBlack else NoxaTextSecondary,
+                    text = next.text,
+                    color = NoxaTextSecondary.copy(alpha = 0.75f),
                     fontSize = 12.sp,
-                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                    textAlign = TextAlign.Center,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
         }
+    }
+}
+
+/**
+ * Sky's quote for a pinned track, shown beneath the transport controls — the
+ * reason the song sits on the pin shelf in the first place.
+ */
+@Composable
+private fun PinnedQuoteBlock(song: Song) {
+    val pin = PinnedTracks.find(song) ?: return
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .background(NoxaLime.copy(alpha = 0.15f))
+                .padding(horizontal = 10.dp, vertical = 3.dp)
+                .testTag("pinned_quote_badge")
+        ) {
+            Text(
+                text = "PINNED BY SKY",
+                color = NoxaLime,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Black,
+                letterSpacing = 1.sp
+            )
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = "\u201C${pin.quote}\u201D",
+            color = NoxaTextSecondary,
+            fontSize = 13.sp,
+            fontStyle = FontStyle.Italic,
+            textAlign = TextAlign.Center,
+            lineHeight = 18.sp,
+            modifier = Modifier.testTag("pinned_quote_text")
+        )
     }
 }
 

@@ -75,6 +75,20 @@ data class HistorySongEntity(
     }
 }
 
+/**
+ * One play of one track, kept for the mini weekly recap on the profile
+ * screen. Separate from `playback_history` (deduplicated, capped at 50): the
+ * recap counts *plays*, including repeats within the week.
+ */
+@Entity(tableName = "play_records")
+data class PlayRecordEntity(
+    @PrimaryKey(autoGenerate = true) val recordId: Long = 0,
+    val songId: String,
+    val title: String,
+    val artist: String,
+    val playedAt: Long = System.currentTimeMillis()
+)
+
 @Entity(tableName = "playlists")
 data class PlaylistEntity(
     @PrimaryKey(autoGenerate = true) val playlistId: Long = 0,

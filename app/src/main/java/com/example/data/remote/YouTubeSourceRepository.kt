@@ -186,7 +186,11 @@ class YouTubeSourceRepository {
         if (cachedVideoId != null) {
             val cachedAudio = streamsFor(cachedVideoId)?.audioUrl
             if (cachedAudio != null) {
-                return@withContext song.copy(streamUrl = cachedAudio, isPreview = false)
+                return@withContext song.copy(
+                    streamUrl = cachedAudio,
+                    isPreview = false,
+                    matchedVideoId = cachedVideoId
+                )
             }
             synchronized(cacheLock) { matchCache.remove(song.id) }
         }
@@ -217,10 +221,29 @@ class YouTubeSourceRepository {
 
         val audioUrl = streamsFor(best.remoteId)?.audioUrl ?: return@withContext null
         synchronized(cacheLock) { matchCache[song.id] = best.remoteId }
-        song.copy(streamUrl = audioUrl, isPreview = false)
+        song.copy(streamUrl = audioUrl, isPreview = false, matchedVideoId = best.remoteId)
     }
 
     // -------------------------------------------------------------- resolution
+
+    /**
+     * A YouTube song by raw video id — what resolves a shared NOXA link
+     * (`youtube:<id>`) back into a playable song with real metadata.
+     */
+    suspend fun songByVideoId(videoId: String): Song? = withContext(Dispatchers.IO) {
+        if (videoId.isBlank()) return@withContext null
+        val info = runCatching { DeviceYouTubeExtractor.extractVideoInfo(videoId) }.getOrNull()
+        Song(
+            id = Song.idFor(MusicSource.YOUTUBE, videoId),
+            title = info?.title?.ifBlank { null } ?: "YouTube video",
+            artist = info?.uploader?.ifBlank { null } ?: "YouTube",
+            album = ALBUM_LABEL,
+            artworkUrl = thumbnailFor(videoId),
+            durationMs = info?.durationMs ?: 0L,
+            source = MusicSource.YOUTUBE,
+            remoteId = videoId
+        )
+    }
 
     /**
      * Resolves a playable audio URL for a YouTube song. Returns a copy of
@@ -239,9 +262,14 @@ class YouTubeSourceRepository {
      * view. Played on a separate muted player so the main audio — and the
      * notification controls — keep running untouched.
      */
-    suspend fun resolveVideoUrl(song: Song): String? = withContext(Dispatchers.IO) {
-        val videoId = song.remoteId.ifBlank { song.id.removePrefix(ID_PREFIX) }
-        streamsFor(videoId, requireVideo = true)?.videoUrl
+    suspend fun resolveVideoUrl(
+        song: Song,
+        targetHeight: Int = MV_TARGET_HEIGHT
+    ): String? = withContext(Dispatchers.IO) {
+        // Matched Deezer tracks play their MV from the matched YouTube video.
+        val videoId = song.matchedVideoId
+            .ifBlank { song.remoteId.ifBlank { song.id.removePrefix(ID_PREFIX) } }
+        streamsFor(videoId, requireVideo = true, videoHeight = targetHeight)?.videoUrl
     }
 
     /**
@@ -251,11 +279,20 @@ class YouTubeSourceRepository {
      * dependency at all), then Piped (proxied URLs), then Invidious. Callers
      * must already be on [Dispatchers.IO] — this performs blocking network I/O.
      */
-    private suspend fun streamsFor(videoId: String, requireVideo: Boolean = false): CachedStreams? {
+    private suspend fun streamsFor(
+        videoId: String,
+        requireVideo: Boolean = false,
+        videoHeight: Int = MV_TARGET_HEIGHT
+    ): CachedStreams? {
         if (videoId.isBlank()) return null
 
+        // MV quality is a user setting, so video entries are cached per target
+        // height — switching to 720p must not hand back a cached 360p URL.
+        val videoKey = if (requireVideo) "$videoId@$videoHeight" else null
+
         synchronized(cacheLock) {
-            streamCache[videoId]?.let { cached ->
+            val cached = streamCache[videoKey ?: videoId]
+            if (cached != null) {
                 val freshEnough =
                     System.currentTimeMillis() - cached.fetchedAtMs < CACHE_TTL_MS
                 if (freshEnough && (!requireVideo || cached.videoUrl != null)) {
@@ -268,11 +305,20 @@ class YouTubeSourceRepository {
         // instances only — the device path is audio-focused.
         val deviceAudio = runCatching { deviceStreams(videoId) }.getOrNull()
         val fresh = if (requireVideo) {
-            pipedStreams(videoId) ?: invidiousStreams(videoId) ?: deviceAudio ?: return null
+            pipedStreams(videoId, videoHeight)
+                ?: invidiousStreams(videoId, videoHeight)
+                ?: deviceAudio
+                ?: return null
         } else {
-            deviceAudio ?: pipedStreams(videoId) ?: invidiousStreams(videoId) ?: return null
+            deviceAudio
+                ?: pipedStreams(videoId, videoHeight)
+                ?: invidiousStreams(videoId, videoHeight)
+                ?: return null
         }
-        synchronized(cacheLock) { streamCache[videoId] = fresh }
+        synchronized(cacheLock) {
+            if (videoKey != null) streamCache[videoKey] = fresh
+            if (fresh.audioUrl != null) streamCache[videoId] = fresh
+        }
         return fresh
     }
 
@@ -286,26 +332,26 @@ class YouTubeSourceRepository {
         )
     }
 
-    private fun pipedStreams(videoId: String): CachedStreams? =
+    private fun pipedStreams(videoId: String, videoHeight: Int): CachedStreams? =
         firstInstanceResultSync(pipedInstances) { base ->
             val body = getBody("$base/streams/${encode(videoId)}")
                 ?: return@firstInstanceResultSync null
             val response = moshi.adapter(PipedStreamsResponse::class.java)
                 .fromJson(body) ?: return@firstInstanceResultSync null
             val audio = pickPipedAudioStream(response.audioStreams)?.url
-            val video = pickPipedVideoStream(response.videoStreams)?.url
+            val video = pickPipedVideoStream(response.videoStreams, videoHeight)?.url
             if (audio == null && video == null) return@firstInstanceResultSync null
             CachedStreams(audioUrl = audio, videoUrl = video, fetchedAtMs = System.currentTimeMillis())
         }
 
-    private fun invidiousStreams(videoId: String): CachedStreams? =
+    private fun invidiousStreams(videoId: String, videoHeight: Int): CachedStreams? =
         firstInstanceResultSync(invidiousInstances) { base ->
             val body = getBody("$base/api/v1/videos/${encode(videoId)}")
                 ?: return@firstInstanceResultSync null
             val response = moshi.adapter(InvidiousVideoResponse::class.java)
                 .fromJson(body) ?: return@firstInstanceResultSync null
             val audio = pickInvidiousAudioFormat(response.adaptiveFormats)?.url
-            val video = pickInvidiousVideoFormat(response.adaptiveFormats, response.formatStreams)
+            val video = pickInvidiousVideoFormat(response.adaptiveFormats, response.formatStreams, videoHeight)
             if (audio == null && video == null) return@firstInstanceResultSync null
             CachedStreams(audioUrl = audio, videoUrl = video, fetchedAtMs = System.currentTimeMillis())
         }
@@ -409,15 +455,18 @@ class YouTubeSourceRepository {
             )
 
     /**
-     * Best video-only stream for the muted MV player: prefers ~360p (fast on
-     * mobile data) and MP4/AVC over VP9.
+     * Best video-only stream for the muted MV player: closest to the user's
+     * chosen quality (default ~360p, fast on mobile data) and MP4/AVC over VP9.
      */
-    fun pickPipedVideoStream(streams: List<PipedVideoStream>?): PipedVideoStream? =
+    fun pickPipedVideoStream(
+        streams: List<PipedVideoStream>?,
+        targetHeight: Int = MV_TARGET_HEIGHT
+    ): PipedVideoStream? =
         streams
             .orEmpty()
             .filter { it.videoOnly == true && it.url?.startsWith("http") == true }
             .minWithOrNull(
-                compareBy<PipedVideoStream> { kotlin.math.abs((it.height ?: 9999) - MV_TARGET_HEIGHT) }
+                compareBy<PipedVideoStream> { kotlin.math.abs((it.height ?: 9999) - targetHeight) }
                     .thenBy { if (it.isMp4()) 0 else 1 }
                     .thenBy { -(it.bitrate ?: 0L) }
             )
@@ -444,7 +493,8 @@ class YouTubeSourceRepository {
      */
     fun pickInvidiousVideoFormat(
         adaptive: List<InvidiousAdaptiveFormat>?,
-        muxed: List<InvidiousFormatStream>?
+        muxed: List<InvidiousFormatStream>?,
+        targetHeight: Int = MV_TARGET_HEIGHT
     ): String? {
         val adaptiveVideo = adaptive
             .orEmpty()
@@ -455,7 +505,7 @@ class YouTubeSourceRepository {
             }
             .minWithOrNull(
                 compareBy<InvidiousAdaptiveFormat> {
-                    kotlin.math.abs((it.qualityLabel?.filter { c -> c.isDigit() }?.toIntOrNull() ?: 9999) - MV_TARGET_HEIGHT)
+                    kotlin.math.abs((it.qualityLabel?.filter { c -> c.isDigit() }?.toIntOrNull() ?: 9999) - targetHeight)
                 }.thenBy { if (it.type?.contains("mp4") == true) 0 else 1 }
             )
         if (adaptiveVideo?.url != null) return adaptiveVideo.url
@@ -468,7 +518,7 @@ class YouTubeSourceRepository {
             }
             .minByOrNull {
                 kotlin.math.abs(
-                    ((it.qualityLabel ?: it.resolution)?.filter { c -> c.isDigit() }?.toIntOrNull() ?: 9999) - MV_TARGET_HEIGHT
+                    ((it.qualityLabel ?: it.resolution)?.filter { c -> c.isDigit() }?.toIntOrNull() ?: 9999) - targetHeight
                 )
             }
         return muxedVideo?.url

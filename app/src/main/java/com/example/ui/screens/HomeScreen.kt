@@ -48,6 +48,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import com.example.data.model.ArtistProfile
+import com.example.data.model.PinnedTracks
 import com.example.data.model.Song
 import com.example.data.remote.HomeMusicSection
 import com.example.ui.components.HeroSpotlightCard
@@ -66,6 +68,8 @@ import java.util.Calendar
 fun HomeScreen(
     heroSong: Song?,
     sections: List<HomeMusicSection>,
+    pinnedSongs: List<Song> = emptyList(),
+    popularArtists: List<ArtistProfile> = emptyList(),
     resumeSong: Song?,
     isLoading: Boolean,
     errorMessage: String?,
@@ -386,7 +390,130 @@ fun HomeScreen(
             }
         }
 
-        // B. Curated shelves: Dewa 19, Sheila On 7, Justin Bieber, and more.
+        // B. Artis Populer — avatar shelf; each avatar opens the artist page.
+        if (popularArtists.isNotEmpty()) {
+            item(key = "popular_artists") {
+                Column(modifier = Modifier.padding(top = 20.dp)) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 20.dp)
+                    ) {
+                        Text(
+                            text = "Artis Populer",
+                            color = NoxaTextPrimary,
+                            fontSize = 19.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "Ketuk untuk membuka profil artis",
+                            color = NoxaTextSecondary,
+                            fontSize = 12.sp
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    LazyRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        contentPadding = PaddingValues(horizontal = 20.dp),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        itemsIndexed(
+                            items = popularArtists,
+                            key = { _, artist -> artist.id },
+                            contentType = { _, _ -> "artist_avatar" }
+                        ) { _, artist ->
+                            Column(
+                                modifier = Modifier
+                                    .width(72.dp)
+                                    .clickable {
+                                        onOpenArtist(artist.id.toString(), artist.name)
+                                    }
+                                    .testTag("popular_artist_${artist.id}"),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                AsyncImage(
+                                    model = ImageRequest.Builder(context)
+                                        .data(artist.pictureUrl)
+                                        .size(144, 144)
+                                        .crossfade(true)
+                                        .build(),
+                                    contentDescription = artist.name,
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier
+                                        .size(64.dp)
+                                        .clip(CircleShape)
+                                        .border(
+                                            width = 1.5.dp,
+                                            color = NoxaLime.copy(alpha = 0.65f),
+                                            shape = CircleShape
+                                        )
+                                )
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Text(
+                                    text = artist.name,
+                                    color = NoxaTextSecondary,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // C. Pinned by Sky — the dedicated pin shelf with the quote.
+        if (pinnedSongs.isNotEmpty()) {
+            item(key = "pinned_shelf") {
+                Column(modifier = Modifier.padding(top = 20.dp)) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 20.dp)
+                    ) {
+                        Text(
+                            text = "📌 Pinned by Sky",
+                            color = NoxaTextPrimary,
+                            fontSize = 19.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "Rak khusus pilihan Sky",
+                            color = NoxaTextSecondary,
+                            fontSize = 12.sp
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    LazyRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        contentPadding = PaddingValues(horizontal = 20.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        itemsIndexed(
+                            items = pinnedSongs,
+                            key = { _, song -> song.id },
+                            contentType = { _, _ -> "pinned_card" }
+                        ) { index, song ->
+                            PinnedShelfCard(
+                                song = song,
+                                quote = PinnedTracks.find(song)?.quote.orEmpty(),
+                                isPlaying = song.id == currentPlayingSongId,
+                                onClick = { onPlaySong(song, pinnedSongs, index) }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // D. Curated shelves: Dewa 19, Sheila On 7, Justin Bieber, and more.
         sections.forEach { section ->
             item(key = "section_${section.title}") {
                 Column(
@@ -480,18 +607,18 @@ fun HomeScreen(
                                         }
                                     }
 
-                                    if (song.isPreview) {
+                                    if (PinnedTracks.isPinned(song)) {
                                         Box(
                                             modifier = Modifier
                                                 .align(Alignment.TopStart)
                                                 .padding(6.dp)
                                                 .clip(RoundedCornerShape(4.dp))
-                                                .background(Color.Black.copy(alpha = 0.7f))
+                                                .background(NoxaLime)
                                                 .padding(horizontal = 5.dp, vertical = 2.dp)
                                         ) {
                                             Text(
-                                                text = "30s",
-                                                color = NoxaLime,
+                                                text = "⭐ Pinned",
+                                                color = NoxaBlack,
                                                 fontSize = 9.sp,
                                                 fontWeight = FontWeight.Bold
                                             )
@@ -528,6 +655,116 @@ fun HomeScreen(
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * A card on Sky's pin shelf: artwork with a ⭐ badge, the track — and the quote
+ * that explains why it was pinned. Fixed width so several pins scroll in a row.
+ */
+@Composable
+private fun PinnedShelfCard(
+    song: Song,
+    quote: String,
+    isPlaying: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    Column(
+        modifier = modifier
+            .width(280.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(NoxaSurfaceElevated)
+            .border(
+                width = if (isPlaying) 1.5.dp else 1.dp,
+                color = NoxaLime.copy(alpha = if (isPlaying) 0.9f else 0.4f),
+                shape = RoundedCornerShape(16.dp)
+            )
+            .clickable { onClick() }
+            .padding(12.dp)
+            .testTag("pinned_card_${song.id}"),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box {
+                AsyncImage(
+                    model = ImageRequest.Builder(context)
+                        .data(song.artworkUrl)
+                        .size(144, 144)
+                        .crossfade(true)
+                        .build(),
+                    contentDescription = song.title,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .size(58.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .border(1.dp, NoxaBorder, RoundedCornerShape(10.dp))
+                )
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(3.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(NoxaLime)
+                        .padding(horizontal = 4.dp, vertical = 1.dp)
+                ) {
+                    Text(
+                        text = "⭐",
+                        color = NoxaBlack,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Black
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.width(10.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = song.title,
+                    color = if (isPlaying) NoxaLime else NoxaTextPrimary,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = song.artist,
+                    color = NoxaTextSecondary,
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            Box(
+                modifier = Modifier
+                    .size(34.dp)
+                    .clip(CircleShape)
+                    .background(NoxaLime),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.PlayArrow,
+                    contentDescription = "Putar lagu pinned",
+                    tint = NoxaBlack,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
+
+        if (quote.isNotBlank()) {
+            Text(
+                text = "\u201C$quote\u201D",
+                color = NoxaTextTertiary,
+                fontSize = 11.sp,
+                fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+                lineHeight = 15.sp
+            )
         }
     }
 }

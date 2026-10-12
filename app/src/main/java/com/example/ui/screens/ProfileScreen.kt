@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronRight
@@ -35,6 +36,10 @@ import androidx.compose.material.icons.filled.Security
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -47,8 +52,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.local.AppSettings
+import com.example.data.local.AppSettingsStore
 import com.example.ui.theme.NoxaBlack
 import com.example.ui.theme.NoxaBorder
 import com.example.ui.theme.NoxaLime
@@ -58,12 +67,21 @@ import com.example.ui.theme.NoxaSurfaceSecondary
 import com.example.ui.theme.NoxaTextPrimary
 import com.example.ui.theme.NoxaTextSecondary
 import com.example.ui.theme.NoxaTextTertiary
+import com.example.ui.viewmodel.WeeklyRecap
 
 @Composable
 fun ProfileScreen(
     currentUser: com.google.firebase.auth.FirebaseUser?,
     isSigningIn: Boolean,
+    weeklyRecap: WeeklyRecap,
+    appSettings: AppSettings,
     onSignInWithGoogle: (android.app.Activity) -> Unit,
+    onSignInWithEmail: (String, String, (String) -> Unit) -> Unit,
+    onRegisterWithEmail: (String, String, String, (String) -> Unit) -> Unit,
+    onSetMvQuality: (Int) -> Unit,
+    onSetAutoplaySimilar: (Boolean) -> Unit,
+    onSetKaraokeOverlay: (Boolean) -> Unit,
+    onSetAutoResumeOnOpen: (Boolean) -> Unit,
     onSignOut: () -> Unit,
     onNavigateToAboutSky: () -> Unit,
     modifier: Modifier = Modifier
@@ -73,6 +91,13 @@ fun ProfileScreen(
 
     var selectedQuality by remember { mutableStateOf("Hi-Res Lossless (24-bit/96kHz)") }
     var cacheCleared by remember { mutableStateOf(false) }
+
+    // Email / password auth state (the Google-free path).
+    var registerMode by remember { mutableStateOf(false) }
+    var authEmail by remember { mutableStateOf("") }
+    var authPassword by remember { mutableStateOf("") }
+    var authUsername by remember { mutableStateOf("") }
+    var authError by remember { mutableStateOf<String?>(null) }
 
     Column(
         modifier = modifier
@@ -148,6 +173,20 @@ fun ProfileScreen(
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Medium
                         )
+                        // Unique Firestore username (registered accounts only):
+                        // only shown when it is handle-shaped, so Google names
+                        // with spaces do not look odd here.
+                        val handle = currentUser?.displayName
+                        if (handle != null && USERNAME_HANDLE.matches(handle)) {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "@$handle",
+                                color = NoxaTextTertiary,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Medium,
+                                modifier = Modifier.testTag("profile_username")
+                            )
+                        }
                     }
                 }
 
@@ -184,6 +223,175 @@ fun ProfileScreen(
                         } else {
                             Text("Sign in with Google", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                         }
+                    }
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    // ---- Email / username path: accounts without Google. ----
+                    Text(
+                        text = if (registerMode) "Daftar akun NOXA" else "Masuk dengan email",
+                        color = NoxaTextPrimary,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    if (registerMode) {
+                        OutlinedTextField(
+                            value = authUsername,
+                            onValueChange = { authUsername = it; authError = null },
+                            label = { Text("Username unik") },
+                            singleLine = true,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("auth_username_field"),
+                            colors = authFieldColors()
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+
+                    OutlinedTextField(
+                        value = authEmail,
+                        onValueChange = { authEmail = it; authError = null },
+                        label = { Text("Email") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("auth_email_field"),
+                        colors = authFieldColors()
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = authPassword,
+                        onValueChange = { authPassword = it; authError = null },
+                        label = { Text("Password") },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("auth_password_field"),
+                        colors = authFieldColors()
+                    )
+
+                    authError?.let { message ->
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = message,
+                            color = NoxaTextPrimary.copy(alpha = 0.85f),
+                            fontSize = 12.sp,
+                            modifier = Modifier.testTag("auth_error_text")
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    androidx.compose.material3.Button(
+                        onClick = {
+                            val onError: (String) -> Unit = { authError = it }
+                            if (registerMode) {
+                                onRegisterWithEmail(
+                                    authEmail.trim(),
+                                    authPassword,
+                                    authUsername.trim(),
+                                    onError
+                                )
+                            } else {
+                                onSignInWithEmail(authEmail.trim(), authPassword, onError)
+                            }
+                        },
+                        enabled = !isSigningIn && authEmail.isNotBlank() && authPassword.isNotBlank() &&
+                            (!registerMode || authUsername.isNotBlank()),
+                        shape = RoundedCornerShape(20.dp),
+                        colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                            containerColor = NoxaLime,
+                            contentColor = NoxaBlack
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("auth_submit_btn")
+                    ) {
+                        if (isSigningIn) {
+                            androidx.compose.material3.CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                color = NoxaBlack,
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Text(
+                                text = if (registerMode) "Daftar" else "Masuk",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = if (registerMode) {
+                            "Sudah punya akun? Masuk"
+                        } else {
+                            "Belum punya akun? Daftar"
+                        },
+                        color = NoxaLime,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .clickable {
+                                registerMode = !registerMode
+                                authError = null
+                            }
+                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                            .testTag("auth_mode_toggle")
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        // MINI WEEKLY RECAP
+        Text(
+            text = "Rekap Minggu Ini",
+            color = NoxaTextPrimary,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
+        )
+
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .testTag("weekly_recap_card"),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = NoxaSurfaceElevated),
+            border = androidx.compose.foundation.BorderStroke(1.dp, NoxaBorder)
+        ) {
+            if (weeklyRecap.plays == 0) {
+                Text(
+                    text = "Belum ada lagu yang diputar minggu ini. Putar lagu dulu ya 🎵",
+                    color = NoxaTextSecondary,
+                    fontSize = 13.sp,
+                    modifier = Modifier.padding(16.dp)
+                )
+            } else {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    RecapRow("▶", "${weeklyRecap.plays} lagu diputar 7 hari terakhir")
+                    if (weeklyRecap.topArtist.isNotBlank()) {
+                        RecapRow("⭐", "Artis teratas: ${weeklyRecap.topArtist}")
+                    }
+                    if (weeklyRecap.topSongTitle.isNotBlank()) {
+                        RecapRow(
+                            "♪",
+                            "Lagu paling sering: ${weeklyRecap.topSongTitle} " +
+                                "(${weeklyRecap.topSongPlays}×)"
+                        )
                     }
                 }
             }
@@ -409,6 +617,91 @@ fun ProfileScreen(
 
         Spacer(modifier = Modifier.height(20.dp))
 
+        // PLAYER FEATURES — MV quality + the extra toggles.
+        Text(
+            text = "Fitur Pemutar",
+            color = NoxaTextPrimary,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
+        )
+
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = NoxaSurfaceElevated),
+            border = androidx.compose.foundation.BorderStroke(1.dp, NoxaBorder)
+        ) {
+            Column(modifier = Modifier.padding(vertical = 8.dp)) {
+                Text(
+                    text = "Kualitas video MV",
+                    color = NoxaTextSecondary,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                )
+                AppSettingsStore.MV_QUALITY_CHOICES.forEach { height ->
+                    val isSelected = appSettings.mvQualityHeight == height
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onSetMvQuality(height) }
+                            .padding(horizontal = 16.dp, vertical = 10.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "${height}p",
+                            color = if (isSelected) NoxaLime else NoxaTextPrimary,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                            fontSize = 14.sp
+                        )
+                        if (isSelected) {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .clip(CircleShape)
+                                    .background(NoxaLime)
+                            )
+                        }
+                    }
+                }
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(1.dp)
+                        .background(NoxaBorder)
+                )
+
+                SettingsToggleRow(
+                    title = "Autoplay lagu serupa",
+                    subtitle = "Lanjutkan dengan lagu serupa saat antrian habis",
+                    checked = appSettings.autoplaySimilar,
+                    onCheckedChange = onSetAutoplaySimilar,
+                    tag = "setting_autoplay_similar"
+                )
+                SettingsToggleRow(
+                    title = "Lirik karaoke",
+                    subtitle = "Tampilkan baris lirik sinkron di atas artwork",
+                    checked = appSettings.karaokeOverlay,
+                    onCheckedChange = onSetKaraokeOverlay,
+                    tag = "setting_karaoke_overlay"
+                )
+                SettingsToggleRow(
+                    title = "Mulai otomatis saat dibuka",
+                    subtitle = "Lanjutkan sesi terakhir begitu aplikasi dibuka",
+                    checked = appSettings.autoResumeOnOpen,
+                    onCheckedChange = onSetAutoResumeOnOpen,
+                    tag = "setting_auto_resume"
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(20.dp))
+
         // Storage & Cache
         Card(
             modifier = Modifier
@@ -457,3 +750,79 @@ fun ProfileScreen(
         }
     }
 }
+
+/** Handle shape for usernames registered through Firestore. */
+private val USERNAME_HANDLE = Regex("^[A-Za-z0-9_.]{3,20}$")
+
+/** One stat line inside the weekly recap card. */
+@Composable
+private fun RecapRow(icon: String, text: String) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(text = icon, color = NoxaLime, fontSize = 14.sp)
+        Spacer(modifier = Modifier.width(10.dp))
+        Text(
+            text = text,
+            color = NoxaTextPrimary,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium
+        )
+    }
+}
+
+/** A settings row with a switch — used by the player feature toggles. */
+@Composable
+private fun SettingsToggleRow(
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    tag: String
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onCheckedChange(!checked) }
+            .padding(horizontal = 16.dp, vertical = 10.dp)
+            .testTag(tag),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                color = NoxaTextPrimary,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                text = subtitle,
+                color = NoxaTextSecondary,
+                fontSize = 11.sp
+            )
+        }
+        Spacer(modifier = Modifier.width(12.dp))
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            colors = SwitchDefaults.colors(
+                checkedTrackColor = NoxaLime,
+                checkedThumbColor = NoxaBlack,
+                uncheckedTrackColor = NoxaSurfaceSecondary,
+                uncheckedThumbColor = NoxaTextSecondary,
+                uncheckedBorderColor = NoxaBorder
+            )
+        )
+    }
+}
+
+/** Themed field colors for the email / username / password inputs. */
+@Composable
+private fun authFieldColors() = OutlinedTextFieldDefaults.colors(
+    focusedBorderColor = NoxaLime,
+    unfocusedBorderColor = NoxaBorder,
+    focusedLabelColor = NoxaLime,
+    unfocusedLabelColor = NoxaTextSecondary,
+    focusedTextColor = NoxaTextPrimary,
+    unfocusedTextColor = NoxaTextPrimary,
+    cursorColor = NoxaLime
+)

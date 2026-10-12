@@ -58,6 +58,7 @@ import com.example.data.model.Song
 import com.example.ui.components.AddToPlaylistDialog
 import com.example.ui.components.FullPlayerSheet
 import com.example.ui.components.MiniPlayer
+import com.example.ui.components.ShareSheetDialog
 import com.example.ui.components.YouTubePolicyDialog
 import com.example.ui.screens.AboutSkyScreen
 import com.example.ui.screens.AlbumScreen
@@ -75,7 +76,6 @@ import com.example.ui.theme.NoxaSurfaceElevated
 import com.example.ui.theme.NoxaTextPrimary
 import com.example.ui.theme.NoxaTextSecondary
 import com.example.ui.theme.NoxaTextTertiary
-import com.example.ui.util.ShareUtils
 import com.example.ui.viewmodel.MusicViewModel
 import com.example.ui.viewmodel.VideoUiState
 import androidx.compose.runtime.mutableStateOf
@@ -137,6 +137,10 @@ fun NoxaApp(
     val favoriteSongs by viewModel.favoriteSongs.collectAsStateWithLifecycle()
     val historySongs by viewModel.historySongs.collectAsStateWithLifecycle()
     val playlistSummaries by viewModel.playlistSummaries.collectAsStateWithLifecycle()
+    val pinnedSongs by viewModel.pinnedSongs.collectAsStateWithLifecycle()
+    val popularArtists by viewModel.popularArtists.collectAsStateWithLifecycle()
+    val weeklyRecap by viewModel.weeklyRecap.collectAsStateWithLifecycle()
+    val appSettings by viewModel.appSettings.collectAsStateWithLifecycle()
 
     val lyricsState by viewModel.lyricsState.collectAsStateWithLifecycle()
     val isFullPlayerVisible by viewModel.isFullPlayerVisible.collectAsStateWithLifecycle()
@@ -149,6 +153,9 @@ fun NoxaApp(
 
     // Song awaiting "which playlist?".
     var songPendingPlaylist by remember { mutableStateOf<Song?>(null) }
+
+    // Song awaiting NOXA's share sheet (canvas image / copy link).
+    var songPendingShare by remember { mutableStateOf<Song?>(null) }
 
     LaunchedEffect(playerState.errorMessage) {
         val message = playerState.errorMessage
@@ -283,6 +290,8 @@ fun NoxaApp(
                     HomeScreen(
                         heroSong = heroSong,
                         sections = homeSections,
+                        pinnedSongs = pinnedSongs,
+                        popularArtists = popularArtists,
                         resumeSong = resumableSong,
                         isLoading = isHomeLoading,
                         errorMessage = homeError,
@@ -313,7 +322,7 @@ fun NoxaApp(
                         onPlayNext = { viewModel.playNext(it) },
                         onAddToQueue = { viewModel.addToQueue(it) },
                         onAddToPlaylist = { songPendingPlaylist = it },
-                        onShare = { ShareUtils.shareSong(context, it) },
+                        onShare = { songPendingShare = it },
                         onOpenArtist = openArtistProfile
                     )
                 }
@@ -330,7 +339,7 @@ fun NoxaApp(
                         onPlayNext = { viewModel.playNext(it) },
                         onAddToQueue = { viewModel.addToQueue(it) },
                         onAddToPlaylist = { songPendingPlaylist = it },
-                        onShare = { ShareUtils.shareSong(context, it) },
+                        onShare = { songPendingShare = it },
                         onCreatePlaylist = { name, desc -> viewModel.createPlaylist(name, desc) },
                         onDeletePlaylist = { viewModel.deletePlaylist(it) },
                         onOpenPlaylist = { navController.navigate(Screen.Playlist.routeFor(it)) },
@@ -359,7 +368,7 @@ fun NoxaApp(
                             onRemoveSong = { songId -> viewModel.removeSongFromPlaylist(playlistId, songId) },
                             onPlayNext = { viewModel.playNext(it) },
                             onAddToQueue = { viewModel.addToQueue(it) },
-                            onShare = { ShareUtils.shareSong(context, it) },
+                            onShare = { songPendingShare = it },
                             onOpenArtist = openArtistProfile
                         )
                     }
@@ -381,7 +390,7 @@ fun NoxaApp(
                             onPlayNext = { viewModel.playNext(it) },
                             onAddToQueue = { viewModel.addToQueue(it) },
                             onAddToPlaylist = { songPendingPlaylist = it },
-                            onShare = { ShareUtils.shareSong(context, it) },
+                            onShare = { songPendingShare = it },
                             onOpenAlbum = { albumId ->
                                 navController.navigate(Screen.Album.routeFor(albumId))
                             },
@@ -407,7 +416,7 @@ fun NoxaApp(
                             onPlayNext = { viewModel.playNext(it) },
                             onAddToQueue = { viewModel.addToQueue(it) },
                             onAddToPlaylist = { songPendingPlaylist = it },
-                            onShare = { ShareUtils.shareSong(context, it) },
+                            onShare = { songPendingShare = it },
                             onOpenArtist = openArtistProfile,
                             onRetry = { viewModel.loadAlbum(albumId) }
                         )
@@ -429,7 +438,24 @@ fun NoxaApp(
                     ProfileScreen(
                         currentUser = currentUser,
                         isSigningIn = isSigningIn,
+                        weeklyRecap = weeklyRecap,
+                        appSettings = appSettings,
                         onSignInWithGoogle = { activity: Activity -> viewModel.signInWithGoogle(activity) },
+                        onSignInWithEmail = { email, password, onError ->
+                            viewModel.signInWithEmail(email, password, onError = onError)
+                        },
+                        onRegisterWithEmail = { email, password, username, onError ->
+                            viewModel.registerWithEmail(
+                                email,
+                                password,
+                                username,
+                                onError = onError
+                            )
+                        },
+                        onSetMvQuality = { viewModel.setMvQualityHeight(it) },
+                        onSetAutoplaySimilar = { viewModel.setAutoplaySimilar(it) },
+                        onSetKaraokeOverlay = { viewModel.setKaraokeOverlay(it) },
+                        onSetAutoResumeOnOpen = { viewModel.setAutoResumeOnOpen(it) },
                         onSignOut = { viewModel.signOut() },
                         onNavigateToAboutSky = {
                             navController.navigate(Screen.AboutSky.route)
@@ -475,11 +501,12 @@ fun NoxaApp(
                 viewModel.playSong(song, playerState.queue, idx)
             },
             onShare = {
-                playerState.currentSong?.let { ShareUtils.shareSong(context, it) }
+                playerState.currentSong?.let { songPendingShare = it }
             },
             onRetryLyrics = { viewModel.retryLyrics() },
             onSetVideoMode = { enabled -> viewModel.setVideoMode(enabled) },
             onAttachVideoSurface = { surface -> viewModel.attachMvSurface(surface) },
+            karaokeOverlayEnabled = appSettings.karaokeOverlay,
             onOpenArtist = { artistId, artistName ->
                 viewModel.openArtistProfile(artistId, artistName) { resolvedId ->
                     viewModel.closeFullPlayer()
@@ -513,6 +540,14 @@ fun NoxaApp(
                     viewModel.createPlaylist(name)
                     Toast.makeText(context, "Playlist \"$name\" dibuat", Toast.LENGTH_SHORT).show()
                 }
+            )
+        }
+
+        // NOXA share sheet — canvas image or copy the deep link.
+        songPendingShare?.let { song ->
+            ShareSheetDialog(
+                song = song,
+                onDismiss = { songPendingShare = null }
             )
         }
     }

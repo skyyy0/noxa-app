@@ -84,4 +84,15 @@ interface NoxaDao {
 
     @Query("DELETE FROM playlist_songs WHERE playlistId = :playlistId AND songId = :songId")
     suspend fun deletePlaylistSong(playlistId: Long, songId: String)
+
+    // Weekly recap — every play counts, repeats included.
+    @Insert
+    suspend fun insertPlayRecord(record: PlayRecordEntity)
+
+    @Query("SELECT * FROM play_records WHERE playedAt >= :since ORDER BY playedAt DESC")
+    fun getPlayRecordsSince(since: Long): Flow<List<PlayRecordEntity>>
+
+    /** Keep the recap cheap: everything older than the retention window goes. */
+    @Query("DELETE FROM play_records WHERE playedAt < :cutoff")
+    suspend fun prunePlayRecords(cutoff: Long)
 }

@@ -49,7 +49,13 @@ data class Song(
      * today). Blank for sources without one — the UI then resolves the artist
      * by name at open time.
      */
-    val artistId: String = ""
+    val artistId: String = "",
+    /**
+     * YouTube video id matched for a non-YouTube track (a Deezer preview whose
+     * full audio was found on YouTube). Lets the full player offer the MV
+     * toggle for those tracks too, even though [remoteId] belongs to Deezer.
+     */
+    val matchedVideoId: String = ""
 ) {
     /**
      * Returns a copy whose [source] and [remoteId] are consistent with the

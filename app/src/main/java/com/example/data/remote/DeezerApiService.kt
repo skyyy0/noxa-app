@@ -58,6 +58,11 @@ interface DeezerApiService {
         @Query("limit") limit: Int
     ): Response<DeezerTrackListResponse>
 
+    @GET("track/{trackId}")
+    suspend fun trackDetail(
+        @Path("trackId") trackId: Long
+    ): Response<DeezerTrack>
+
     @GET("chart/0/tracks")
     suspend fun chartTracks(
         @Query("limit") limit: Int

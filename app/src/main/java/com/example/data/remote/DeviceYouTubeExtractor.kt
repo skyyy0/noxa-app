@@ -92,6 +92,30 @@ object DeviceYouTubeExtractor {
     }
 
     /**
+     * Title/uploader/duration for one video id — what turns a shared NOXA link
+     * (`youtube:<id>`) into a song with a real name instead of a placeholder.
+     */
+    suspend fun extractVideoInfo(videoId: String): DeviceSearchResult? =
+        withContext(Dispatchers.IO) {
+            if (videoId.isBlank() || !ensureInitialized()) return@withContext null
+            try {
+                val extractor = ServiceList.YouTube.getStreamExtractor(
+                    "https://www.youtube.com/watch?v=$videoId"
+                )
+                extractor.fetchPage()
+                DeviceSearchResult(
+                    videoId = videoId,
+                    title = extractor.name.orEmpty(),
+                    uploader = extractor.uploaderName.orEmpty(),
+                    durationMs = extractor.length.coerceAtLeast(0L) * 1000L
+                )
+            } catch (t: Throwable) {
+                Log.w(TAG, "Info extraction failed for $videoId: ${t.message}")
+                null
+            }
+        }
+
+    /**
      * On-device YouTube search — the safety net when the instance search
      * endpoints (and an optional Data API key) are all unavailable.
      */

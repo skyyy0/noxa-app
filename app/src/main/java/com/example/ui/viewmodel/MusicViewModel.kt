@@ -6,7 +6,9 @@ import android.view.SurfaceView
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.NoxaApplication
+import com.example.data.local.AppSettings
 import com.example.data.local.FavoriteSongEntity
+import com.example.data.local.PlayRecordEntity
 import com.example.data.local.PlaylistEntity
 import com.example.data.local.PlaylistSongEntity
 import com.example.data.local.PlaylistSummary
@@ -31,6 +33,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -38,6 +41,27 @@ import kotlinx.coroutines.launch
 
 /** How many preview tracks in a queue get warmed for full audio ahead of time. */
 private const val PREVIEW_WARM_LIMIT = 3
+
+/** Autoplay-similar: trigger window before the end of the queue's last song. */
+private const val AUTOPLAY_NEAR_END_MS = 15_000L
+
+/** How many similar tracks get appended when autoplay kicks in. */
+private const val AUTOPLAY_APPEND_LIMIT = 5
+
+private const val WEEK_MS = 7L * 24 * 60 * 60 * 1000
+private const val PLAY_RECORD_RETENTION_MS = 30L * 24 * 60 * 60 * 1000
+
+/** The mini weekly recap shown on the profile screen. */
+data class WeeklyRecap(
+    val plays: Int = 0,
+    val topArtist: String = "",
+    val topSongTitle: String = "",
+    val topSongPlays: Int = 0
+) {
+    companion object {
+        val EMPTY = WeeklyRecap()
+    }
+}
 
 /** What the lyrics panel should show for the track that is playing. */
 sealed interface LyricsUiState {
@@ -97,6 +121,42 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     val isGuestMode: StateFlow<Boolean> = authManager.isGuestMode
     val isSigningIn: StateFlow<Boolean> = authManager.isSigningIn
 
+    // ------------------------------------------------------------ app settings
+
+    private val settingsStore = app.appSettingsStore
+
+    private val _appSettings = MutableStateFlow(
+        AppSettings(
+            mvQualityHeight = settingsStore.mvQualityHeight,
+            autoplaySimilar = settingsStore.autoplaySimilar,
+            karaokeOverlay = settingsStore.karaokeOverlay,
+            autoResumeOnOpen = settingsStore.autoResumeOnOpen
+        )
+    )
+
+    /** MV quality, autoplay-similar, karaoke overlay and auto-resume. */
+    val appSettings: StateFlow<AppSettings> = _appSettings.asStateFlow()
+
+    fun setMvQualityHeight(height: Int) {
+        settingsStore.mvQualityHeight = height
+        _appSettings.value = _appSettings.value.copy(mvQualityHeight = height)
+    }
+
+    fun setAutoplaySimilar(enabled: Boolean) {
+        settingsStore.autoplaySimilar = enabled
+        _appSettings.value = _appSettings.value.copy(autoplaySimilar = enabled)
+    }
+
+    fun setKaraokeOverlay(enabled: Boolean) {
+        settingsStore.karaokeOverlay = enabled
+        _appSettings.value = _appSettings.value.copy(karaokeOverlay = enabled)
+    }
+
+    fun setAutoResumeOnOpen(enabled: Boolean) {
+        settingsStore.autoResumeOnOpen = enabled
+        _appSettings.value = _appSettings.value.copy(autoResumeOnOpen = enabled)
+    }
+
     val playerState: StateFlow<PlayerUiState> = player.uiState
 
     /**
@@ -132,6 +192,14 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     // Hero banner — "Blinding Lights" by The Weeknd, fetched live.
     private val _heroSong = MutableStateFlow<Song?>(null)
     val heroSong: StateFlow<Song?> = _heroSong.asStateFlow()
+
+    // Sky's pinned pick(s) — the dedicated Home shelf.
+    private val _pinnedSongs = MutableStateFlow<List<Song>>(emptyList())
+    val pinnedSongs: StateFlow<List<Song>> = _pinnedSongs.asStateFlow()
+
+    // Artist avatars behind the Home "Artis Populer" shelf.
+    private val _popularArtists = MutableStateFlow<List<ArtistProfile>>(emptyList())
+    val popularArtists: StateFlow<List<ArtistProfile>> = _popularArtists.asStateFlow()
 
     // "Lanjutkan mendengarkan" — the session restored after a reboot.
     private val _resumableSong = MutableStateFlow<Song?>(null)
@@ -185,6 +253,10 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         .map { list -> list.map { it.toSong() } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    // Mini weekly recap — plays from the last seven days.
+    private val _weeklyRecap = MutableStateFlow(WeeklyRecap.EMPTY)
+    val weeklyRecap: StateFlow<WeeklyRecap> = _weeklyRecap.asStateFlow()
+
     val playlistSummaries: StateFlow<List<PlaylistSummary>> =
         dao.getPlaylistSummaries()
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -192,8 +264,15 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     init {
         authManager.attemptSilentAutoSignIn(viewModelScope)
         restoreLastSession()
+        // Optional auto-start: when enabled, the restored session plays right
+        // away instead of waiting behind the resume card.
+        if (settingsStore.autoResumeOnOpen && _resumableSong.value != null) {
+            resumeLastSession()
+        }
         loadHome()
         observeCurrentSong()
+        observeAutoplaySimilar()
+        observeWeeklyRecap()
     }
 
     /**
@@ -229,6 +308,96 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 .collect { song ->
                     resetVideoMode()
                     loadLyrics(song)
+                    recordPlay(song)
+                }
+        }
+    }
+
+    /** Counts a play for the weekly recap and prunes records past retention. */
+    private fun recordPlay(song: Song?) {
+        if (song == null) return
+        viewModelScope.launch {
+            dao.insertPlayRecord(
+                PlayRecordEntity(songId = song.id, title = song.title, artist = song.artist)
+            )
+            dao.prunePlayRecords(System.currentTimeMillis() - PLAY_RECORD_RETENTION_MS)
+        }
+    }
+
+    /** Recomputes the weekly recap whenever a new play lands. */
+    private fun observeWeeklyRecap() {
+        viewModelScope.launch {
+            dao.getPlayRecordsSince(System.currentTimeMillis() - WEEK_MS)
+                .collect { records ->
+                    if (records.isEmpty()) {
+                        _weeklyRecap.value = WeeklyRecap.EMPTY
+                        return@collect
+                    }
+                    val topArtist = records.groupBy { it.artist }.maxByOrNull { it.value.size }
+                    val topSong = records.groupBy { it.title }.maxByOrNull { it.value.size }
+                    _weeklyRecap.value = WeeklyRecap(
+                        plays = records.size,
+                        topArtist = topArtist?.key.orEmpty(),
+                        topSongTitle = topSong?.key.orEmpty(),
+                        topSongPlays = topSong?.value?.size ?: 0
+                    )
+                }
+        }
+    }
+
+    /**
+     * Autoplay of similar music: a few seconds before the last track of a queue
+     * ends, the artist's other top tracks are appended — resolved first so they
+     * are genuinely playable, not dead preview links.
+     */
+    private var autoplayAppendedFor: String? = null
+
+    private fun observeAutoplaySimilar() {
+        viewModelScope.launch {
+            combine(player.uiState, player.progress) { state, progress -> state to progress }
+                .collect { (state, progress) ->
+                    if (!settingsStore.autoplaySimilar) return@collect
+                    if (state.queue.isEmpty() || state.queueIndex != state.queue.lastIndex) {
+                        return@collect
+                    }
+                    if (!state.isPlaying) return@collect
+                    val last = state.queue.last()
+                    if (last.id == autoplayAppendedFor) return@collect
+                    val duration = last.durationMs
+                    if (duration <= 0 || progress.positionMs < duration - AUTOPLAY_NEAR_END_MS) {
+                        return@collect
+                    }
+                    autoplayAppendedFor = last.id
+                    appendSimilarTracks(last, state.queue)
+                }
+        }
+    }
+
+    private fun appendSimilarTracks(song: Song, playedQueue: List<Song>) {
+        viewModelScope.launch {
+            val artistId = song.artistId.toLongOrNull()
+                ?: runCatching { repository.findArtistId(song.artist) }.getOrNull()
+            val similar = if (artistId != null) {
+                runCatching { repository.artistTopTracks(artistId, 12) }
+                    .getOrDefault(emptyList())
+            } else {
+                emptyList()
+            }
+            similar
+                .filter { candidate ->
+                    candidate.id != song.id && playedQueue.none { it.id == candidate.id }
+                }
+                .take(AUTOPLAY_APPEND_LIMIT)
+                .forEach { candidate ->
+                    val resolved = if (
+                        candidate.source == MusicSource.DEEZER && candidate.isPreview &&
+                        usagePolicyStore.isYouTubePolicyAccepted
+                    ) {
+                        runCatching { youtubeRepository.findFullAudio(candidate) }.getOrNull()
+                    } else {
+                        candidate
+                    }
+                    player.addToQueue(resolved ?: candidate)
                 }
         }
     }
@@ -267,6 +436,8 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             val feed = repository.getHomeFeed()
             _homeSections.value = feed.sections
             _heroSong.value = feed.hero
+            _pinnedSongs.value = feed.pinned
+            _popularArtists.value = feed.artists
             if (feed.sections.isEmpty() && feed.hero == null) {
                 _homeError.value =
                     "Tidak ada data dari server musik. Periksa koneksi internet lalu coba lagi."
@@ -281,6 +452,27 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         onError: (String) -> Unit = {}
     ) {
         authManager.signInWithGoogle(activity, viewModelScope, onSuccess, onError)
+    }
+
+    /** Email/password sign-in — no Google account needed. */
+    fun signInWithEmail(
+        email: String,
+        password: String,
+        onSuccess: (FirebaseUser) -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
+        authManager.signInWithEmail(email, password, viewModelScope, onSuccess, onError)
+    }
+
+    /** Email/password registration with a unique username claim. */
+    fun registerWithEmail(
+        email: String,
+        password: String,
+        username: String,
+        onSuccess: (FirebaseUser) -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
+        authManager.registerWithEmail(email, password, username, viewModelScope, onSuccess, onError)
     }
 
     fun continueAsGuest() {
@@ -354,6 +546,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun playSong(song: Song, queue: List<Song> = listOf(song), index: Int = 0) {
         _resumableSong.value = null
+        autoplayAppendedFor = null
         // YouTube tracks always need the policy — there is no other audio.
         // Deezer previews only *may* use YouTube for full-length audio, so the
         // dialog is asked once: accepted -> full audio attempted, declined ->
@@ -370,6 +563,29 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         resolveAndPlay(song, queue, index)
+    }
+
+    /**
+     * Plays the song behind a shared NOXA link (`deezer:<id>`, `audius:<id>`,
+     * `youtube:<id>`), with an honest error when the id no longer resolves.
+     */
+    fun playSharedSong(songId: String) {
+        viewModelScope.launch {
+            val song = if (songId.startsWith("youtube:")) {
+                runCatching {
+                    youtubeRepository.songByVideoId(songId.removePrefix("youtube:"))
+                }.getOrNull()
+            } else {
+                runCatching { repository.songFromDeepLink(songId) }.getOrNull()
+            }
+            if (song == null) {
+                player.showError(
+                    "Lagu dari link tidak bisa ditemukan — mungkin sudah tidak tersedia."
+                )
+            } else {
+                playSong(song)
+            }
+        }
     }
 
     /** The user accepted the YouTube usage policy: continue the held play. */
@@ -550,12 +766,16 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * Switches the full player between the artwork photo and the music video.
-     * Only YouTube tracks can have an MV; resolving can take a moment, so the
-     * UI shows a spinner until [VideoUiState.Ready] arrives.
+     * YouTube tracks — and Deezer tracks matched to a YouTube video — can have
+     * an MV; resolving can take a moment, so the UI shows a spinner until
+     * [VideoUiState.Ready] arrives. The stream is picked at the quality chosen
+     * in Profile & Settings.
      */
     fun setVideoMode(enabled: Boolean) {
         val song = player.uiState.value.currentSong
-        if (!enabled || song == null || song.source != MusicSource.YOUTUBE) {
+        val canHaveMv = song != null &&
+            (song.source == MusicSource.YOUTUBE || song.matchedVideoId.isNotBlank())
+        if (!enabled || song == null || !canHaveMv) {
             resetVideoMode()
             return
         }
@@ -564,7 +784,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         }
         _videoUiState.value = VideoUiState.Loading
         viewModelScope.launch {
-            val url = youtubeRepository.resolveVideoUrl(song)
+            val url = youtubeRepository.resolveVideoUrl(song, appSettings.value.mvQualityHeight)
             _videoUiState.value = if (url == null) {
                 VideoUiState.Unavailable("MV tidak tersedia untuk lagu ini.")
             } else {

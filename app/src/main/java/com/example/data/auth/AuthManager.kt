@@ -15,6 +15,7 @@ import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential.Co
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.GoogleAuthProvider
+import com.google.firebase.auth.userProfileChangeRequest
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -100,6 +101,130 @@ class AuthManager(private val context: Context) {
             } finally {
                 _isSigningIn.value = false
             }
+        }
+    }
+
+    /**
+     * Email/password sign-in — the Google-free path, so an account works on any
+     * device without a Google account on it.
+     */
+    fun signInWithEmail(
+        email: String,
+        password: String,
+        scope: CoroutineScope,
+        onSuccess: (FirebaseUser) -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
+        if (auth == null) {
+            onError("Firebase belum dikonfigurasi pada build ini.")
+            return
+        }
+        _isSigningIn.value = true
+        scope.launch {
+            try {
+                val result = auth.signInWithEmailAndPassword(email.trim(), password).await()
+                val user = result.user
+                if (user != null) {
+                    _currentUser.value = user
+                    _isGuestMode.value = false
+                    onSuccess(user)
+                } else {
+                    onError("Masuk gagal. Coba lagi.")
+                }
+            } catch (e: Exception) {
+                onError(humanizeAuthError(e))
+            } finally {
+                _isSigningIn.value = false
+            }
+        }
+    }
+
+    /**
+     * Email/password registration with a **unique username** claimed through
+     * [UsernameRegistry] (Firestore). If the name turns out to be taken in the
+     * race window, the freshly created account is removed again — no orphaned
+     * accounts, and the user gets a clear message.
+     */
+    fun registerWithEmail(
+        email: String,
+        password: String,
+        username: String,
+        scope: CoroutineScope,
+        onSuccess: (FirebaseUser) -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
+        if (auth == null) {
+            onError("Firebase belum dikonfigurasi pada build ini.")
+            return
+        }
+        val trimmedName = username.trim()
+        UsernameRegistry.validate(trimmedName)?.let { onError(it); return }
+        if (password.length < 6) {
+            onError("Password minimal 6 karakter.")
+            return
+        }
+
+        _isSigningIn.value = true
+        scope.launch {
+            try {
+                // Fast, friendly check before creating anything.
+                if (UsernameRegistry.isTaken(trimmedName) == true) {
+                    onError("Username \"$trimmedName\" sudah dipakai. Pilih yang lain.")
+                    return@launch
+                }
+
+                val result = auth.createUserWithEmailAndPassword(email.trim(), password).await()
+                val user = result.user
+                if (user == null) {
+                    onError("Pendaftaran gagal. Coba lagi.")
+                    return@launch
+                }
+
+                when (val claim = UsernameRegistry.claim(user.uid, trimmedName)) {
+                    UsernameRegistry.ClaimResult.TAKEN,
+                    UsernameRegistry.ClaimResult.INVALID -> {
+                        try { user.delete().await() } catch (ignored: Exception) { Unit }
+                        auth.signOut()
+                        onError("Username \"$trimmedName\" sudah dipakai. Pilih yang lain.")
+                        return@launch
+                    }
+
+                    // Unreachable Firestore: the account still works; the name
+                    // is stored locally as the display name (documented tradeoff).
+                    UsernameRegistry.ClaimResult.AVAILABLE,
+                    UsernameRegistry.ClaimResult.UNAVAILABLE -> Unit
+                }
+
+                runCatching {
+                    user.updateProfile(userProfileChangeRequest { displayName = trimmedName })
+                        .await()
+                }
+                _currentUser.value = user
+                _isGuestMode.value = false
+                onSuccess(user)
+            } catch (e: Exception) {
+                onError(humanizeAuthError(e))
+            } finally {
+                _isSigningIn.value = false
+            }
+        }
+    }
+
+    /** Maps provider errors to Indonesian, human messages (never raw codes). */
+    private fun humanizeAuthError(e: Exception): String {
+        val msg = e.message.orEmpty()
+        val lower = msg.lowercase()
+        return when {
+            "email_exists" in lower || "email already" in lower ->
+                "Email sudah terdaftar. Gunakan Masuk."
+            "invalid_email" in lower || "malformed" in lower || "badly formatted" in lower ->
+                "Format email tidak valid."
+            "weak_password" in lower -> "Password minimal 6 karakter."
+            "invalid_login_credentials" in lower || "password is invalid" in lower ||
+                "no user record" in lower || "user-not-found" in lower ->
+                "Email atau password salah."
+            "network" in lower -> "Koneksi internet bermasalah. Coba lagi."
+            else -> msg.ifBlank { "Autentikasi gagal. Coba lagi." }
         }
     }
 

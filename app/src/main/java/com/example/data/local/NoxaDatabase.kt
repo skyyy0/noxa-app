@@ -12,9 +12,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         FavoriteSongEntity::class,
         HistorySongEntity::class,
         PlaylistEntity::class,
-        PlaylistSongEntity::class
+        PlaylistSongEntity::class,
+        PlayRecordEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class NoxaDatabase : RoomDatabase() {
@@ -54,6 +55,24 @@ abstract class NoxaDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Adds the `play_records` table introduced in version 3 (the mini
+         * weekly recap). A real migration again — upgrading must not throw
+         * away favourites, history and playlists.
+         */
+        private val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `play_records` (" +
+                        "`recordId` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`songId` TEXT NOT NULL, " +
+                        "`title` TEXT NOT NULL, " +
+                        "`artist` TEXT NOT NULL, " +
+                        "`playedAt` INTEGER NOT NULL)"
+                )
+            }
+        }
+
         fun getDatabase(context: Context): NoxaDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -61,7 +80,7 @@ abstract class NoxaDatabase : RoomDatabase() {
                     NoxaDatabase::class.java,
                     "noxa_music.db"
                 )
-                    .addMigrations(MIGRATION_1_2)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                     .fallbackToDestructiveMigration()
                     .build()
                 INSTANCE = instance

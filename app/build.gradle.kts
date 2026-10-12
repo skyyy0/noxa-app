@@ -1,4 +1,12 @@
 import com.google.gms.googleservices.GoogleServicesPlugin.MissingGoogleServicesStrategy
+import org.gradle.api.DefaultTask
+import org.gradle.api.file.RegularFileProperty
+import org.gradle.api.tasks.InputFile
+import org.gradle.api.tasks.OutputFile
+import org.gradle.api.tasks.TaskAction
+import java.util.zip.ZipEntry
+import java.util.zip.ZipFile
+import java.util.zip.ZipOutputStream
 
 // Fallback signing credentials for the repository's own keystore
 // (`my-upload-key.jks`). This is a personal, privately hosted app: committing
@@ -23,8 +31,8 @@ android {
     applicationId = "com.aistudio.noxa.music"
     minSdk = 24
     targetSdk = 36
-    versionCode = 6
-    versionName = "1.9.1"
+    versionCode = 7
+    versionName = "1.10"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -94,6 +102,13 @@ android {
     compose = true
     buildConfig = true
   }
+  packaging {
+    resources {
+      // protobuf-javalite (stripped copy) and protolite-well-known-types both
+      // ship the descriptor .proto resource; the duplicate breaks mergeJavaRes.
+      excludes += "google/protobuf/descriptor.proto"
+    }
+  }
   testOptions { unitTests { isIncludeAndroidResources = true } }
   dependenciesInfo {
     includeInApk = false
@@ -110,6 +125,65 @@ secrets {
 }
 
 googleServices { missingGoogleServicesStrategy = MissingGoogleServicesStrategy.WARN }
+
+// ---------------------------------------------------------------------------
+// Firestore ↔ protobuf de-duplication.
+//
+// protolite-well-known-types (Firestore's protobuf runtime) bundles its own
+// copy of `com.google.protobuf.DescriptorProtos*` inside the AAR, while
+// NewPipeExtractor pulls `com.google.protobuf:protobuf-javalite` from Maven,
+// which ships the same classes — dex then fails with "Duplicate class".
+//
+// Fix: exclude the Maven protobuf-javalite everywhere, and hand the app a
+// stripped copy of that same jar (identical runtime, DescriptorProtos
+// removed). Firestore's bundled DescriptorProtos remains the single copy;
+// NewPipe only needs the runtime classes, which the stripped jar still has.
+// ---------------------------------------------------------------------------
+abstract class StripDescriptorProtos : DefaultTask() {
+    @get:InputFile
+    abstract val inputJar: RegularFileProperty
+
+    @get:OutputFile
+    abstract val outputJar: RegularFileProperty
+
+    @TaskAction
+    fun strip() {
+        val out = ZipOutputStream(outputJar.get().asFile.outputStream().buffered())
+        try {
+            ZipFile(inputJar.get().asFile).use { zip ->
+                zip.entries().asSequence().forEach { entry ->
+                    if (entry.isDirectory ||
+                        entry.name.startsWith("com/google/protobuf/DescriptorProtos")
+                    ) {
+                        return@forEach
+                    }
+                    out.putNextEntry(ZipEntry(entry.name))
+                    zip.getInputStream(entry).use { it.copyTo(out) }
+                    out.closeEntry()
+                }
+            }
+        } finally {
+            out.close()
+        }
+    }
+}
+
+val protobufJavaliteOnly: Configuration = configurations.detachedConfiguration(
+    dependencies.create("com.google.protobuf:protobuf-javalite:4.35.1")
+)
+
+val stripDescriptorProtos = tasks.register<StripDescriptorProtos>("stripDescriptorProtos") {
+    inputJar.set(protobufJavaliteOnly.singleFile)
+    outputJar.set(layout.buildDirectory.file("intermediates/protobuf-javalite-stripped.jar"))
+}
+
+configurations.configureEach {
+    // The stripped jar below replaces the Maven artifact everywhere; only the
+    // detached resolution above is allowed to see the original.
+    if (name != protobufJavaliteOnly.name) {
+        exclude(group = "com.google.protobuf", module = "protobuf-javalite")
+    }
+}
 
 // Some unused dependencies are commented out below instead of being removed.
 // This makes it easy to add them back in the future if needed.
@@ -143,10 +217,12 @@ dependencies {
   implementation(libs.androidx.media3.ui)
   implementation(libs.androidx.media3.common)
   implementation(libs.firebase.ai)
-  // firebase-firestore removed in v1.9.1: it is unused in app code and its
-  // transitive protolite-well-known-types duplicates protobuf classes that
-  // NewPipeExtractor needs at a newer version (release builds failed the
-  // duplicate-class check). Auth is unaffected.
+  // Firestore is back (v1.10): the unique-username registry claims names in
+  // `usernames/{name}` via a transaction. Its transitive
+  // protolite-well-known-types collides with NewPipeExtractor's protobuf
+  // classes in dex — resolved by the stripDescriptorProtos setup above.
+  implementation(files(stripDescriptorProtos))
+  implementation(libs.firebase.firestore)
   implementation(libs.firebase.auth)
   implementation(libs.androidx.credentials)
   implementation(libs.androidx.credentials.play.services)

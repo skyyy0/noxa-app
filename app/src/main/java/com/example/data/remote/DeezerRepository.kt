@@ -87,6 +87,18 @@ class DeezerRepository {
     suspend fun artistIdFor(artistName: String): Long? = resolveArtistId(artistName)
 
     /**
+     * A single track by Deezer id — what resolves a shared NOXA link
+     * (`deezer:<id>`) back into a playable song.
+     */
+    suspend fun trackById(trackId: Long): Song? = withContext(Dispatchers.IO) {
+        val body = safeResponse(
+            block = { api.trackDetail(trackId) },
+            isFailure = { it.error != null || it.id == null }
+        ) ?: return@withContext null
+        body.toSong()
+    }
+
+    /**
      * Artist page header: picture, listener count and release count.
      * The listener count (`nb_fan`) is also what decides the red vs blue check.
      */
