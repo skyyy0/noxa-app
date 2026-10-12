@@ -1,0 +1,41 @@
+{
+  "entities": {
+    "users": {
+      "fields": {
+        "userId": { "type": "string", "description": "Google UID of the user" },
+        "displayName": { "type": "string", "description": "Display name of user" },
+        "email": { "type": "string", "description": "Email of user" },
+        "photoUrl": { "type": "string", "description": "Avatar photo URL" },
+        "createdAt": { "type": "timestamp", "description": "Creation timestamp" },
+        "updatedAt": { "type": "timestamp", "description": "Last updated timestamp" }
+      },
+      "constraints": ["userId == request.auth.uid"]
+    },
+    "favorites": {
+      "fields": {
+        "id": { "type": "string", "description": "Favorite item ID" },
+        "userId": { "type": "string", "description": "Owner user ID" },
+        "songId": { "type": "string", "description": "Song ID" },
+        "title": { "type": "string", "description": "Song title" },
+        "artist": { "type": "string", "description": "Artist name" },
+        "album": { "type": "string", "description": "Album name" },
+        "artworkUrl": { "type": "string", "description": "Artwork URL" },
+        "streamUrl": { "type": "string", "description": "Audio stream URL" },
+        "durationMs": { "type": "number", "description": "Duration in ms" },
+        "createdAt": { "type": "timestamp", "description": "Added timestamp" }
+      },
+      "constraints": ["userId == request.auth.uid"]
+    },
+    "playlists": {
+      "fields": {
+        "id": { "type": "string", "description": "Playlist ID" },
+        "userId": { "type": "string", "description": "Owner user ID" },
+        "name": { "type": "string", "description": "Playlist name" },
+        "description": { "type": "string", "description": "Playlist description" },
+        "createdAt": { "type": "timestamp", "description": "Created timestamp" },
+        "updatedAt": { "type": "timestamp", "description": "Updated timestamp" }
+      },
+      "constraints": ["userId == request.auth.uid"]
+    }
+  }
+}

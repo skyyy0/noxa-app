@@ -1,0 +1,6 @@
+{
+  "name": "NOXA",
+  "description": "Premium native music streaming player with YouTube integration and high-fidelity audio.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
