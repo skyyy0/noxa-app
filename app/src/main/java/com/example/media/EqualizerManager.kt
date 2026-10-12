@@ -1,6 +1,8 @@
 package com.example.media
 
+import android.media.audiofx.BassBoost
 import android.media.audiofx.Equalizer
+import android.media.audiofx.Virtualizer
 import android.util.Log
 
 data class EqualizerBand(
@@ -15,12 +17,20 @@ data class EqualizerState(
     val isEnabled: Boolean = true,
     val currentPreset: String = "Normal",
     val presets: List<String> = listOf("Flat", "Bass Boost", "Vocal Booster", "Electronic", "Rock", "Pop", "Classical"),
-    val bands: List<EqualizerBand> = emptyList()
+    val bands: List<EqualizerBand> = emptyList(),
+    /** 0..1000, mirroring the platform BassBoost scale. */
+    val bassBoostStrength: Int = 0,
+    /** 0..1000, mirroring the platform Virtualizer scale. */
+    val virtualizerStrength: Int = 0,
+    val supportsBassBoost: Boolean = false,
+    val supportsVirtualizer: Boolean = false
 )
 
 class EqualizerManager {
 
     private var equalizer: Equalizer? = null
+    private var bassBoost: BassBoost? = null
+    private var virtualizer: Virtualizer? = null
     var currentState: EqualizerState = EqualizerState()
         private set
 
@@ -28,13 +38,77 @@ class EqualizerManager {
         if (audioSessionId <= 0) return
         try {
             equalizer?.release()
+            bassBoost?.release()
+            virtualizer?.release()
+
             val eq = Equalizer(0, audioSessionId).apply {
                 enabled = true
             }
             equalizer = eq
+
+            // BassBoost and Virtualizer are separate platform effects and are not
+            // available on every device, so each is probed independently.
+            val bb = try {
+                BassBoost(0, audioSessionId).apply { enabled = true }
+            } catch (e: Exception) {
+                Log.w("EqualizerManager", "BassBoost unavailable: ${e.message}")
+                null
+            }
+            bassBoost = bb
+
+            val vc = try {
+                Virtualizer(0, audioSessionId).apply { enabled = true }
+            } catch (e: Exception) {
+                Log.w("EqualizerManager", "Virtualizer unavailable: ${e.message}")
+                null
+            }
+            virtualizer = vc
+
+            // `getStrengthSupported()` is the platform's own answer for whether the
+            // effect can do anything on this device; a constructor succeeding is
+            // not enough.
+            val bassSupported = bb != null && runCatching { bb.getStrengthSupported() }.getOrDefault(false)
+            val virtualSupported = vc != null && runCatching { vc.getStrengthSupported() }.getOrDefault(false)
+
+            currentState = currentState.copy(
+                supportsBassBoost = bassSupported,
+                supportsVirtualizer = virtualSupported,
+                bassBoostStrength = if (bassSupported) {
+                    runCatching { bb!!.getRoundedStrength().toInt() }.getOrDefault(0)
+                } else {
+                    0
+                },
+                virtualizerStrength = if (virtualSupported) {
+                    runCatching { vc!!.getRoundedStrength().toInt() }.getOrDefault(0)
+                } else {
+                    0
+                }
+            )
             readCurrentBands()
         } catch (e: Exception) {
             Log.e("EqualizerManager", "Failed to initialize Equalizer with session ID: $audioSessionId", e)
+        }
+    }
+
+    fun setBassBoost(strength: Int) {
+        val bb = bassBoost ?: return
+        val clamped = strength.coerceIn(0, 1000)
+        try {
+            bb.setStrength(clamped.toShort())
+            currentState = currentState.copy(bassBoostStrength = clamped)
+        } catch (e: Exception) {
+            Log.e("EqualizerManager", "Error setting bass boost", e)
+        }
+    }
+
+    fun setVirtualizer(strength: Int) {
+        val vc = virtualizer ?: return
+        val clamped = strength.coerceIn(0, 1000)
+        try {
+            vc.setStrength(clamped.toShort())
+            currentState = currentState.copy(virtualizerStrength = clamped)
+        } catch (e: Exception) {
+            Log.e("EqualizerManager", "Error setting virtualizer", e)
         }
     }
 
@@ -138,7 +212,11 @@ class EqualizerManager {
     fun release() {
         try {
             equalizer?.release()
+            bassBoost?.release()
+            virtualizer?.release()
             equalizer = null
+            bassBoost = null
+            virtualizer = null
         } catch (e: Exception) {
             Log.e("EqualizerManager", "Error releasing equalizer", e)
         }

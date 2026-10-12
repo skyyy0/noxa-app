@@ -14,6 +14,8 @@ import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import com.example.data.local.HistorySongEntity
 import com.example.data.local.NoxaDatabase
+import com.example.data.local.PlaybackSession
+import com.example.data.local.PlaybackSessionStore
 import com.example.data.model.Song
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -26,22 +28,42 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
+/**
+ * The slow-changing player state: everything a screen needs to draw itself.
+ *
+ * The playback position deliberately does **not** live here. It changes four
+ * times a second, and keeping it in this object made every screen that observes
+ * the player rebuild on every tick — which is what made the home screen lag.
+ * Use [NoxaAudioPlayer.progress] for anything time based.
+ */
 data class PlayerUiState(
     val currentSong: Song? = null,
     val isPlaying: Boolean = false,
     val isBuffering: Boolean = false,
-    val currentPositionMs: Long = 0L,
     val durationMs: Long = 0L,
     val queue: List<Song> = emptyList(),
     val queueIndex: Int = -1,
     val isShuffle: Boolean = false,
     val repeatMode: Int = Player.REPEAT_MODE_OFF,
     val sleepTimerMinutes: Int? = null,
-    val sleepTimerRemainingSeconds: Long? = null,
     /** Honest error surfaced to the UI (never hidden behind simulated playback). */
     val errorMessage: String? = null,
     val equalizerState: EqualizerState = EqualizerState()
 )
+
+/** The fast-changing player state: only the leaf composables that need it read it. */
+data class PlaybackProgress(
+    val positionMs: Long = 0L,
+    val durationMs: Long = 0L,
+    val sleepTimerRemainingSeconds: Long? = null
+) {
+    val fraction: Float
+        get() = if (durationMs > 0) {
+            (positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
+        } else {
+            0f
+        }
+}
 
 /**
  * The single playback facade used by the whole UI.
@@ -59,6 +81,7 @@ class NoxaAudioPlayer(private val context: Context) {
 
     private val scope = CoroutineScope(Dispatchers.Main + Job())
     private val database = NoxaDatabase.getDatabase(context)
+    private val sessionStore = PlaybackSessionStore(context)
     val equalizerManager = EqualizerManager()
 
     val exoPlayer: ExoPlayer = ExoPlayer.Builder(context)
@@ -77,8 +100,12 @@ class NoxaAudioPlayer(private val context: Context) {
     private val _uiState = MutableStateFlow(PlayerUiState())
     val uiState: StateFlow<PlayerUiState> = _uiState.asStateFlow()
 
+    private val _progress = MutableStateFlow(PlaybackProgress())
+    val progress: StateFlow<PlaybackProgress> = _progress.asStateFlow()
+
     private var positionUpdateJob: Job? = null
     private var sleepTimer: CountDownTimer? = null
+    private var lastSessionSaveMs = 0L
 
     init {
         setupPlayerListener()
@@ -91,6 +118,7 @@ class NoxaAudioPlayer(private val context: Context) {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 _uiState.update { it.copy(isPlaying = isPlaying) }
                 if (isPlaying) startPositionUpdater() else stopPositionUpdater()
+                if (!isPlaying) persistSession(force = true)
             }
 
             override fun onPlaybackStateChanged(playbackState: Int) {
@@ -101,6 +129,7 @@ class NoxaAudioPlayer(private val context: Context) {
                     _uiState.value.currentSong?.durationMs ?: 0L
                 }
                 _uiState.update { it.copy(isBuffering = isBuffering, durationMs = duration) }
+                _progress.update { it.copy(durationMs = duration) }
 
                 if (playbackState == Player.STATE_ENDED) {
                     stopPositionUpdater()
@@ -131,12 +160,12 @@ class NoxaAudioPlayer(private val context: Context) {
                 queue = newQueue,
                 queueIndex = validIndex,
                 durationMs = song.durationMs,
-                currentPositionMs = 0L,
                 isBuffering = true,
                 isPlaying = false,
                 errorMessage = null
             )
         }
+        _progress.update { PlaybackProgress(positionMs = 0L, durationMs = song.durationMs) }
 
         scope.launch(Dispatchers.IO) {
             database.noxaDao().insertHistory(HistorySongEntity.fromSong(song))
@@ -153,17 +182,10 @@ class NoxaAudioPlayer(private val context: Context) {
             return
         }
 
-        val metadata = MediaMetadata.Builder()
-            .setTitle(song.title)
-            .setArtist(song.artist)
-            .setAlbumTitle(song.album)
-            .setArtworkUri(song.artworkUrl.takeIf { it.isNotBlank() }?.let { Uri.parse(it) })
-            .build()
-
         val mediaItem = MediaItem.Builder()
             .setUri(Uri.parse(song.streamUrl))
             .setMediaId(song.id)
-            .setMediaMetadata(metadata)
+            .setMediaMetadata(song.toMediaMetadata())
             .build()
 
         exoPlayer.setMediaItem(mediaItem)
@@ -177,7 +199,16 @@ class NoxaAudioPlayer(private val context: Context) {
         // The MediaSession lives in the service; starting it enables the system
         // media notification, lock screen controls and background playback.
         startPlaybackService()
+        persistSession(force = true)
     }
+
+    private fun Song.toMediaMetadata(): MediaMetadata = MediaMetadata.Builder()
+        .setTitle(title)
+        .setArtist(artist)
+        .setAlbumTitle(album)
+        .setIsPlayable(true)
+        .setArtworkUri(artworkUrl.takeIf { it.isNotBlank() }?.let { Uri.parse(it) })
+        .build()
 
     private fun startPlaybackService() {
         try {
@@ -185,6 +216,33 @@ class NoxaAudioPlayer(private val context: Context) {
         } catch (e: Exception) {
             Log.w("NoxaAudioPlayer", "Could not start MediaPlaybackService: ${e.message}")
         }
+    }
+
+    /** Plays [song] right after the current one. */
+    fun playNext(song: Song) {
+        val state = _uiState.value
+        if (state.currentSong == null) {
+            playSong(song)
+            return
+        }
+        val queue = state.queue.toMutableList()
+        val insertAt = (state.queueIndex + 1).coerceIn(0, queue.size)
+        queue.removeAll { it.id == song.id }
+        queue.add(insertAt.coerceAtMost(queue.size), song)
+        _uiState.update { it.copy(queue = queue) }
+        persistSession(force = true)
+    }
+
+    /** Appends [song] to the end of the queue. */
+    fun addToQueue(song: Song) {
+        val state = _uiState.value
+        if (state.currentSong == null) {
+            playSong(song)
+            return
+        }
+        if (state.queue.any { it.id == song.id }) return
+        _uiState.update { it.copy(queue = state.queue + song) }
+        persistSession(force = true)
     }
 
     fun togglePlayPause() {
@@ -202,7 +260,7 @@ class NoxaAudioPlayer(private val context: Context) {
     fun seekTo(positionMs: Long) {
         val clamped = positionMs.coerceIn(0L, _uiState.value.durationMs.coerceAtLeast(1L))
         exoPlayer.seekTo(clamped)
-        _uiState.update { it.copy(currentPositionMs = clamped) }
+        _progress.update { it.copy(positionMs = clamped) }
     }
 
     fun next() {
@@ -221,7 +279,7 @@ class NoxaAudioPlayer(private val context: Context) {
         val state = _uiState.value
         if (state.queue.isEmpty()) return
         // If played more than 3 seconds, replay the current song.
-        if (state.currentPositionMs > 3000) {
+        if (_progress.value.positionMs > 3000) {
             seekTo(0L)
             return
         }
@@ -242,7 +300,8 @@ class NoxaAudioPlayer(private val context: Context) {
                 if (state.queueIndex < state.queue.size - 1) {
                     next()
                 } else {
-                    _uiState.update { it.copy(isPlaying = false, currentPositionMs = 0L) }
+                    _uiState.update { it.copy(isPlaying = false) }
+                    _progress.update { it.copy(positionMs = 0L) }
                 }
             }
         }
@@ -271,29 +330,24 @@ class NoxaAudioPlayer(private val context: Context) {
         sleepTimer = null
 
         if (minutes == null || minutes <= 0) {
-            _uiState.update { it.copy(sleepTimerMinutes = null, sleepTimerRemainingSeconds = null) }
+            _uiState.update { it.copy(sleepTimerMinutes = null) }
+            _progress.update { it.copy(sleepTimerRemainingSeconds = null) }
             return
         }
 
         val totalMs = minutes * 60 * 1000L
-        _uiState.update {
-            it.copy(sleepTimerMinutes = minutes, sleepTimerRemainingSeconds = totalMs / 1000)
-        }
+        _uiState.update { it.copy(sleepTimerMinutes = minutes) }
+        _progress.update { it.copy(sleepTimerRemainingSeconds = totalMs / 1000) }
 
         sleepTimer = object : CountDownTimer(totalMs, 1000) {
             override fun onTick(millisUntilFinished: Long) {
-                _uiState.update { it.copy(sleepTimerRemainingSeconds = millisUntilFinished / 1000) }
+                _progress.update { it.copy(sleepTimerRemainingSeconds = millisUntilFinished / 1000) }
             }
 
             override fun onFinish() {
                 exoPlayer.pause()
-                _uiState.update {
-                    it.copy(
-                        isPlaying = false,
-                        sleepTimerMinutes = null,
-                        sleepTimerRemainingSeconds = null
-                    )
-                }
+                _uiState.update { it.copy(isPlaying = false, sleepTimerMinutes = null) }
+                _progress.update { it.copy(sleepTimerRemainingSeconds = null) }
             }
         }.start()
     }
@@ -313,8 +367,65 @@ class NoxaAudioPlayer(private val context: Context) {
         _uiState.update { it.copy(equalizerState = equalizerManager.currentState) }
     }
 
+    fun setBassBoost(strength: Int) {
+        equalizerManager.setBassBoost(strength)
+        _uiState.update { it.copy(equalizerState = equalizerManager.currentState) }
+    }
+
+    fun setVirtualizer(strength: Int) {
+        equalizerManager.setVirtualizer(strength)
+        _uiState.update { it.copy(equalizerState = equalizerManager.currentState) }
+    }
+
     fun clearError() {
         _uiState.update { it.copy(errorMessage = null) }
+    }
+
+    /**
+     * Restores the queue stored by [PlaybackSessionStore] **without** starting
+     * playback. Used at launch so the mini player and the "lanjutkan" card show
+     * what was playing before the device was rebooted.
+     */
+    fun restoreSession(session: PlaybackSession): Boolean {
+        if (session.songs.isEmpty() || _uiState.value.currentSong != null) return false
+        val index = session.index.coerceIn(0, session.songs.size - 1)
+        _uiState.update {
+            it.copy(
+                currentSong = session.songs[index],
+                queue = session.songs,
+                queueIndex = index,
+                durationMs = session.songs[index].durationMs,
+                isPlaying = false,
+                isBuffering = false
+            )
+        }
+        _progress.update {
+            PlaybackProgress(
+                positionMs = session.positionMs,
+                durationMs = session.songs[index].durationMs
+            )
+        }
+        return true
+    }
+
+    /** Loads the persisted session and prepares its first item for playback. */
+    fun prepareResumableSession(): PlaybackSession? = sessionStore.load()
+
+    private fun persistSession(force: Boolean) {
+        val state = _uiState.value
+        val song = state.currentSong ?: return
+        val now = System.currentTimeMillis()
+        if (!force && now - lastSessionSaveMs < SESSION_SAVE_INTERVAL_MS) return
+        lastSessionSaveMs = now
+        val position = if (force) _progress.value.positionMs else _progress.value.positionMs
+        sessionStore.save(
+            PlaybackSession(
+                songs = state.queue.ifEmpty { listOf(song) },
+                index = state.queueIndex.coerceAtLeast(0),
+                positionMs = position,
+                savedAt = now
+            )
+        )
     }
 
     private fun startPositionUpdater() {
@@ -322,9 +433,14 @@ class NoxaAudioPlayer(private val context: Context) {
         positionUpdateJob = scope.launch {
             while (isActive) {
                 val current = exoPlayer.currentPosition
-                val duration = if (exoPlayer.duration > 0) exoPlayer.duration else _uiState.value.durationMs
-                _uiState.update { it.copy(currentPositionMs = current, durationMs = duration) }
-                delay(250)
+                val duration = if (exoPlayer.duration > 0) {
+                    exoPlayer.duration
+                } else {
+                    _uiState.value.durationMs
+                }
+                _progress.update { it.copy(positionMs = current, durationMs = duration) }
+                persistSession(force = false)
+                delay(POSITION_TICK_MS)
             }
         }
     }
@@ -342,5 +458,10 @@ class NoxaAudioPlayer(private val context: Context) {
         sleepTimer?.cancel()
         equalizerManager.release()
         exoPlayer.release()
+    }
+
+    private companion object {
+        const val POSITION_TICK_MS = 500L
+        const val SESSION_SAVE_INTERVAL_MS = 10_000L
     }
 }

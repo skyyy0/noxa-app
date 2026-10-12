@@ -59,6 +59,8 @@ fun EqualizerScreen(
     onSetEnabled: (Boolean) -> Unit,
     onSelectPreset: (String) -> Unit,
     onSetBandLevel: (Int, Int) -> Unit,
+    onSetBassBoost: (Int) -> Unit,
+    onSetVirtualizer: (Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -245,50 +247,107 @@ fun EqualizerScreen(
 
         Spacer(modifier = Modifier.height(20.dp))
 
-        // Sound Enhancement Info
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Card(
-                modifier = Modifier.weight(1f),
-                shape = RoundedCornerShape(14.dp),
-                colors = CardDefaults.cardColors(containerColor = NoxaSurfaceElevated),
-                border = androidx.compose.foundation.BorderStroke(1.dp, NoxaBorder)
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Real platform audio effects, not just labels: these drive BassBoost and
+        // Virtualizer on the player's audio session.
+        EffectSliderCard(
+            title = "Dynamic Bass",
+            subtitle = "BassBoost pada sesi audio",
+            value = equalizerState.bassBoostStrength,
+            enabled = equalizerState.supportsBassBoost && equalizerState.isEnabled,
+            unsupportedNote = "Perangkat ini tidak mendukung BassBoost",
+            onChange = onSetBassBoost,
+            testTag = "bass_boost_slider"
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        EffectSliderCard(
+            title = "3D Clarity",
+            subtitle = "Virtualizer pada sesi audio",
+            value = equalizerState.virtualizerStrength,
+            enabled = equalizerState.supportsVirtualizer && equalizerState.isEnabled,
+            unsupportedNote = "Perangkat ini tidak mendukung Virtualizer",
+            onChange = onSetVirtualizer,
+            testTag = "virtualizer_slider"
+        )
+    }
+}
+
+/**
+ * A 0..1000 strength slider for one platform audio effect. The effect itself is
+ * probed per device, so unsupported hardware is explained instead of silently
+ * doing nothing.
+ */
+@Composable
+private fun EffectSliderCard(
+    title: String,
+    subtitle: String,
+    value: Int,
+    enabled: Boolean,
+    unsupportedNote: String,
+    onChange: (Int) -> Unit,
+    testTag: String
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp),
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(containerColor = NoxaSurfaceElevated),
+        border = androidx.compose.foundation.BorderStroke(1.dp, NoxaBorder)
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Column(modifier = Modifier.padding(14.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
                         imageVector = Icons.Default.GraphicEq,
-                        contentDescription = "Bass",
-                        tint = NoxaLime,
-                        modifier = Modifier.size(24.dp)
+                        contentDescription = title,
+                        tint = if (enabled) NoxaLime else NoxaTextTertiary,
+                        modifier = Modifier.size(22.dp)
                     )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text("Dynamic Bass", color = NoxaTextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                    Text("Sub-bass punch", color = NoxaTextSecondary, fontSize = 11.sp)
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column {
+                        Text(
+                            text = title,
+                            color = NoxaTextPrimary,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp
+                        )
+                        Text(
+                            text = if (enabled || value > 0) subtitle else unsupportedNote,
+                            color = NoxaTextSecondary,
+                            fontSize = 11.sp
+                        )
+                    }
                 }
+                Text(
+                    text = "${value * 100 / 1000}%",
+                    color = if (enabled) NoxaLime else NoxaTextTertiary,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold
+                )
             }
 
-            Card(
-                modifier = Modifier.weight(1f),
-                shape = RoundedCornerShape(14.dp),
-                colors = CardDefaults.cardColors(containerColor = NoxaSurfaceElevated),
-                border = androidx.compose.foundation.BorderStroke(1.dp, NoxaBorder)
-            ) {
-                Column(modifier = Modifier.padding(14.dp)) {
-                    Icon(
-                        imageVector = Icons.Default.GraphicEq,
-                        contentDescription = "Spatial",
-                        tint = NoxaLime,
-                        modifier = Modifier.size(24.dp)
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text("3D Clarity", color = NoxaTextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                    Text("Widescreen sound", color = NoxaTextSecondary, fontSize = 11.sp)
-                }
-            }
+            Slider(
+                value = value.toFloat(),
+                onValueChange = { onChange(it.toInt()) },
+                valueRange = 0f..1000f,
+                enabled = enabled,
+                colors = SliderDefaults.colors(
+                    thumbColor = NoxaLime,
+                    activeTrackColor = NoxaLime,
+                    inactiveTrackColor = NoxaSurfaceSecondary,
+                    disabledThumbColor = NoxaTextTertiary,
+                    disabledActiveTrackColor = NoxaSurfaceSecondary
+                ),
+                modifier = Modifier.testTag(testTag)
+            )
         }
     }
 }

@@ -1,10 +1,12 @@
 package com.example
 
+import com.example.data.model.MusicSource
 import com.example.data.remote.AudiusRepository
 import com.example.data.remote.AudiusTrackListResponse
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -70,7 +72,11 @@ class AudiusRepositoryTest {
         val song = with(repository) { track.toSong() }
 
         assertNotNull(song)
-        assertEquals("D7KyD", song!!.id)
+        // The id is namespaced by provider so Deezer ids can never collide with it.
+        assertEquals("audius:D7KyD", song!!.id)
+        assertEquals(MusicSource.AUDIUS, song.source)
+        assertEquals("D7KyD", song.remoteId)
+        assertFalse(song.isPreview)
         assertEquals("Sunset Drive", song.title)
         assertEquals("Nova Beats", song.artist)
         assertEquals("Electronic", song.album)

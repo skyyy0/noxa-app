@@ -1,0 +1,49 @@
+package com.example.data.remote
+
+import retrofit2.Response
+import retrofit2.http.GET
+import retrofit2.http.Path
+import retrofit2.http.Query
+
+/**
+ * Deezer public REST API.
+ *
+ * These read-only endpoints answer without an API key or OAuth token, which is
+ * why NOXA can offer a broad (including Indonesian) catalogue with no signup.
+ * Every [DeezerTrack.preview] is a real, playable HTTPS MP3 — enforced by
+ * Deezer to be a 30 second clip.
+ *
+ * Explicit parameters (no Kotlin default values) are used on purpose: Retrofit
+ * proxies the abstract method, and default arguments would otherwise be dropped.
+ */
+interface DeezerApiService {
+
+    @GET("search/track")
+    suspend fun searchTracks(
+        @Query("q") query: String,
+        @Query("limit") limit: Int
+    ): Response<DeezerTrackListResponse>
+
+    @GET("search/artist")
+    suspend fun searchArtists(
+        @Query("q") query: String,
+        @Query("limit") limit: Int
+    ): Response<DeezerArtistListResponse>
+
+    @GET("artist/{artistId}/top")
+    suspend fun artistTopTracks(
+        @Path("artistId") artistId: Long,
+        @Query("limit") limit: Int
+    ): Response<DeezerTrackListResponse>
+
+    @GET("chart/0/tracks")
+    suspend fun chartTracks(
+        @Query("limit") limit: Int
+    ): Response<DeezerTrackListResponse>
+
+    @GET("playlist/{playlistId}/tracks")
+    suspend fun playlistTracks(
+        @Path("playlistId") playlistId: Long,
+        @Query("limit") limit: Int
+    ): Response<DeezerTrackListResponse>
+}

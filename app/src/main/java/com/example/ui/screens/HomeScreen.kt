@@ -15,20 +15,22 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -45,6 +47,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.example.data.model.Song
 import com.example.data.remote.HomeMusicSection
 import com.example.ui.components.HeroSpotlightCard
@@ -63,6 +66,7 @@ import java.util.Calendar
 fun HomeScreen(
     heroSong: Song?,
     sections: List<HomeMusicSection>,
+    resumeSong: Song?,
     isLoading: Boolean,
     errorMessage: String?,
     currentUser: FirebaseUser?,
@@ -70,6 +74,8 @@ fun HomeScreen(
     isSigningIn: Boolean,
     currentPlayingSongId: String?,
     onPlaySong: (Song, List<Song>, Int) -> Unit,
+    onResume: () -> Unit,
+    onDismissResume: () -> Unit,
     onSignInWithGoogle: (Activity) -> Unit,
     onRetry: () -> Unit,
     modifier: Modifier = Modifier
@@ -78,21 +84,27 @@ fun HomeScreen(
     val greeting = remember {
         val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
         when (hour) {
-            in 4..11 -> "Good Morning"
-            in 12..16 -> "Good Afternoon"
-            else -> "Good Evening"
+            in 4..11 -> "Selamat pagi"
+            in 12..16 -> "Selamat siang"
+            else -> "Selamat malam"
         }
     }
+
+    // Flattened once per feed load instead of on every hero tap.
+    val heroQueue = remember(sections) { sections.firstOrNull()?.songs.orEmpty() }
 
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
             .background(NoxaBlack)
+            // The screens below the status bar start here; without this the header
+            // slid under the clock and the guest card looked cut off.
+            .statusBarsPadding()
             .testTag("home_screen"),
-        contentPadding = PaddingValues(bottom = 120.dp)
+        contentPadding = PaddingValues(bottom = 24.dp)
     ) {
         // Top Header
-        item {
+        item(key = "header") {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -118,10 +130,12 @@ fun HomeScreen(
                     )
                 }
 
-                // Profile Avatar / Logo Badge
                 if (currentUser?.photoUrl != null) {
                     AsyncImage(
-                        model = currentUser.photoUrl,
+                        model = ImageRequest.Builder(context)
+                            .data(currentUser.photoUrl)
+                            .crossfade(true)
+                            .build(),
                         contentDescription = "Profile Avatar",
                         contentScale = ContentScale.Crop,
                         modifier = Modifier
@@ -149,9 +163,83 @@ fun HomeScreen(
             }
         }
 
+        // Continue listening — the queue restored after the app (or device) restarted.
+        if (resumeSong != null) {
+            item(key = "resume") {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp, vertical = 6.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(NoxaSurfaceElevated)
+                        .border(1.dp, NoxaLime.copy(alpha = 0.35f), RoundedCornerShape(16.dp))
+                        .clickable { onResume() }
+                        .padding(12.dp)
+                        .testTag("resume_card"),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    AsyncImage(
+                        model = resumeSong.artworkUrl,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .size(44.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Lanjutkan mendengarkan",
+                            color = NoxaLime,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 0.5.sp
+                        )
+                        Text(
+                            text = resumeSong.title,
+                            color = NoxaTextPrimary,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = resumeSong.artist,
+                            color = NoxaTextSecondary,
+                            fontSize = 12.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .background(NoxaLime),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.PlayArrow,
+                            contentDescription = "Lanjutkan",
+                            tint = NoxaBlack,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                    IconButton(onClick = onDismissResume) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Tutup",
+                            tint = NoxaTextTertiary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+            }
+        }
+
         // Recommended Google Sign-in Banner for Guests
         if (currentUser == null) {
-            item {
+            item(key = "guest_banner") {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -187,7 +275,8 @@ fun HomeScreen(
                                 Text(
                                     text = "Login Google disarankan untuk sinkronisasi",
                                     color = NoxaTextSecondary,
-                                    fontSize = 11.sp
+                                    fontSize = 11.sp,
+                                    maxLines = 2
                                 )
                             }
                         }
@@ -221,7 +310,7 @@ fun HomeScreen(
 
         // Real loading / error state for the API-backed home feed.
         if (isLoading || errorMessage != null) {
-            item {
+            item(key = "state") {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -269,30 +358,38 @@ fun HomeScreen(
             }
         }
 
-        // A. Hero Spotlight Card
+        // A. Hero Spotlight Card — "Blinding Lights" by The Weeknd.
         if (heroSong != null) {
-            item {
-                Box(modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp)) {
+            item(key = "hero") {
+                Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp)) {
+                    Text(
+                        text = "Sorotan hari ini",
+                        color = NoxaTextTertiary,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 1.sp,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
                     HeroSpotlightCard(
                         song = heroSong,
                         onPlay = {
-                            val allSongs = sections.flatMap { it.songs }
-                            onPlaySong(heroSong, allSongs, allSongs.indexOf(heroSong).coerceAtLeast(0))
+                            val queue = if (heroQueue.isEmpty()) listOf(heroSong) else heroQueue
+                            val index = queue.indexOfFirst { it.id == heroSong.id }.coerceAtLeast(0)
+                            onPlaySong(heroSong, queue, index)
                         }
                     )
                 }
             }
         }
 
-        // B. Music Sections by Artist / Category
+        // B. Curated shelves: Dewa 19, Sheila On 7, Justin Bieber, and more.
         sections.forEach { section ->
-            item {
+            item(key = "section_${section.title}") {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(top = 20.dp)
                 ) {
-                    // Section Title & Subtitle
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -313,13 +410,16 @@ fun HomeScreen(
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    // Horizontal Scrolling Track Cards
                     LazyRow(
                         modifier = Modifier.fillMaxWidth(),
                         contentPadding = PaddingValues(horizontal = 20.dp),
                         horizontalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
-                        itemsIndexed(section.songs) { index, song ->
+                        itemsIndexed(
+                            items = section.songs,
+                            key = { _, song -> song.id },
+                            contentType = { _, _ -> "track_card" }
+                        ) { index, song ->
                             val isPlaying = song.id == currentPlayingSongId
                             Column(
                                 modifier = Modifier
@@ -330,7 +430,6 @@ fun HomeScreen(
                                     }
                                     .testTag("section_song_${song.id}")
                             ) {
-                                // Artwork Card with Play Icon Overlay
                                 Box(
                                     modifier = Modifier
                                         .size(140.dp)
@@ -343,7 +442,11 @@ fun HomeScreen(
                                         )
                                 ) {
                                     AsyncImage(
-                                        model = song.artworkUrl,
+                                        model = ImageRequest.Builder(context)
+                                            .data(song.artworkUrl)
+                                            .size(280, 280)
+                                            .crossfade(true)
+                                            .build(),
                                         contentDescription = song.title,
                                         contentScale = ContentScale.Crop,
                                         modifier = Modifier.fillMaxSize()
@@ -372,11 +475,28 @@ fun HomeScreen(
                                             }
                                         }
                                     }
+
+                                    if (song.isPreview) {
+                                        Box(
+                                            modifier = Modifier
+                                                .align(Alignment.TopStart)
+                                                .padding(6.dp)
+                                                .clip(RoundedCornerShape(4.dp))
+                                                .background(Color.Black.copy(alpha = 0.7f))
+                                                .padding(horizontal = 5.dp, vertical = 2.dp)
+                                        ) {
+                                            Text(
+                                                text = "30s",
+                                                color = NoxaLime,
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                    }
                                 }
 
                                 Spacer(modifier = Modifier.height(8.dp))
 
-                                // Song Title
                                 Text(
                                     text = song.title,
                                     color = if (isPlaying) NoxaLime else NoxaTextPrimary,
@@ -386,7 +506,6 @@ fun HomeScreen(
                                     overflow = TextOverflow.Ellipsis
                                 )
 
-                                // Artist Name
                                 Text(
                                     text = song.artist,
                                     color = NoxaTextSecondary,

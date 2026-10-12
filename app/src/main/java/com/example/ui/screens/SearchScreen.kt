@@ -72,19 +72,23 @@ fun SearchScreen(
     onPerformSearch: (String) -> Unit,
     onPlaySong: (Song, List<Song>, Int) -> Unit,
     onToggleFavorite: (Song) -> Unit,
-    isFavorite: (String) -> Boolean,
+    favoriteIds: Set<String>,
+    onPlayNext: (Song) -> Unit,
+    onAddToQueue: (Song) -> Unit,
+    onAddToPlaylist: (Song) -> Unit,
+    onShare: (Song) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val genres = remember {
         listOf(
-            BrowseGenre("Indonesian Pop", Color(0xFFE50914)),
-            BrowseGenre("Global Top 50", Color(0xFF1DB954)),
-            BrowseGenre("Hip-Hop & Rap", Color(0xFFF59E0B)),
-            BrowseGenre("EDM & Dance", Color(0xFF8B5CF6)),
-            BrowseGenre("Chill Lo-Fi", Color(0xFF06B6D4)),
-            BrowseGenre("Acoustic & Folk", Color(0xFFEC4899)),
-            BrowseGenre("Rock & Metal", Color(0xFFEF4444)),
-            BrowseGenre("K-Pop Trends", Color(0xFF10B981))
+            BrowseGenre("Dewa 19", Color(0xFFE50914)),
+            BrowseGenre("Sheila On 7", Color(0xFF1DB954)),
+            BrowseGenre("Iwan Fals", Color(0xFFF59E0B)),
+            BrowseGenre("NOAH", Color(0xFF8B5CF6)),
+            BrowseGenre("Tulus", Color(0xFF06B6D4)),
+            BrowseGenre("Justin Bieber", Color(0xFFEC4899)),
+            BrowseGenre("Global Top 50", Color(0xFFEF4444)),
+            BrowseGenre("Rock & Metal", Color(0xFF10B981))
         )
     }
 
@@ -216,13 +220,17 @@ fun SearchScreen(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(bottom = 120.dp, start = 8.dp, end = 8.dp)
             ) {
-                itemsIndexed(searchResults) { index, song ->
+                itemsIndexed(searchResults, key = { _, song -> song.id }) { index, song ->
                     SongListItem(
                         song = song,
                         isPlaying = song.id == currentPlayingSongId,
-                        isFavorite = isFavorite(song.id),
+                        isFavorite = favoriteIds.contains(song.id),
                         onPlay = { onPlaySong(song, searchResults, index) },
                         onToggleFavorite = { onToggleFavorite(song) },
+                        onPlayNext = { onPlayNext(song) },
+                        onAddToQueue = { onAddToQueue(song) },
+                        onAddToPlaylist = { onAddToPlaylist(song) },
+                        onShare = { onShare(song) },
                         modifier = Modifier.padding(horizontal = 4.dp)
                     )
                 }

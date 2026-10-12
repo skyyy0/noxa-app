@@ -51,18 +51,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.data.local.PlaylistEntity
+import com.example.data.local.PlaylistSummary
 import com.example.data.model.Song
 import com.example.ui.components.SongListItem
 import com.example.ui.theme.NoxaBlack
 import com.example.ui.theme.NoxaBorder
 import com.example.ui.theme.NoxaLime
-import com.example.ui.theme.NoxaSurface
 import com.example.ui.theme.NoxaSurfaceElevated
 import com.example.ui.theme.NoxaSurfaceSecondary
 import com.example.ui.theme.NoxaTextPrimary
@@ -73,21 +72,27 @@ import com.example.ui.theme.NoxaTextTertiary
 fun LibraryScreen(
     favorites: List<Song>,
     history: List<Song>,
-    playlists: List<PlaylistEntity>,
+    playlistSummaries: List<PlaylistSummary>,
     currentPlayingSongId: String?,
     onPlaySong: (Song, List<Song>, Int) -> Unit,
     onToggleFavorite: (Song) -> Unit,
+    favoriteIds: Set<String>,
+    onPlayNext: (Song) -> Unit,
+    onAddToQueue: (Song) -> Unit,
+    onAddToPlaylist: (Song) -> Unit,
+    onShare: (Song) -> Unit,
     onCreatePlaylist: (String, String) -> Unit,
     onDeletePlaylist: (Long) -> Unit,
+    onOpenPlaylist: (Long) -> Unit,
     onClearHistory: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var selectedTab by remember { mutableIntStateOf(0) }
     var showCreatePlaylistDialog by remember { mutableStateOf(false) }
     var newPlaylistName by remember { mutableStateOf("") }
-    var showClearHistoryDialog by remember { mutableStateOf(false) }
+    var playlistIdPendingDelete by remember { mutableStateOf<Long?>(null) }
 
-    val tabs = listOf("Favorites (${favorites.size})", "Playlists (${playlists.size})", "History")
+    val tabs = listOf("Favorit (${favorites.size})", "Playlist (${playlistSummaries.size})", "Riwayat")
 
     Column(
         modifier = modifier
@@ -96,7 +101,6 @@ fun LibraryScreen(
             .statusBarsPadding()
             .testTag("library_screen")
     ) {
-        // Library Header
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -105,14 +109,13 @@ fun LibraryScreen(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "Your Library",
+                text = "Koleksi Saya",
                 color = NoxaTextPrimary,
                 fontSize = 28.sp,
                 fontWeight = FontWeight.Bold
             )
 
             if (selectedTab == 1) {
-                // Add Playlist Button
                 IconButton(
                     onClick = { showCreatePlaylistDialog = true },
                     modifier = Modifier
@@ -123,27 +126,21 @@ fun LibraryScreen(
                 ) {
                     Icon(
                         imageVector = Icons.Default.Add,
-                        contentDescription = "New Playlist",
+                        contentDescription = "Playlist baru",
                         tint = NoxaLime,
                         modifier = Modifier.size(20.dp)
                     )
                 }
             } else if (selectedTab == 2 && history.isNotEmpty()) {
-                // Clear History Button
                 TextButton(
-                    onClick = { showClearHistoryDialog = true },
+                    onClick = { onClearHistory() },
                     modifier = Modifier.testTag("clear_history_btn")
                 ) {
-                    Text(
-                        text = "Clear",
-                        color = NoxaTextTertiary,
-                        fontSize = 13.sp
-                    )
+                    Text("Bersihkan", color = NoxaTextTertiary, fontSize = 13.sp)
                 }
             }
         }
 
-        // Tab Row
         TabRow(
             selectedTabIndex = selectedTab,
             containerColor = NoxaBlack,
@@ -180,46 +177,20 @@ fun LibraryScreen(
             }
         }
 
-        // Tab Content
         when (selectedTab) {
             0 -> {
-                // Favorites Tab
                 if (favorites.isEmpty()) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(32.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Icon(
-                                imageVector = Icons.Default.Favorite,
-                                contentDescription = "No favorites",
-                                tint = NoxaTextTertiary,
-                                modifier = Modifier.size(48.dp)
-                            )
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Text(
-                                text = "No favorite tracks yet",
-                                color = NoxaTextPrimary,
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = "Tap the heart icon on any song to save it here",
-                                color = NoxaTextTertiary,
-                                fontSize = 13.sp
-                            )
-                        }
-                    }
+                    EmptyState(
+                        icon = Icons.Default.Favorite,
+                        title = "Belum ada lagu favorit",
+                        subtitle = "Tekan ikon hati pada lagu mana pun untuk menyimpannya di sini"
+                    )
                 } else {
                     LazyColumn(
                         modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(bottom = 120.dp, top = 12.dp, start = 8.dp, end = 8.dp)
+                        contentPadding = PaddingValues(bottom = 24.dp, top = 12.dp, start = 8.dp, end = 8.dp)
                     ) {
-                        item {
-                            // Play All & Shuffle Buttons
+                        item(key = "fav_actions") {
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -237,11 +208,11 @@ fun LibraryScreen(
                                 ) {
                                     Icon(
                                         imageVector = Icons.Default.PlayArrow,
-                                        contentDescription = "Play all",
+                                        contentDescription = null,
                                         modifier = Modifier.size(18.dp)
                                     )
                                     Spacer(modifier = Modifier.width(6.dp))
-                                    Text("Play All", fontWeight = FontWeight.Bold)
+                                    Text("Putar semua", fontWeight = FontWeight.Bold)
                                 }
 
                                 Button(
@@ -258,23 +229,27 @@ fun LibraryScreen(
                                 ) {
                                     Icon(
                                         imageVector = Icons.Default.Shuffle,
-                                        contentDescription = "Shuffle",
+                                        contentDescription = null,
                                         tint = NoxaLime,
                                         modifier = Modifier.size(18.dp)
                                     )
                                     Spacer(modifier = Modifier.width(6.dp))
-                                    Text("Shuffle", fontWeight = FontWeight.Bold)
+                                    Text("Acak", fontWeight = FontWeight.Bold)
                                 }
                             }
                         }
 
-                        itemsIndexed(favorites) { index, song ->
+                        itemsIndexed(favorites, key = { _, song -> song.id }) { index, song ->
                             SongListItem(
                                 song = song,
                                 isPlaying = song.id == currentPlayingSongId,
                                 isFavorite = true,
                                 onPlay = { onPlaySong(song, favorites, index) },
                                 onToggleFavorite = { onToggleFavorite(song) },
+                                onPlayNext = { onPlayNext(song) },
+                                onAddToQueue = { onAddToQueue(song) },
+                                onAddToPlaylist = { onAddToPlaylist(song) },
+                                onShare = { onShare(song) },
                                 modifier = Modifier.padding(horizontal = 4.dp)
                             )
                         }
@@ -283,55 +258,30 @@ fun LibraryScreen(
             }
 
             1 -> {
-                // Playlists Tab
-                if (playlists.isEmpty()) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(32.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Icon(
-                                imageVector = Icons.Default.PlaylistPlay,
-                                contentDescription = "No playlists",
-                                tint = NoxaTextTertiary,
-                                modifier = Modifier.size(48.dp)
-                            )
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Text(
-                                text = "Create your first playlist",
-                                color = NoxaTextPrimary,
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                            Spacer(modifier = Modifier.height(16.dp))
-                            Button(
-                                onClick = { showCreatePlaylistDialog = true },
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = NoxaLime,
-                                    contentColor = NoxaBlack
-                                ),
-                                shape = RoundedCornerShape(20.dp)
-                            ) {
-                                Text("New Playlist", fontWeight = FontWeight.Bold)
-                            }
-                        }
-                    }
+                if (playlistSummaries.isEmpty()) {
+                    EmptyState(
+                        icon = Icons.Default.PlaylistPlay,
+                        title = "Buat playlist pertama Anda",
+                        subtitle = "Kumpulkan lagu favorit ke dalam satu daftar putar",
+                        actionLabel = "Playlist baru",
+                        onAction = { showCreatePlaylistDialog = true }
+                    )
                 } else {
                     LazyColumn(
                         modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(bottom = 120.dp, top = 12.dp, start = 16.dp, end = 16.dp),
+                        contentPadding = PaddingValues(bottom = 24.dp, top = 12.dp, start = 16.dp, end = 16.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        items(playlists) { playlist ->
+                        items(playlistSummaries, key = { it.playlistId }) { playlist ->
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clip(RoundedCornerShape(12.dp))
                                     .background(NoxaSurfaceElevated)
                                     .border(1.dp, NoxaBorder, RoundedCornerShape(12.dp))
-                                    .padding(14.dp),
+                                    .clickable { onOpenPlaylist(playlist.playlistId) }
+                                    .padding(14.dp)
+                                    .testTag("playlist_row_${playlist.playlistId}"),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
@@ -348,7 +298,7 @@ fun LibraryScreen(
                                     ) {
                                         Icon(
                                             imageVector = Icons.Default.PlaylistPlay,
-                                            contentDescription = "Playlist",
+                                            contentDescription = null,
                                             tint = NoxaLime,
                                             modifier = Modifier.size(24.dp)
                                         )
@@ -359,22 +309,22 @@ fun LibraryScreen(
                                             text = playlist.name,
                                             color = NoxaTextPrimary,
                                             fontSize = 15.sp,
-                                            fontWeight = FontWeight.Bold
+                                            fontWeight = FontWeight.Bold,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
                                         )
                                         Text(
-                                            text = if (playlist.description.isNotEmpty()) playlist.description else "Custom Playlist",
+                                            text = "${playlist.songCount} lagu",
                                             color = NoxaTextSecondary,
                                             fontSize = 12.sp
                                         )
                                     }
                                 }
 
-                                IconButton(
-                                    onClick = { onDeletePlaylist(playlist.playlistId) }
-                                ) {
+                                IconButton(onClick = { playlistIdPendingDelete = playlist.playlistId }) {
                                     Icon(
                                         imageVector = Icons.Default.Delete,
-                                        contentDescription = "Delete Playlist",
+                                        contentDescription = "Hapus playlist",
                                         tint = NoxaTextTertiary,
                                         modifier = Modifier.size(20.dp)
                                     )
@@ -386,48 +336,28 @@ fun LibraryScreen(
             }
 
             2 -> {
-                // History Tab
                 if (history.isEmpty()) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(32.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Icon(
-                                imageVector = Icons.Default.History,
-                                contentDescription = "No history",
-                                tint = NoxaTextTertiary,
-                                modifier = Modifier.size(48.dp)
-                            )
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Text(
-                                text = "No listening history yet",
-                                color = NoxaTextPrimary,
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = "Played tracks will automatically appear here",
-                                color = NoxaTextTertiary,
-                                fontSize = 13.sp
-                            )
-                        }
-                    }
+                    EmptyState(
+                        icon = Icons.Default.History,
+                        title = "Belum ada riwayat",
+                        subtitle = "Lagu yang Anda putar akan otomatis muncul di sini"
+                    )
                 } else {
                     LazyColumn(
                         modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(bottom = 120.dp, top = 8.dp, start = 8.dp, end = 8.dp)
+                        contentPadding = PaddingValues(bottom = 24.dp, top = 8.dp, start = 8.dp, end = 8.dp)
                     ) {
-                        itemsIndexed(history) { index, song ->
+                        itemsIndexed(history, key = { _, song -> song.id }) { index, song ->
                             SongListItem(
                                 song = song,
                                 isPlaying = song.id == currentPlayingSongId,
-                                isFavorite = favorites.any { it.id == song.id },
+                                isFavorite = favoriteIds.contains(song.id),
                                 onPlay = { onPlaySong(song, history, index) },
                                 onToggleFavorite = { onToggleFavorite(song) },
+                                onPlayNext = { onPlayNext(song) },
+                                onAddToQueue = { onAddToQueue(song) },
+                                onAddToPlaylist = { onAddToPlaylist(song) },
+                                onShare = { onShare(song) },
                                 modifier = Modifier.padding(horizontal = 4.dp)
                             )
                         }
@@ -437,100 +367,141 @@ fun LibraryScreen(
         }
     }
 
-    // Create Playlist Dialog
     if (showCreatePlaylistDialog) {
         AlertDialog(
             onDismissRequest = {
                 showCreatePlaylistDialog = false
                 newPlaylistName = ""
             },
+            containerColor = NoxaSurfaceSecondary,
             title = {
-                Text(
-                    text = "New Playlist",
-                    color = NoxaTextPrimary,
-                    fontWeight = FontWeight.Bold
-                )
+                Text("Playlist baru", color = NoxaTextPrimary, fontWeight = FontWeight.Bold)
             },
             text = {
                 OutlinedTextField(
                     value = newPlaylistName,
                     onValueChange = { newPlaylistName = it },
-                    placeholder = { Text("Playlist name...", color = NoxaTextTertiary) },
                     singleLine = true,
+                    label = { Text("Nama playlist", color = NoxaTextTertiary, fontSize = 13.sp) },
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = NoxaLime,
                         unfocusedBorderColor = NoxaBorder,
                         focusedTextColor = NoxaTextPrimary,
                         unfocusedTextColor = NoxaTextPrimary,
                         cursorColor = NoxaLime
-                    ),
-                    modifier = Modifier.fillMaxWidth()
+                    )
                 )
             },
             confirmButton = {
                 Button(
                     onClick = {
-                        if (newPlaylistName.isNotBlank()) {
-                            onCreatePlaylist(newPlaylistName.trim(), "")
-                            newPlaylistName = ""
-                            showCreatePlaylistDialog = false
-                        }
+                        val name = newPlaylistName.trim()
+                        if (name.isNotEmpty()) onCreatePlaylist(name, "")
+                        showCreatePlaylistDialog = false
+                        newPlaylistName = ""
                     },
+                    enabled = newPlaylistName.isNotBlank(),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = NoxaLime,
                         contentColor = NoxaBlack
                     )
                 ) {
-                    Text("Create", fontWeight = FontWeight.Bold)
+                    Text("Buat", fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
-                TextButton(
-                    onClick = {
-                        showCreatePlaylistDialog = false
-                        newPlaylistName = ""
-                    }
-                ) {
-                    Text("Cancel", color = NoxaTextSecondary)
+                TextButton(onClick = {
+                    showCreatePlaylistDialog = false
+                    newPlaylistName = ""
+                }) {
+                    Text("Batal", color = NoxaTextSecondary)
                 }
-            },
-            containerColor = NoxaSurfaceElevated
+            }
         )
     }
 
-    // Clear History Dialog
-    if (showClearHistoryDialog) {
+    playlistIdPendingDelete?.let { id ->
         AlertDialog(
-            onDismissRequest = { showClearHistoryDialog = false },
-            title = {
-                Text("Clear History", color = NoxaTextPrimary, fontWeight = FontWeight.Bold)
-            },
+            onDismissRequest = { playlistIdPendingDelete = null },
+            containerColor = NoxaSurfaceSecondary,
+            title = { Text("Hapus playlist?", color = NoxaTextPrimary, fontWeight = FontWeight.Bold) },
             text = {
                 Text(
-                    "Are you sure you want to clear your listening history?",
-                    color = NoxaTextSecondary
+                    "Semua lagu di dalamnya juga akan dihapus dari playlist ini.",
+                    color = NoxaTextSecondary,
+                    fontSize = 14.sp
                 )
             },
             confirmButton = {
                 Button(
                     onClick = {
-                        onClearHistory()
-                        showClearHistoryDialog = false
+                        onDeletePlaylist(id)
+                        playlistIdPendingDelete = null
                     },
                     colors = ButtonDefaults.buttonColors(
                         containerColor = NoxaLime,
                         contentColor = NoxaBlack
                     )
                 ) {
-                    Text("Clear", fontWeight = FontWeight.Bold)
+                    Text("Hapus", fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showClearHistoryDialog = false }) {
-                    Text("Cancel", color = NoxaTextSecondary)
+                TextButton(onClick = { playlistIdPendingDelete = null }) {
+                    Text("Batal", color = NoxaTextSecondary)
                 }
-            },
-            containerColor = NoxaSurfaceElevated
+            }
         )
+    }
+}
+
+@Composable
+private fun EmptyState(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    subtitle: String,
+    actionLabel: String? = null,
+    onAction: (() -> Unit)? = null
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(32.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = NoxaTextTertiary,
+                modifier = Modifier.size(48.dp)
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                text = title,
+                color = NoxaTextPrimary,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = subtitle,
+                color = NoxaTextTertiary,
+                fontSize = 13.sp
+            )
+            if (actionLabel != null && onAction != null) {
+                Spacer(modifier = Modifier.height(16.dp))
+                Button(
+                    onClick = onAction,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = NoxaLime,
+                        contentColor = NoxaBlack
+                    ),
+                    shape = RoundedCornerShape(20.dp)
+                ) {
+                    Text(actionLabel, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
     }
 }

@@ -30,6 +30,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -42,18 +43,21 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.example.data.model.Song
+import com.example.media.PlaybackProgress
 import com.example.ui.theme.NoxaBorder
 import com.example.ui.theme.NoxaLime
 import com.example.ui.theme.NoxaSurfaceElevated
 import com.example.ui.theme.NoxaTextPrimary
 import com.example.ui.theme.NoxaTextSecondary
+import kotlinx.coroutines.flow.StateFlow
+import androidx.compose.runtime.collectAsState
 
 @Composable
 fun MiniPlayer(
     currentSong: Song?,
     isPlaying: Boolean,
     isBuffering: Boolean,
-    progress: Float,
+    progressFlow: StateFlow<PlaybackProgress>,
     isFavorite: Boolean,
     onTogglePlayPause: () -> Unit,
     onNext: () -> Unit,
@@ -178,16 +182,30 @@ fun MiniPlayer(
                     }
                 }
 
-                // Progress Bar at bottom of mini player
-                LinearProgressIndicator(
-                    progress = { progress.coerceIn(0f, 1f) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(2.5.dp),
-                    color = NoxaLime,
-                    trackColor = Color.Transparent
-                )
+                // Progress Bar at bottom of mini player. Isolated in its own
+                // composable so the twice-a-second position update does not
+                // recompose the rest of the mini player.
+                MiniPlayerProgress(progressFlow)
             }
         }
     }
+}
+
+/**
+ * The thin play-progress bar under the mini player.
+ *
+ * This is the only part of the mini player that watches the fast position flow,
+ * so the surrounding artwork, title and buttons are not rebuilt every 500 ms.
+ */
+@Composable
+private fun MiniPlayerProgress(progressFlow: StateFlow<PlaybackProgress>) {
+    val progress by progressFlow.collectAsState()
+    LinearProgressIndicator(
+        progress = { progress.fraction },
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(2.5.dp),
+        color = NoxaLime,
+        trackColor = Color.Transparent
+    )
 }

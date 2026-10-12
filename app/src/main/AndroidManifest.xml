@@ -40,6 +40,21 @@
                 <action android:name="androidx.media3.session.MediaSessionService" />
             </intent-filter>
         </service>
+
+        <!--
+            Lets the system hand media-button events (headsets, car units, and the
+            resume entry shown after a reboot) back to the media session. Without
+            it the "continue listening" affordance never appears once the device
+            has restarted, because Android forbids apps from starting a
+            mediaPlayback foreground service from BOOT_COMPLETED.
+        -->
+        <receiver
+            android:name="androidx.media3.session.MediaButtonReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
+            </intent-filter>
+        </receiver>
     </application>
 
 </manifest>

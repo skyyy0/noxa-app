@@ -2,46 +2,48 @@
 
 NOXA membaca konfigurasi dari file `.env` di root proyek melalui
 **Secrets Gradle Plugin** (`app/build.gradle.kts` → blok `secrets { ... }`),
-lalu mengeksposnya sebagai field `BuildConfig`.
+lalu mengeksposnya sebagai field `BuildConfig` (dibaca lewat
+`com.example.data.remote.Secrets`).
 
 `.env` **tidak boleh di-commit** (sudah ada di `.gitignore`).
 
-## Variabel yang dibutuhkan
+## Sumber musik: tidak butuh API key sama sekali
+
+Versi 1.6 memakai tiga layanan publik yang **tidak memerlukan API key, akun,
+atau pendaftaran apa pun**, jadi aplikasi langsung berfungsi pada instalasi baru:
+
+| Layanan | Dipakai untuk | Audio | Perlu key? |
+| --- | --- | --- | --- |
+| **Deezer** (`api.deezer.com`) | Katalog utama, termasuk musik Indonesia (Dewa 19, Sheila On 7, Iwan Fals, Tulus, NOAH, dll) dan chart global | Klip **preview 30 detik** resmi dari label (batas legal Deezer) | Tidak |
+| **Audius** (`api.audius.co`) | Lagu penuh dari artis independen | **Lagu penuh** | Tidak |
+| **LRCLIB** (`lrclib.net`) | Lirik sinkron (berpenanda waktu `[mm:ss.xx]`) | — | Tidak |
+
+Di UI, lagu Deezer ditandai **`PREVIEW 30s`** dan lagu Audius ditandai
+**`FULL TRACK`**, supaya jelas kenapa sebagian lagu hanya 30 detik. Itu batas
+legal Deezer, bukan bug.
+
+### Mengapa YouTube API tidak dipakai untuk audio
+
+YouTube Data API v3 adalah **API metadata**. Ia mengembalikan judul, artis,
+thumbnail, dan durasi, tetapi **tidak pernah** mengembalikan URL audio. Jadi
+`YOUTUBE_API_KEYS` tidak bisa membuat lagu bisa diputar — memakainya hanya
+menambah data tanpa suara. Selain itu mengambil audio YouTube lewat scraping
+melanggar Terms of Service dan cepat rusak. Karena itu kunci YouTube tidak
+disertakan lagi sebagai kebutuhan.
+
+Kalau Anda punya backend streaming berlisensi sendiri, kirim URL audio langsung
+pada field `Song.streamUrl` — pemutar Media3 akan memakainya apa adanya.
+
+## Variabel `.env` (semuanya opsional)
 
 | Variabel | Wajib | Keterangan |
 | --- | --- | --- |
-| `YOUTUBE_API_KEYS` | Ya | Satu atau beberapa YouTube Data API v3 key, dipisahkan koma. Dipakai untuk pencarian & trending. Key dirotasi otomatis bila kena kuota (HTTP 403/429). |
-| `STREAM_RESOLVER_URL` | Untuk audio lagu YouTube | Endpoint resolver milik Anda yang mengembalikan URL audio langsung untuk sebuah videoId. |
+| `AUDIUS_API_KEY` | Tidak | Kunci developer Audius. Tanpa ini pun Audius tetap bisa dibaca (anonim). Bila diisi, dikirim sebagai header `x-api-key`. |
 
 Contoh isi `.env`:
 
 ```dotenv
-YOUTUBE_API_KEYS=KEY_1,KEY_2,KEY_3,KEY_4
-STREAM_RESOLVER_URL=https://backend-anda.example/api/stream
-```
-
-## Catatan penting soal audio
-
-YouTube Data API v3 adalah **API metadata**: ia mengembalikan judul, artis,
-thumbnail, dan durasi, tetapi **tidak pernah** mengembalikan URL audio. Karena
-itu:
-
-- `Song.streamUrl` sengaja dibiarkan **kosong** untuk hasil dari YouTube.
-  Aplikasi tidak lagi mengarang URL audio.
-- Pemutaran audio asli memakai salah satu dari dua jalur berikut:
-  1. **`STREAM_RESOLVER_URL`** → resolver Anda mengembalikan URL audio langsung
-     (format respons: `{"streamUrl":"https://..."}` atau `{"url":"https://..."}`).
-     Jalur ini memakai engine Media3/ExoPlayer sehingga notifikasi media,
-     lock screen, dan background playback aktif.
-  2. **Video YouTube** → dimainkan lewat engine YouTube IFrame (audio asli dari
-     video terkait). Jalur ini **tidak** dapat mengekspos MediaSession, jadi
-     notifikasi/lock screen sistem tidak muncul untuk lagu YouTube.
-
-Resolver menerima permintaan berikut:
-
-```
-GET <STREAM_RESOLVER_URL>?videoId=<videoId>
-Accept: application/json
+AUDIUS_API_KEY=
 ```
 
 ## Membaca konfigurasi dengan aman
@@ -50,9 +52,6 @@ Accept: application/json
 Dengan begitu, bila `.env` tidak ada (mis. clone baru) proyek tetap dapat
 di-build, dan aplikasi menampilkan status "belum dikonfigurasi" alih-alih gagal
 kompilasi.
-
-> Jika Anda membangun lewat Google AI Studio, tambahkan kedua variabel di atas
-> pada panel **Secrets** dengan nama yang sama.
 
 ## Mendapatkan file APK
 
@@ -87,3 +86,10 @@ atau hapus pemasangan sebelumnya bila ingin berpindah.
 
 > Repositori ini privat, sehingga halaman Release hanya bisa dibuka setelah Anda
 > masuk ke GitHub dengan akun yang punya akses ke repositori.
+
+## Catatan tentang kontrol di notifikasi
+
+Kontrol pemutar di notifikasi / lock screen berasal dari **MediaSession** milik
+Media3. Agar muncul, aplikasi butuh izin notifikasi (`POST_NOTIFICATIONS`, diminta
+saat pertama dibuka). Bila izin itu ditolak, suara tetap jalan tetapi kontrol
+tidak akan tampil sampai izin diberikan di Pengaturan Android.

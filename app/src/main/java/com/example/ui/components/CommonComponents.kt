@@ -25,10 +25,19 @@ import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.PlaylistAdd
+import androidx.compose.material.icons.filled.QueuePlayNext
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -52,6 +61,9 @@ import com.example.ui.theme.NoxaTextPrimary
 import com.example.ui.theme.NoxaTextSecondary
 import com.example.ui.theme.NoxaTextTertiary
 import com.example.ui.util.FormatUtils
+
+/** Shown next to tracks that Deezer only allows to be streamed as a 30s clip. */
+private const val PREVIEW_LABEL = "PREVIEW 30s"
 
 @Composable
 fun CategoryChipsRow(
@@ -197,8 +209,14 @@ fun SongListItem(
     isFavorite: Boolean = false,
     onPlay: () -> Unit,
     onToggleFavorite: () -> Unit,
+    onPlayNext: (() -> Unit)? = null,
+    onAddToQueue: (() -> Unit)? = null,
+    onAddToPlaylist: (() -> Unit)? = null,
+    onShare: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
+    var menuOpen by remember { mutableStateOf(false) }
+
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -241,7 +259,15 @@ fun SongListItem(
             )
             Spacer(modifier = Modifier.height(2.dp))
             Text(
-                text = "${song.artist} • ${FormatUtils.formatDuration(song.durationMs)}",
+                text = buildString {
+                    append(song.artist)
+                    append(" • ")
+                    append(FormatUtils.formatDuration(song.durationMs))
+                    if (song.isPreview) {
+                        append(" • ")
+                        append(PREVIEW_LABEL)
+                    }
+                },
                 color = NoxaTextSecondary,
                 fontSize = 12.sp,
                 maxLines = 1,
@@ -259,6 +285,80 @@ fun SongListItem(
                 tint = if (isFavorite) NoxaLime else NoxaTextTertiary,
                 modifier = Modifier.size(18.dp)
             )
+        }
+
+        // Overflow actions: queue management, playlists and sharing.
+        if (onPlayNext != null || onAddToQueue != null || onAddToPlaylist != null || onShare != null) {
+            Box {
+                IconButton(
+                    onClick = { menuOpen = true },
+                    modifier = Modifier
+                        .size(36.dp)
+                        .testTag("more_btn_${song.id}")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.MoreVert,
+                        contentDescription = "Menu lain",
+                        tint = NoxaTextTertiary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+
+                DropdownMenu(
+                    expanded = menuOpen,
+                    onDismissRequest = { menuOpen = false },
+                    containerColor = NoxaSurfaceElevated
+                ) {
+                    if (onPlayNext != null) {
+                        DropdownMenuItem(
+                            text = { Text("Putar berikutnya", color = NoxaTextPrimary, fontSize = 14.sp) },
+                            leadingIcon = {
+                                Icon(Icons.Default.QueuePlayNext, contentDescription = null, tint = NoxaLime)
+                            },
+                            onClick = {
+                                menuOpen = false
+                                onPlayNext()
+                            }
+                        )
+                    }
+                    if (onAddToQueue != null) {
+                        DropdownMenuItem(
+                            text = { Text("Tambah ke antrian", color = NoxaTextPrimary, fontSize = 14.sp) },
+                            leadingIcon = {
+                                Icon(Icons.Default.PlaylistAdd, contentDescription = null, tint = NoxaLime)
+                            },
+                            onClick = {
+                                menuOpen = false
+                                onAddToQueue()
+                            }
+                        )
+                    }
+                    if (onAddToPlaylist != null) {
+                        DropdownMenuItem(
+                            text = { Text("Tambah ke playlist", color = NoxaTextPrimary, fontSize = 14.sp) },
+                            leadingIcon = {
+                                Icon(Icons.Default.PlaylistAdd, contentDescription = null, tint = NoxaLime)
+                            },
+                            onClick = {
+                                menuOpen = false
+                                onAddToPlaylist()
+                            }
+                        )
+                    }
+                    if (onShare != null) {
+                        DropdownMenuItem(
+                            text = { Text("Bagikan", color = NoxaTextPrimary, fontSize = 14.sp) },
+                            leadingIcon = {
+                                Icon(Icons.Default.Share, contentDescription = null, tint = NoxaLime)
+                            },
+                            onClick = {
+                                menuOpen = false
+                                onShare()
+                            }
+                        )
+                    }
+                }
+            }
         }
     }
 }

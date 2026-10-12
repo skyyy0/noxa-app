@@ -39,6 +39,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.QueueMusic
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.RepeatOne
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
@@ -54,7 +55,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -66,13 +66,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.runtime.collectAsState
 import androidx.media3.common.Player
 import coil.compose.AsyncImage
 import com.example.data.model.Song
+import com.example.media.PlaybackProgress
 import com.example.media.PlayerUiState
 import com.example.ui.theme.NoxaBlack
 import com.example.ui.theme.NoxaBorder
@@ -84,12 +85,16 @@ import com.example.ui.theme.NoxaTextPrimary
 import com.example.ui.theme.NoxaTextSecondary
 import com.example.ui.theme.NoxaTextTertiary
 import com.example.ui.util.FormatUtils
+import com.example.ui.viewmodel.LyricsUiState
+import kotlinx.coroutines.flow.StateFlow
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FullPlayerSheet(
     visible: Boolean,
     playerState: PlayerUiState,
+    progressFlow: StateFlow<PlaybackProgress>,
+    lyricsState: LyricsUiState,
     isFavorite: Boolean,
     onClose: () -> Unit,
     onTogglePlayPause: () -> Unit,
@@ -102,6 +107,8 @@ fun FullPlayerSheet(
     onSetSleepTimer: (Int?) -> Unit,
     onOpenEqualizer: () -> Unit,
     onSelectQueueItem: (Song, Int) -> Unit,
+    onShare: () -> Unit,
+    onRetryLyrics: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var showQueueSheet by remember { mutableStateOf(false) }
@@ -115,13 +122,6 @@ fun FullPlayerSheet(
         modifier = modifier
     ) {
         val song = playerState.currentSong ?: return@AnimatedVisibility
-        var sliderPosition by remember(playerState.currentPositionMs) {
-            mutableFloatStateOf(playerState.currentPositionMs.toFloat())
-        }
-        var isDraggingSlider by remember { mutableStateOf(false) }
-
-        val totalDuration = if (playerState.durationMs > 0) playerState.durationMs else song.durationMs
-        val currentPosition = if (isDraggingSlider) sliderPosition.toLong() else playerState.currentPositionMs
 
         Box(
             modifier = Modifier
@@ -191,16 +191,29 @@ fun FullPlayerSheet(
                         )
                     }
 
-                    IconButton(
-                        onClick = onOpenEqualizer,
-                        modifier = Modifier.testTag("full_player_eq_btn")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Equalizer,
-                            contentDescription = "Equalizer",
-                            tint = NoxaTextPrimary,
-                            modifier = Modifier.size(24.dp)
-                        )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(
+                            onClick = onShare,
+                            modifier = Modifier.testTag("full_player_share_btn")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Share,
+                                contentDescription = "Bagikan lagu",
+                                tint = NoxaTextPrimary,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                        IconButton(
+                            onClick = onOpenEqualizer,
+                            modifier = Modifier.testTag("full_player_eq_btn")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Equalizer,
+                                contentDescription = "Equalizer",
+                                tint = NoxaTextPrimary,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
                     }
                 }
 
@@ -249,20 +262,7 @@ fun FullPlayerSheet(
                                 overflow = TextOverflow.Ellipsis
                             )
                             Spacer(modifier = Modifier.width(8.dp))
-                            // Hi-Res Audio Badge
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(4.dp))
-                                    .background(NoxaLime.copy(alpha = 0.15f))
-                                    .padding(horizontal = 6.dp, vertical = 2.dp)
-                            ) {
-                                Text(
-                                    text = "HI-RES LOSSLESS",
-                                    color = NoxaLime,
-                                    fontSize = 9.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
+                            AudioQualityBadge(isPreview = song.isPreview)
                         }
                     }
 
@@ -281,45 +281,12 @@ fun FullPlayerSheet(
 
                 Spacer(modifier = Modifier.height(20.dp))
 
-                // Interactive Progress Slider
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    Slider(
-                        value = currentPosition.toFloat(),
-                        onValueChange = {
-                            isDraggingSlider = true
-                            sliderPosition = it
-                        },
-                        onValueChangeFinished = {
-                            isDraggingSlider = false
-                            onSeekTo(sliderPosition.toLong())
-                        },
-                        valueRange = 0f..totalDuration.toFloat().coerceAtLeast(1f),
-                        colors = SliderDefaults.colors(
-                            thumbColor = NoxaLime,
-                            activeTrackColor = NoxaLime,
-                            inactiveTrackColor = NoxaSurfaceSecondary
-                        ),
-                        modifier = Modifier.testTag("full_player_slider")
-                    )
-
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 4.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(
-                            text = FormatUtils.formatDuration(currentPosition),
-                            color = NoxaTextTertiary,
-                            fontSize = 12.sp
-                        )
-                        Text(
-                            text = FormatUtils.formatDuration(totalDuration),
-                            color = NoxaTextTertiary,
-                            fontSize = 12.sp
-                        )
-                    }
-                }
+                // Progress. Only this section reads the fast position flow.
+                PlayerProgressSection(
+                    progressFlow = progressFlow,
+                    fallbackDurationMs = song.durationMs,
+                    onSeekTo = onSeekTo
+                )
 
                 Spacer(modifier = Modifier.height(16.dp))
 
@@ -329,7 +296,6 @@ fun FullPlayerSheet(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Shuffle
                     IconButton(
                         onClick = onToggleShuffle,
                         modifier = Modifier.testTag("full_player_shuffle_btn")
@@ -342,7 +308,6 @@ fun FullPlayerSheet(
                         )
                     }
 
-                    // Previous
                     IconButton(
                         onClick = onPrevious,
                         modifier = Modifier.testTag("full_player_prev_btn")
@@ -355,7 +320,6 @@ fun FullPlayerSheet(
                         )
                     }
 
-                    // Play / Pause (Large Lime Circle)
                     Box(
                         modifier = Modifier
                             .size(68.dp)
@@ -381,7 +345,6 @@ fun FullPlayerSheet(
                         }
                     }
 
-                    // Next
                     IconButton(
                         onClick = onNext,
                         modifier = Modifier.testTag("full_player_next_btn")
@@ -394,7 +357,6 @@ fun FullPlayerSheet(
                         )
                     }
 
-                    // Repeat Mode
                     IconButton(
                         onClick = onToggleRepeat,
                         modifier = Modifier.testTag("full_player_repeat_btn")
@@ -420,7 +382,6 @@ fun FullPlayerSheet(
                     horizontalArrangement = Arrangement.SpaceEvenly,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Sleep Timer
                     IconButton(
                         onClick = { showSleepTimerDialog = true },
                         modifier = Modifier.testTag("full_player_sleep_timer_btn")
@@ -432,19 +393,12 @@ fun FullPlayerSheet(
                                 tint = if (playerState.sleepTimerMinutes != null) NoxaLime else NoxaTextSecondary,
                                 modifier = Modifier.size(22.dp)
                             )
-                            if (playerState.sleepTimerRemainingSeconds != null) {
-                                val mins = playerState.sleepTimerRemainingSeconds / 60
-                                Text(
-                                    text = "${mins}m",
-                                    color = NoxaLime,
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
+                            if (playerState.sleepTimerMinutes != null) {
+                                SleepTimerLabel(progressFlow)
                             }
                         }
                     }
 
-                    // Lyrics Button
                     IconButton(
                         onClick = { showLyricsSheet = true },
                         modifier = Modifier.testTag("full_player_lyrics_btn")
@@ -452,12 +406,11 @@ fun FullPlayerSheet(
                         Icon(
                             imageVector = Icons.Default.Subject,
                             contentDescription = "Lyrics",
-                            tint = if (song.lyrics != null) NoxaLime else NoxaTextSecondary,
+                            tint = if (lyricsState is LyricsUiState.Ready) NoxaLime else NoxaTextSecondary,
                             modifier = Modifier.size(22.dp)
                         )
                     }
 
-                    // Queue Button
                     IconButton(
                         onClick = { showQueueSheet = true },
                         modifier = Modifier.testTag("full_player_queue_btn")
@@ -473,7 +426,7 @@ fun FullPlayerSheet(
             }
         }
 
-        // Lyrics Bottom Sheet
+        // Lyrics Bottom Sheet — synchronised with the real playback position.
         if (showLyricsSheet) {
             ModalBottomSheet(
                 onDismissRequest = { showLyricsSheet = false },
@@ -483,23 +436,29 @@ fun FullPlayerSheet(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 24.dp, vertical = 16.dp)
+                        .padding(horizontal = 24.dp, vertical = 8.dp)
                 ) {
                     Text(
-                        text = "Lyrics",
+                        text = "Lirik",
                         color = NoxaTextPrimary,
                         fontSize = 20.sp,
                         fontWeight = FontWeight.Bold
                     )
-                    Spacer(modifier = Modifier.height(16.dp))
                     Text(
-                        text = song.lyrics ?: "Lyrics for \"${song.title}\" by ${song.artist}\n\n(Synchronized lyrics not available for this stream)",
-                        color = NoxaTextSecondary,
-                        fontSize = 16.sp,
-                        lineHeight = 28.sp,
-                        fontWeight = FontWeight.Medium
+                        text = "${song.title} — ${song.artist}",
+                        color = NoxaTextTertiary,
+                        fontSize = 12.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
-                    Spacer(modifier = Modifier.height(32.dp))
+                    Spacer(modifier = Modifier.height(12.dp))
+                    LyricsPanel(
+                        lyricsState = lyricsState,
+                        progressFlow = progressFlow,
+                        onSeekTo = onSeekTo,
+                        onRetry = onRetryLyrics
+                    )
+                    Spacer(modifier = Modifier.height(24.dp))
                 }
             }
         }
@@ -517,14 +476,14 @@ fun FullPlayerSheet(
                         .padding(horizontal = 20.dp, vertical = 12.dp)
                 ) {
                     Text(
-                        text = "Playing Queue (${playerState.queue.size})",
+                        text = "Antrian (${playerState.queue.size})",
                         color = NoxaTextPrimary,
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Bold
                     )
                     Spacer(modifier = Modifier.height(12.dp))
                     LazyColumn(modifier = Modifier.height(320.dp)) {
-                        itemsIndexed(playerState.queue) { index, queueSong ->
+                        itemsIndexed(playerState.queue, key = { _, item -> item.id }) { index, queueSong ->
                             val isCurrent = index == playerState.queueIndex
                             Row(
                                 modifier = Modifier
@@ -562,6 +521,14 @@ fun FullPlayerSheet(
                                         overflow = TextOverflow.Ellipsis
                                     )
                                 }
+                                if (queueSong.isPreview) {
+                                    Text(
+                                        text = "30s",
+                                        color = NoxaTextTertiary,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
                             }
                         }
                     }
@@ -589,11 +556,11 @@ fun FullPlayerSheet(
                     )
                     Spacer(modifier = Modifier.height(16.dp))
                     listOf(
-                        "Turn Off" to null,
-                        "15 Minutes" to 15,
-                        "30 Minutes" to 30,
-                        "45 Minutes" to 45,
-                        "60 Minutes" to 60
+                        "Matikan" to null,
+                        "15 Menit" to 15,
+                        "30 Menit" to 30,
+                        "45 Menit" to 45,
+                        "60 Menit" to 60
                     ).forEach { (label, mins) ->
                         val isSelected = playerState.sleepTimerMinutes == mins
                         Row(
@@ -620,5 +587,97 @@ fun FullPlayerSheet(
                 }
             }
         }
+    }
+}
+
+/**
+ * The seek bar and its two labels.
+ *
+ * Deliberately its own composable: the playback position changes twice a second,
+ * and only this subtree re-reads it while the rest of the sheet stays still.
+ */
+@Composable
+private fun PlayerProgressSection(
+    progressFlow: StateFlow<PlaybackProgress>,
+    fallbackDurationMs: Long,
+    onSeekTo: (Long) -> Unit
+) {
+    val progress by progressFlow.collectAsState()
+    var dragValue by remember { mutableStateOf<Float?>(null) }
+
+    val totalDuration = when {
+        progress.durationMs > 0 -> progress.durationMs
+        else -> fallbackDurationMs
+    }
+    val position = dragValue?.toLong() ?: progress.positionMs
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Slider(
+            value = position.toFloat().coerceIn(0f, totalDuration.toFloat().coerceAtLeast(1f)),
+            onValueChange = { dragValue = it },
+            onValueChangeFinished = {
+                dragValue?.let { onSeekTo(it.toLong()) }
+                dragValue = null
+            },
+            valueRange = 0f..totalDuration.toFloat().coerceAtLeast(1f),
+            colors = SliderDefaults.colors(
+                thumbColor = NoxaLime,
+                activeTrackColor = NoxaLime,
+                inactiveTrackColor = NoxaSurfaceSecondary
+            ),
+            modifier = Modifier.testTag("full_player_slider")
+        )
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 4.dp),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                text = FormatUtils.formatDuration(position),
+                color = NoxaTextTertiary,
+                fontSize = 12.sp
+            )
+            Text(
+                text = FormatUtils.formatDuration(totalDuration),
+                color = NoxaTextTertiary,
+                fontSize = 12.sp
+            )
+        }
+    }
+}
+
+@Composable
+private fun SleepTimerLabel(progressFlow: StateFlow<PlaybackProgress>) {
+    val progress by progressFlow.collectAsState()
+    val remaining = progress.sleepTimerRemainingSeconds ?: return
+    Text(
+        text = "${remaining / 60}m",
+        color = NoxaLime,
+        fontSize = 10.sp,
+        fontWeight = FontWeight.Bold
+    )
+}
+
+/**
+ * Tells the truth about the audio: Audius serves the full track, Deezer legally
+ * only allows a 30 second clip.
+ */
+@Composable
+private fun AudioQualityBadge(isPreview: Boolean) {
+    val label = if (isPreview) "PREVIEW 30s" else "FULL TRACK"
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(NoxaLime.copy(alpha = 0.15f))
+            .padding(horizontal = 6.dp, vertical = 2.dp)
+    ) {
+        Text(
+            text = label,
+            color = NoxaLime,
+            fontSize = 9.sp,
+            fontWeight = FontWeight.Bold
+        )
     }
 }
