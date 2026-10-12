@@ -53,3 +53,37 @@ kompilasi.
 
 > Jika Anda membangun lewat Google AI Studio, tambahkan kedua variabel di atas
 > pada panel **Secrets** dengan nama yang sama.
+
+## Mendapatkan file APK
+
+APK dibangun otomatis oleh GitHub Actions pada setiap push ke `main`
+(`.github/workflows/android-apk.yml`) dan diterbitkan sebagai **GitHub Release**,
+sehingga selalu ada tautan unduh yang menetap:
+
+```
+https://github.com/skyyy0/noxa-app/releases/latest
+```
+
+Yang dibangun secara default adalah **APK debug** (sudah ditandatangani dengan
+kunci debug Android), jadi bisa langsung dipasang di perangkat tanpa setelan apa
+pun. `codemagic.yaml` tetap disimpan, tetapi sudah tidak diperlukan.
+
+### APK release bertanda tangan sendiri (opsional)
+
+Tambahkan secret berikut di **Settings -> Secrets and variables -> Actions**:
+
+| Secret | Isi |
+| --- | --- |
+| `KEYSTORE_BASE64` | `base64 -w0 my-upload-key.jks` |
+| `KEYSTORE_PASSWORD` | password keystore |
+| `KEY_ALIAS` | alias kunci |
+| `KEY_PASSWORD` | password kunci |
+| `GOOGLE_SERVICES_JSON_BASE64` | `base64 -w0 app/google-services.json` |
+
+Selama `KEYSTORE_BASE64` ada, workflow juga membangun dan menerbitkan APK release
+yang sudah ditandatangani. Perlu diingat: APK debug dan APK release memakai kunci
+berbeda, jadi keduanya **tidak bisa** saling menimpa — pasang salah satu saja,
+atau hapus pemasangan sebelumnya bila ingin berpindah.
+
+> Repositori ini privat, sehingga halaman Release hanya bisa dibuka setelah Anda
+> masuk ke GitHub dengan akun yang punya akses ke repositori.
