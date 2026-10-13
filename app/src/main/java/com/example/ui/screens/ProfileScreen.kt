@@ -86,7 +86,7 @@ fun ProfileScreen(
     isSigningIn: Boolean,
     weeklyRecap: WeeklyRecap,
     appSettings: AppSettings,
-    onSignInWithGoogle: (android.app.Activity) -> Unit,
+    onSignInWithGoogle: (android.app.Activity, (String) -> Unit) -> Unit,
     onSignInWithEmail: (String, String, (String) -> Unit) -> Unit,
     onRegisterWithEmail: (String, String, String, (String) -> Unit) -> Unit,
     onSetMvQuality: (Int) -> Unit,
@@ -230,7 +230,9 @@ fun ProfileScreen(
                 } else {
                     androidx.compose.material3.Button(
                         onClick = {
-                            (context as? android.app.Activity)?.let { onSignInWithGoogle(it) }
+                            (context as? android.app.Activity)?.let { activity ->
+                                onSignInWithGoogle(activity) { authError = it }
+                            }
                         },
                         enabled = !isSigningIn,
                         shape = RoundedCornerShape(20.dp),

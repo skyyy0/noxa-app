@@ -295,6 +295,23 @@ pengguna sebelum pemutaran pertama.
 * **Versi** — `versionName`/`versionCode` akhirnya ikut rilis: **1.13.3 (10)**.
   Android minimal: **7.0 (API 24)**.
 
+### v1.13.4 — Google Sign-In mandiri & login email tanpa provider Firebase
+
+* **Masuk dengan Google benar-benar jalan** — pemilih akun Google dulu
+  kembali ke NOXA tanpa login karena token diserahkan ke Firebase Auth,
+  yang menolaknya (provider Google belum diaktifkan di proyek Firebase).
+  Kini token diverifikasi **langsung terhadap kunci publik Google**
+  (`GoogleIdTokenVerifier`, RS256 + iss/aud/exp — keyless, tanpa setup
+  console): sesi dibuat lokal dan bertahan setelah app ditutup. Firebase
+  tetap jadi cadangan bila kunci Google tak terjangkau. Error Google kini
+  juga tampil di layar profil (dulu hilang senyap).
+* **Login/daftar email tidak lagi menyentuh provider Firebase** — urutannya
+  registry → mirror lokal; provider Email/Password memang nonaktif di
+  proyek Firebase (dulu error Inggris "operation-not-allowed" bocor ke
+  pengguna). Registry yang tak terjangkau kini melapor jujur ("server
+  tidak terjangkau"), bukan menyalahkan password.
+* **Versi** — `versionName` **1.13.4** / `versionCode` 11.
+
 ### Berbagi lagu: link NOXA & kartu canvas (v1.10)
 
 Sebelumnya membagikan lagu mengirim link Deezer (`deezer.com/track/…`). Sejak

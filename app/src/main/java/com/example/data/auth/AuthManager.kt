@@ -14,7 +14,6 @@ import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential.Companion.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.GoogleAuthProvider
-import com.google.firebase.auth.userProfileChangeRequest
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -149,6 +148,15 @@ class AuthManager(private val context: Context) {
         _isGuestMode.value = true
     }
 
+    /**
+     * Google Sign-In through Credential Manager, verified WITHOUT Firebase
+     * Auth: the ID token is checked directly against Google's public signing
+     * keys ([GoogleIdTokenVerifier]), so login works even when the Google (or
+     * Email/Password) provider is disabled in the Firebase console — which
+     * used to make the picker return to NOXA and silently do nothing. A
+     * Firebase hand-off remains as a fallback when the token cannot be
+     * verified locally (e.g. Google's key endpoint unreachable).
+     */
     fun signInWithGoogle(
         activity: Activity,
         scope: CoroutineScope,
@@ -156,7 +164,7 @@ class AuthManager(private val context: Context) {
         onError: (String) -> Unit = {}
     ) {
         val serverClientId = webClientId()
-        if (serverClientId == null || auth == null) {
+        if (serverClientId == null) {
             Log.e("AuthManager", "default_web_client_id missing from google-services.json")
             onError("Google Sign-In belum dikonfigurasi pada build ini.")
             return
@@ -175,24 +183,51 @@ class AuthManager(private val context: Context) {
                 val credential = result.credential
                 if (credential is CustomCredential && credential.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
                     val googleIdToken = GoogleIdTokenCredential.createFrom(credential.data).idToken
-                    val authCredential = GoogleAuthProvider.getCredential(googleIdToken, null)
-                    val authResult = auth.signInWithCredential(authCredential).await()
-                    val user = authResult.user
-                    if (user != null) {
-                        _currentUser.value = toNoxaUser(user)
+
+                    // 1) Verify the token against Google's own signing keys —
+                    //    no Firebase Auth (and no console setup) required.
+                    val identity = GoogleIdTokenVerifier.verify(googleIdToken, serverClientId)
+                    if (identity != null) {
+                        val user = NoxaUser(
+                            uid = "google-" + identity.subject,
+                            displayName = identity.name ?: identity.email?.substringBefore('@'),
+                            email = identity.email,
+                            photoUrl = identity.pictureUrl
+                        )
+                        // Persisted in the same store as remote sessions, so
+                        // the Google account survives an app restart.
+                        storeRemoteSession(user)
+                        _currentUser.value = user
                         _isGuestMode.value = false
-                        onSuccess(_currentUser.value!!)
+                        onSuccess(user)
+                        return@launch
+                    }
+
+                    // 2) Fallback: hand the token to Firebase — that path
+                    //    works on projects where the Google provider is on.
+                    val firebaseAuth = auth
+                    if (firebaseAuth != null) {
+                        val authCredential = GoogleAuthProvider.getCredential(googleIdToken, null)
+                        val authResult = firebaseAuth.signInWithCredential(authCredential).await()
+                        val user = authResult.user
+                        if (user != null) {
+                            _currentUser.value = toNoxaUser(user)
+                            _isGuestMode.value = false
+                            onSuccess(_currentUser.value!!)
+                        } else {
+                            onError("Masuk dengan Google gagal. Coba lagi.")
+                        }
                     } else {
-                        onError("Failed to obtain Firebase user")
+                        onError("Verifikasi akun Google gagal. Periksa koneksi internet lalu coba lagi.")
                     }
                 } else {
-                    onError("Unexpected credential type")
+                    onError("Masuk dengan Google dibatalkan. Coba lagi.")
                 }
             } catch (e: GetCredentialCancellationException) {
                 Log.w("AuthManager", "Google Sign-In cancelled: ${e.message}")
             } catch (e: Exception) {
                 Log.e("AuthManager", "Google Sign-In failed", e)
-                onError(e.localizedMessage ?: "Sign in failed")
+                onError(humanizeAuthError(e))
             } finally {
                 _isSigningIn.value = false
             }
@@ -205,9 +240,11 @@ class AuthManager(private val context: Context) {
      *
      * Order matters: the shared keyless registry (Telegraph) is consulted
      * FIRST on every build — that is where cross-device accounts, including
-     * the developer account, actually live. Firebase and the on-device mirror
-     * follow as fallbacks, and a dead registry reports a connection problem
-     * instead of blaming the password.
+     * the developer account, actually live — followed by the on-device mirror
+     * for offline sign-in. A dead registry reports a connection problem
+     * instead of blaming the password. Firebase's email/password provider is
+     * deliberately NOT part of this path: it is disabled in the Firebase
+     * project (it surfaced raw English errors) and would hold no accounts.
      */
     fun signInWithEmail(
         email: String,
@@ -218,7 +255,6 @@ class AuthManager(private val context: Context) {
     ) {
         _isSigningIn.value = true
         scope.launch {
-            var failure: String? = null
             var registryUnreachable = false
             try {
                 // 1) Shared registry first — that is where the developer
@@ -248,24 +284,7 @@ class AuthManager(private val context: Context) {
                         }
                     }
 
-                    // 2) Firebase, when this build carries its configuration.
-                    if (auth != null) {
-                        try {
-                            val result =
-                                auth.signInWithEmailAndPassword(email.trim(), password).await()
-                            val user = result.user
-                            if (user != null) {
-                                _currentUser.value = toNoxaUser(user)
-                                _isGuestMode.value = false
-                                onSuccess(_currentUser.value!!)
-                                return@launch
-                            }
-                        } catch (e: Exception) {
-                            failure = humanizeAuthError(e)
-                        }
-                    }
-
-                    // 3) The on-device mirror (offline sign-in).
+                    // 2) The on-device mirror (offline sign-in).
                     val account = localStore.authenticate(email, password)
                     if (account != null) {
                         val user = NoxaUser(
@@ -281,12 +300,11 @@ class AuthManager(private val context: Context) {
                     }
 
                     onError(
-                        failure
-                            ?: if (registryUnreachable) {
-                                "Server akun tidak terjangkau. Periksa koneksi internet lalu coba lagi."
-                            } else {
-                                "Email atau password salah."
-                            }
+                        if (registryUnreachable) {
+                            "Server akun tidak terjangkau. Periksa koneksi internet lalu coba lagi."
+                        } else {
+                            "Email atau password salah."
+                        }
                     )
                 } catch (e: Exception) {
                     onError("Masuk gagal. Coba lagi.")
@@ -377,11 +395,11 @@ class AuthManager(private val context: Context) {
                     _isSigningIn.value = false
                 }
             }
-        }
-
-    /**
-     * Registration while the shared registry is unreachable: Firebase when the
-     * build carries its configuration, otherwise the built-in local store.
+        }    /**
+     * Registration while the shared registry is unreachable: the built-in
+     * local store keeps sign-up working offline. Firebase's email/password
+     * provider is disabled in this project (it surfaced raw English errors
+     * like "operation-not-allowed"), so it is deliberately not used.
      */
     private suspend fun registerWithoutRegistry(
         email: String,
@@ -390,60 +408,21 @@ class AuthManager(private val context: Context) {
         onSuccess: (NoxaUser) -> Unit,
         onError: (String) -> Unit
     ) {
-        if (auth == null) {
-            when (val result = localStore.createAccount(email, username, password)) {
-                is LocalAccountStore.CreateResult.Failed -> onError(result.message)
-                is LocalAccountStore.CreateResult.Created -> {
-                    val account = result.account
-                    localStore.storeSessionUid(account.uid)
-                    _currentUser.value = NoxaUser(
-                        uid = account.uid,
-                        displayName = account.username,
-                        email = account.email,
-                        photoUrl = null
-                    )
-                    _isGuestMode.value = false
-                    onSuccess(_currentUser.value!!)
-                }
+        when (val result = localStore.createAccount(email, username, password)) {
+            is LocalAccountStore.CreateResult.Failed -> onError(result.message)
+            is LocalAccountStore.CreateResult.Created -> {
+                val account = result.account
+                localStore.storeSessionUid(account.uid)
+                _currentUser.value = NoxaUser(
+                    uid = account.uid,
+                    displayName = account.username,
+                    email = account.email,
+                    photoUrl = null
+                )
+                _isGuestMode.value = false
+                onSuccess(_currentUser.value!!)
             }
-            return
         }
-
-        // Fast, friendly check before creating anything.
-        if (UsernameRegistry.isTaken(username) == true) {
-            onError("Username \"$username\" sudah dipakai. Pilih yang lain.")
-            return
-        }
-
-        val result = auth.createUserWithEmailAndPassword(email.trim(), password).await()
-        val user = result.user
-        if (user == null) {
-            onError("Pendaftaran gagal. Coba lagi.")
-            return
-        }
-
-        when (val claim = UsernameRegistry.claim(user.uid, username)) {
-            UsernameRegistry.ClaimResult.TAKEN,
-            UsernameRegistry.ClaimResult.INVALID -> {
-                try { user.delete().await() } catch (ignored: Exception) { Unit }
-                auth.signOut()
-                onError("Username \"$username\" sudah dipakai. Pilih yang lain.")
-                return
-            }
-
-            // Unreachable Firestore: the account still works; the name
-            // is stored locally as the display name (documented tradeoff).
-            UsernameRegistry.ClaimResult.AVAILABLE,
-            UsernameRegistry.ClaimResult.UNAVAILABLE -> Unit
-        }
-
-        runCatching {
-            user.updateProfile(userProfileChangeRequest { displayName = username })
-                .await()
-        }
-        _currentUser.value = toNoxaUser(user)
-        _isGuestMode.value = false
-        onSuccess(_currentUser.value!!)
     }
 
     /** Maps provider errors to Indonesian, human messages (never raw codes). */
@@ -453,6 +432,9 @@ class AuthManager(private val context: Context) {
         return when {
             "email_exists" in lower || "email already" in lower ->
                 "Email sudah terdaftar. Gunakan Masuk."
+            "operation-not-allowed" in lower || "sign-in provider is disabled" in lower ->
+                "Metode masuk ini belum diaktifkan di proyek auth. " +
+                    "Gunakan masuk dengan Google, atau coba lagi nanti."
             "invalid_email" in lower || "malformed" in lower || "badly formatted" in lower ->
                 "Format email tidak valid."
             "weak_password" in lower -> "Password minimal 6 karakter."

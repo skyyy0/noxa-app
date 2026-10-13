@@ -472,7 +472,9 @@ fun NoxaApp(
                         isSigningIn = isSigningIn,
                         weeklyRecap = weeklyRecap,
                         appSettings = appSettings,
-                        onSignInWithGoogle = { activity: Activity -> viewModel.signInWithGoogle(activity) },
+                        onSignInWithGoogle = { activity: Activity, onError: (String) -> Unit ->
+                            viewModel.signInWithGoogle(activity, onError = onError)
+                        },
                         onSignInWithEmail = { email, password, onError ->
                             viewModel.signInWithEmail(email, password, onError = onError)
                         },
