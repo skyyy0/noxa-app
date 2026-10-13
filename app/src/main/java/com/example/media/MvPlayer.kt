@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import android.view.SurfaceView
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import kotlinx.coroutines.CoroutineScope
@@ -37,6 +38,13 @@ class MvPlayer(private val context: Context) {
         private set
 
     /**
+     * Invoked when the muted video player hits a fatal playback error (an
+     * expired stream URL is the common case). The owner can re-resolve the
+     * stream and attach again — the music itself is never affected.
+     */
+    var onPlaybackError: (() -> Unit)? = null
+
+    /**
      * Starts showing [videoUrl] on [surfaceView], beginning at [positionMs].
      * The player is created lazily and always muted. Re-attaching the same URL
      * to the same surface is a no-op, so Compose recompositions are free.
@@ -51,6 +59,12 @@ class MvPlayer(private val context: Context) {
             .also { created ->
                 created.volume = 0f
                 created.repeatMode = Player.REPEAT_MODE_OFF
+                created.addListener(object : Player.Listener {
+                    override fun onPlayerError(error: PlaybackException) {
+                        Log.w("MvPlayer", "MV playback failed: ${error.errorCodeName}")
+                        onPlaybackError?.invoke()
+                    }
+                })
                 player = created
             }
 

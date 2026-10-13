@@ -291,6 +291,8 @@ fun NoxaApp(
                         heroSong = heroSong,
                         sections = homeSections,
                         pinnedSongs = pinnedSongs,
+                        recentSongs = historySongs.take(12),
+                        onPlaySkyMix = { viewModel.playSkyMix() },
                         popularArtists = popularArtists,
                         resumeSong = resumableSong,
                         isLoading = isHomeLoading,
@@ -315,6 +317,24 @@ fun NoxaApp(
                         isSearching = isSearching,
                         currentPlayingSongId = playerState.currentSong?.id,
                         favoriteIds = favoriteIds,
+                        // Artwork for the browse grid: real artist photos from
+                        // Deezer plus the Global Top 50 cover, Spotify-style.
+                        genreImages = remember(homeSections, popularArtists) {
+                            buildMap {
+                                popularArtists.forEach { artist ->
+                                    if (artist.pictureUrl.isNotBlank()) {
+                                        put(artist.name, artist.pictureUrl)
+                                    }
+                                }
+                                homeSections
+                                    .firstOrNull { it.title == "Global Top 50" }
+                                    ?.songs
+                                    ?.firstOrNull()
+                                    ?.artworkUrl
+                                    ?.takeIf { it.isNotBlank() }
+                                    ?.let { put("Global Top 50", it) }
+                            }
+                        },
                         onQueryChange = { viewModel.onSearchQueryChanged(it) },
                         onPerformSearch = { viewModel.performSearch(it) },
                         onPlaySong = { song, queue, idx -> viewModel.playSong(song, queue, idx) },

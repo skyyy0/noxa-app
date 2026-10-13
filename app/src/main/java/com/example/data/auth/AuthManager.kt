@@ -13,7 +13,6 @@ import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential.Companion.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
 import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.GoogleAuthProvider
 import com.google.firebase.auth.userProfileChangeRequest
 import kotlinx.coroutines.CoroutineScope
@@ -23,6 +22,20 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 
+/**
+ * Sign-in for NOXA.
+ *
+ * Two backends, one interface:
+ *
+ *  * **Firebase** — used whenever the build actually carries Firebase config
+ *    (`google-services.json`), including the unique-username registry in
+ *    Firestore. Unchanged behaviour on configured builds.
+ *  * **Built-in local accounts** — the always-available fallback. The release
+ *    APK on GitHub has no `google-services.json`, so Firebase sign-up used to
+ *    fail with "Firebase belum dikonfigurasi". With the local store, email +
+ *    password registration and sign-in work on every install, with zero keys
+ *    and zero setup; names stay unique per device.
+ */
 class AuthManager(private val context: Context) {
 
     private val auth: FirebaseAuth? = try {
@@ -30,12 +43,24 @@ class AuthManager(private val context: Context) {
     } catch (e: Exception) {
         null
     }
+
+    private val localStore = LocalAccountStore(context)
     private val credentialManager: CredentialManager = CredentialManager.create(context)
 
-    private val _currentUser = MutableStateFlow<FirebaseUser?>(auth?.currentUser)
-    val currentUser: StateFlow<FirebaseUser?> = _currentUser.asStateFlow()
+    private val _currentUser = MutableStateFlow<NoxaUser?>(auth?.currentUser?.let { toNoxaUser(it) }
+        ?: localStore.restoreSessionUid()?.let { uid ->
+            localStore.accountForUid(uid)?.let { account ->
+                NoxaUser(
+                    uid = account.uid,
+                    displayName = account.username,
+                    email = account.email,
+                    photoUrl = null
+                )
+            }
+        })
+    val currentUser: StateFlow<NoxaUser?> = _currentUser.asStateFlow()
 
-    private val _isGuestMode = MutableStateFlow(auth?.currentUser == null)
+    private val _isGuestMode = MutableStateFlow(_currentUser.value == null)
     val isGuestMode: StateFlow<Boolean> = _isGuestMode.asStateFlow()
 
     private val _isSigningIn = MutableStateFlow(false)
@@ -43,12 +68,19 @@ class AuthManager(private val context: Context) {
 
     init {
         auth?.addAuthStateListener { firebaseAuth ->
-            _currentUser.value = firebaseAuth.currentUser
             if (firebaseAuth.currentUser != null) {
+                _currentUser.value = toNoxaUser(firebaseAuth.currentUser!!)
                 _isGuestMode.value = false
             }
         }
     }
+
+    private fun toNoxaUser(user: com.google.firebase.auth.FirebaseUser): NoxaUser = NoxaUser(
+        uid = user.uid,
+        displayName = user.displayName,
+        email = user.email,
+        photoUrl = user.photoUrl?.toString()
+    )
 
     fun continueAsGuest() {
         _isGuestMode.value = true
@@ -57,11 +89,11 @@ class AuthManager(private val context: Context) {
     fun signInWithGoogle(
         activity: Activity,
         scope: CoroutineScope,
-        onSuccess: (FirebaseUser) -> Unit = {},
+        onSuccess: (NoxaUser) -> Unit = {},
         onError: (String) -> Unit = {}
     ) {
         val serverClientId = webClientId()
-        if (serverClientId == null) {
+        if (serverClientId == null || auth == null) {
             Log.e("AuthManager", "default_web_client_id missing from google-services.json")
             onError("Google Sign-In belum dikonfigurasi pada build ini.")
             return
@@ -81,12 +113,12 @@ class AuthManager(private val context: Context) {
                 if (credential is CustomCredential && credential.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
                     val googleIdToken = GoogleIdTokenCredential.createFrom(credential.data).idToken
                     val authCredential = GoogleAuthProvider.getCredential(googleIdToken, null)
-                    val authResult = auth?.signInWithCredential(authCredential)?.await()
-                    val user = authResult?.user
+                    val authResult = auth.signInWithCredential(authCredential).await()
+                    val user = authResult.user
                     if (user != null) {
-                        _currentUser.value = user
+                        _currentUser.value = toNoxaUser(user)
                         _isGuestMode.value = false
-                        onSuccess(user)
+                        onSuccess(_currentUser.value!!)
                     } else {
                         onError("Failed to obtain Firebase user")
                     }
@@ -106,28 +138,50 @@ class AuthManager(private val context: Context) {
 
     /**
      * Email/password sign-in — the Google-free path, so an account works on any
-     * device without a Google account on it.
+     * device without a Google account on it. Falls back to the built-in local
+     * store on builds without Firebase configuration.
      */
     fun signInWithEmail(
         email: String,
         password: String,
         scope: CoroutineScope,
-        onSuccess: (FirebaseUser) -> Unit = {},
+        onSuccess: (NoxaUser) -> Unit = {},
         onError: (String) -> Unit = {}
     ) {
+        _isSigningIn.value = true
         if (auth == null) {
-            onError("Firebase belum dikonfigurasi pada build ini.")
+            scope.launch {
+                try {
+                    val account = localStore.authenticate(email, password)
+                    if (account == null) {
+                        onError("Email atau password salah.")
+                    } else {
+                        val user = NoxaUser(
+                            uid = account.uid,
+                            displayName = account.username,
+                            email = account.email,
+                            photoUrl = null
+                        )
+                        _currentUser.value = user
+                        _isGuestMode.value = false
+                        onSuccess(user)
+                    }
+                } catch (e: Exception) {
+                    onError("Masuk gagal. Coba lagi.")
+                } finally {
+                    _isSigningIn.value = false
+                }
+            }
             return
         }
-        _isSigningIn.value = true
         scope.launch {
             try {
                 val result = auth.signInWithEmailAndPassword(email.trim(), password).await()
                 val user = result.user
                 if (user != null) {
-                    _currentUser.value = user
+                    _currentUser.value = toNoxaUser(user)
                     _isGuestMode.value = false
-                    onSuccess(user)
+                    onSuccess(_currentUser.value!!)
                 } else {
                     onError("Masuk gagal. Coba lagi.")
                 }
@@ -140,31 +194,59 @@ class AuthManager(private val context: Context) {
     }
 
     /**
-     * Email/password registration with a **unique username** claimed through
-     * [UsernameRegistry] (Firestore). If the name turns out to be taken in the
-     * race window, the freshly created account is removed again — no orphaned
-     * accounts, and the user gets a clear message.
+     * Email/password registration with a **unique username**. On Firebase
+     * builds the name is claimed through [UsernameRegistry] (Firestore); on
+     * plain builds it is claimed in the built-in store. Either way the user
+     * never sees a configuration error.
      */
     fun registerWithEmail(
         email: String,
         password: String,
         username: String,
         scope: CoroutineScope,
-        onSuccess: (FirebaseUser) -> Unit = {},
+        onSuccess: (NoxaUser) -> Unit = {},
         onError: (String) -> Unit = {}
     ) {
-        if (auth == null) {
-            onError("Firebase belum dikonfigurasi pada build ini.")
-            return
-        }
         val trimmedName = username.trim()
         UsernameRegistry.validate(trimmedName)?.let { onError(it); return }
         if (password.length < 6) {
             onError("Password minimal 6 karakter.")
             return
         }
+        if (!LocalAccountStore.isEmailFormatValid(email)) {
+            onError("Format email tidak valid.")
+            return
+        }
 
         _isSigningIn.value = true
+
+        if (auth == null) {
+            scope.launch {
+                try {
+                    when (val result = localStore.createAccount(email, trimmedName, password)) {
+                        is LocalAccountStore.CreateResult.Failed -> onError(result.message)
+                        is LocalAccountStore.CreateResult.Created -> {
+                            val account = result.account
+                            val user = NoxaUser(
+                                uid = account.uid,
+                                displayName = account.username,
+                                email = account.email,
+                                photoUrl = null
+                            )
+                            _currentUser.value = user
+                            _isGuestMode.value = false
+                            onSuccess(user)
+                        }
+                    }
+                } catch (e: Exception) {
+                    onError("Pendaftaran gagal. Coba lagi.")
+                } finally {
+                    _isSigningIn.value = false
+                }
+            }
+            return
+        }
+
         scope.launch {
             try {
                 // Fast, friendly check before creating anything.
@@ -199,9 +281,9 @@ class AuthManager(private val context: Context) {
                     user.updateProfile(userProfileChangeRequest { displayName = trimmedName })
                         .await()
                 }
-                _currentUser.value = user
+                _currentUser.value = toNoxaUser(user)
                 _isGuestMode.value = false
-                onSuccess(user)
+                onSuccess(_currentUser.value!!)
             } catch (e: Exception) {
                 onError(humanizeAuthError(e))
             } finally {
@@ -278,6 +360,7 @@ class AuthManager(private val context: Context) {
 
     fun signOut(scope: CoroutineScope, onComplete: () -> Unit = {}) {
         auth?.signOut()
+        localStore.clearSession()
         _currentUser.value = null
         _isGuestMode.value = true
         scope.launch {

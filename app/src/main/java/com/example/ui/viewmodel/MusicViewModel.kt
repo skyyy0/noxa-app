@@ -23,7 +23,7 @@ import com.example.data.remote.YouTubeSourceRepository
 import com.example.media.MvPlayer
 import com.example.media.PlaybackProgress
 import com.example.media.PlayerUiState
-import com.google.firebase.auth.FirebaseUser
+import com.example.data.auth.NoxaUser
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -113,11 +113,24 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     private val streamResolver = app.streamResolver
     private val youtubeRepository = app.youtubeSourceRepository
     private val usagePolicyStore = app.usagePolicyStore
-    private val mvPlayer = MvPlayer(application)
+    private val mvPlayer = MvPlayer(application).apply {
+        // A stream URL that expired mid-play used to leave a black surface;
+        // now the ViewModel re-resolves once and attaches the fresh stream.
+        onPlaybackError = { handleMvPlaybackError() }
+    }
+
+    /** Auto-retries guard: one free retry per user toggle. */
+    private var mvAutoRetries = 0
+
+    /** Tried in order after the chosen MV quality fails to resolve. */
+    private val MV_FALLBACK_QUALITIES = listOf(360, 240)
+
+    /** Last surface handed to us, so a retried stream can re-attach itself. */
+    private var lastMvSurface: SurfaceView? = null
     private val dao = app.database.noxaDao()
     val authManager = app.authManager
 
-    val currentUser: StateFlow<FirebaseUser?> = authManager.currentUser
+    val currentUser: StateFlow<NoxaUser?> = authManager.currentUser
     val isGuestMode: StateFlow<Boolean> = authManager.isGuestMode
     val isSigningIn: StateFlow<Boolean> = authManager.isSigningIn
 
@@ -448,7 +461,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
 
     fun signInWithGoogle(
         activity: Activity,
-        onSuccess: (FirebaseUser) -> Unit = {},
+        onSuccess: (NoxaUser) -> Unit = {},
         onError: (String) -> Unit = {}
     ) {
         authManager.signInWithGoogle(activity, viewModelScope, onSuccess, onError)
@@ -458,7 +471,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     fun signInWithEmail(
         email: String,
         password: String,
-        onSuccess: (FirebaseUser) -> Unit = {},
+        onSuccess: (NoxaUser) -> Unit = {},
         onError: (String) -> Unit = {}
     ) {
         authManager.signInWithEmail(email, password, viewModelScope, onSuccess, onError)
@@ -469,7 +482,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         email: String,
         password: String,
         username: String,
-        onSuccess: (FirebaseUser) -> Unit = {},
+        onSuccess: (NoxaUser) -> Unit = {},
         onError: (String) -> Unit = {}
     ) {
         authManager.registerWithEmail(email, password, username, viewModelScope, onSuccess, onError)
@@ -544,6 +557,23 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
      * would already be buffering the wrong URL. The UI shows a spinner via
      * [NoxaAudioPlayer.showResolving] while this runs.
      */
+    /** Plays the favorites list in shuffled order (Library \u2192 Putar Acak). */
+    fun playFavoritesShuffled() {
+        val shuffled = favoriteSongs.value.shuffled()
+        shuffled.firstOrNull()?.let { playSong(it, shuffled, 0) }
+    }
+
+    /**
+     * Mix Sky \u2014 one shuffled queue from the three personal shelves: pinned
+     * picks, favorites and recent history (each song appears once).
+     */
+    fun playSkyMix() {
+        val pool = (pinnedSongs.value + favoriteSongs.value + historySongs.value)
+            .distinctBy { it.id }
+            .shuffled()
+        pool.firstOrNull()?.let { playSong(it, pool, 0) }
+    }
+
     fun playSong(song: Song, queue: List<Song> = listOf(song), index: Int = 0) {
         _resumableSong.value = null
         autoplayAppendedFor = null
@@ -782,19 +812,65 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         if (_videoUiState.value is VideoUiState.Loading || _videoUiState.value is VideoUiState.Ready) {
             return
         }
+        mvAutoRetries = 0
         _videoUiState.value = VideoUiState.Loading
         viewModelScope.launch {
-            val url = youtubeRepository.resolveVideoUrl(song, appSettings.value.mvQualityHeight)
-            _videoUiState.value = if (url == null) {
-                VideoUiState.Unavailable("MV tidak tersedia untuk lagu ini.")
-            } else {
-                VideoUiState.Ready(url)
+            _videoUiState.value = resolveMvState(song)
+        }
+    }
+
+    /**
+     * Resolves the MV stream with graceful quality fallback: the chosen
+     * quality first, then 360p and 240p — a lower-resolution MV still beats
+     * an error. When every attempt comes back empty (instances flap), one
+     * more try runs after a short pause before giving up honestly.
+     */
+    private suspend fun resolveMvState(song: Song): VideoUiState {
+        val requested = appSettings.value.mvQualityHeight
+        var url: String? = null
+        for (height in (listOf(requested) + MV_FALLBACK_QUALITIES).distinct()) {
+            url = youtubeRepository.resolveVideoUrl(song, height)
+            if (url != null) break
+        }
+        if (url == null) {
+            delay(750)
+            url = youtubeRepository.resolveVideoUrl(song, requested)
+        }
+        return if (url == null) {
+            VideoUiState.Unavailable("MV tidak tersedia untuk lagu ini.")
+        } else {
+            VideoUiState.Ready(url)
+        }
+    }
+
+    /** Re-resolves once after a mid-play stream error, then re-attaches. */
+    private fun handleMvPlaybackError() {
+        if (_videoUiState.value !is VideoUiState.Ready) return
+        val surface = lastMvSurface ?: return
+        val song = player.uiState.value.currentSong ?: return
+        mvPlayer.release()
+        if (mvAutoRetries >= 1) {
+            _videoUiState.value = VideoUiState.Unavailable("MV gagal diputar. Coba lagi nanti.")
+            return
+        }
+        mvAutoRetries++
+        viewModelScope.launch {
+            _videoUiState.value = VideoUiState.Loading
+            val state = resolveMvState(song)
+            _videoUiState.value = state
+            (state as? VideoUiState.Ready)?.let { ready ->
+                mvPlayer.playOnSurface(
+                    ready.url,
+                    surface,
+                    player.progress.value.positionMs
+                )
             }
         }
     }
 
     /** Called by the sheet with its SurfaceView when the video view appears. */
     fun attachMvSurface(surfaceView: SurfaceView?) {
+        lastMvSurface = surfaceView
         val ready = _videoUiState.value as? VideoUiState.Ready ?: return
         if (surfaceView == null) {
             mvPlayer.detachAndReleaseSoon()

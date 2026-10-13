@@ -61,6 +61,20 @@ class PinnedTracksTest {
         assertFalse(PinnedTracks.matchesResult("Kangen (Live)", "Sheila On 7"))
         assertFalse(PinnedTracks.matchesResult("Kangenen", "Dewa 19"))
     }
+
+    @Test
+    fun findUsesTheSameTolerantMatchingSoEveryShownPinGetsItsQuote() {
+        // A catalogue title that travelled with a suffix still resolves to its
+        // pin — this is exactly the case that used to show a card without quote.
+        val pin = PinnedTracks.find(song("Terlalu Manis - Live", "Slank"))
+        assertNotNull(pin)
+        assertTrue(pin!!.quote.contains("kenangan"))
+        assertNotNull(PinnedTracks.find(song("Dan (Akustik)", "sheila on 7")))
+        assertNotNull(PinnedTracks.find(song("Laskar Pelangi - 2019", "Nidji")))
+        // …but wrong artists and typos stay unpinned.
+        assertNull(PinnedTracks.find(song("Kangen (Live)", "NOAH")))
+        assertNull(PinnedTracks.find(song("Kangenen", "Dewa 19")))
+    }
 }
 
 /** Username rules used by email/password registration. */

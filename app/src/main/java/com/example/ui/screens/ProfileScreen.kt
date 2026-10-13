@@ -29,10 +29,13 @@ import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Phone
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -71,7 +74,7 @@ import com.example.ui.viewmodel.WeeklyRecap
 
 @Composable
 fun ProfileScreen(
-    currentUser: com.google.firebase.auth.FirebaseUser?,
+    currentUser: com.example.data.auth.NoxaUser?,
     isSigningIn: Boolean,
     weeklyRecap: WeeklyRecap,
     appSettings: AppSettings,
@@ -382,13 +385,13 @@ fun ProfileScreen(
                     modifier = Modifier.padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    RecapRow("▶", "${weeklyRecap.plays} lagu diputar 7 hari terakhir")
+                    RecapRow(Icons.Default.PlayArrow, "${weeklyRecap.plays} lagu diputar 7 hari terakhir")
                     if (weeklyRecap.topArtist.isNotBlank()) {
-                        RecapRow("⭐", "Artis teratas: ${weeklyRecap.topArtist}")
+                        RecapRow(Icons.Default.Star, "Artis teratas: ${weeklyRecap.topArtist}")
                     }
                     if (weeklyRecap.topSongTitle.isNotBlank()) {
                         RecapRow(
-                            "♪",
+                            Icons.Default.MusicNote,
                             "Lagu paling sering: ${weeklyRecap.topSongTitle} " +
                                 "(${weeklyRecap.topSongPlays}×)"
                         )
@@ -756,9 +759,9 @@ private val USERNAME_HANDLE = Regex("^[A-Za-z0-9_.]{3,20}$")
 
 /** One stat line inside the weekly recap card. */
 @Composable
-private fun RecapRow(icon: String, text: String) {
+private fun RecapRow(icon: androidx.compose.ui.graphics.vector.ImageVector, text: String) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(text = icon, color = NoxaLime, fontSize = 14.sp)
+        Icon(imageVector = icon, contentDescription = null, tint = NoxaLime, modifier = Modifier.size(15.dp))
         Spacer(modifier = Modifier.width(10.dp))
         Text(
             text = text,

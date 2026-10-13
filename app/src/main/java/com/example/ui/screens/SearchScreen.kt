@@ -44,12 +44,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.example.data.model.MusicSource
 import com.example.data.model.Song
 import com.example.ui.components.SongListItem
@@ -92,6 +97,8 @@ fun SearchScreen(
     onAddToPlaylist: (Song) -> Unit,
     onShare: (Song) -> Unit,
     onOpenArtist: (String, String) -> Unit = { _, _ -> },
+    /** Card name → artwork URL (artist photos, chart covers) for the browse grid. */
+    genreImages: Map<String, String> = emptyMap(),
     modifier: Modifier = Modifier
 ) {
     val genres = remember {
@@ -328,25 +335,52 @@ fun SearchScreen(
                     contentPadding = PaddingValues(bottom = 120.dp)
                 ) {
                     items(genres) { genre ->
+                        val imageUrl = genreImages[genre.name]
+                        val context = LocalContext.current
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(90.dp)
+                                .height(100.dp)
                                 .clip(RoundedCornerShape(12.dp))
                                 .background(genre.color.copy(alpha = 0.25f))
-                                .border(1.dp, genre.color.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
+                                .border(1.dp, genre.color.copy(alpha = 0.55f), RoundedCornerShape(12.dp))
                                 .clickable {
                                     onPerformSearch(genre.name)
                                 }
-                                .padding(12.dp)
                                 .testTag("genre_card_${genre.name}"),
                             contentAlignment = Alignment.BottomStart
                         ) {
+                            if (imageUrl != null) {
+                                AsyncImage(
+                                    model = ImageRequest.Builder(context)
+                                        .data(imageUrl)
+                                        .crossfade(true)
+                                        .build(),
+                                    contentDescription = genre.name,
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                                // Scrim so the title stays readable over any photo —
+                                // the Spotify browse-card treatment.
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .background(
+                                            Brush.verticalGradient(
+                                                colors = listOf(
+                                                    Color.Transparent,
+                                                    Color.Black.copy(alpha = 0.75f)
+                                                )
+                                            )
+                                        )
+                                )
+                            }
                             Text(
                                 text = genre.name,
                                 color = NoxaTextPrimary,
                                 fontSize = 14.sp,
-                                fontWeight = FontWeight.Bold
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(12.dp)
                             )
                         }
                     }

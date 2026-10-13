@@ -26,6 +26,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Shuffle
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -53,6 +56,8 @@ import com.example.data.model.PinnedTracks
 import com.example.data.model.Song
 import com.example.data.remote.HomeMusicSection
 import com.example.ui.components.HeroSpotlightCard
+import com.example.ui.components.noxaAppear
+import com.example.ui.components.noxaClickable
 import com.example.ui.theme.NoxaBlack
 import com.example.ui.theme.NoxaBorder
 import com.example.ui.theme.NoxaLime
@@ -61,7 +66,7 @@ import com.example.ui.theme.NoxaSurfaceSecondary
 import com.example.ui.theme.NoxaTextPrimary
 import com.example.ui.theme.NoxaTextSecondary
 import com.example.ui.theme.NoxaTextTertiary
-import com.google.firebase.auth.FirebaseUser
+import com.example.data.auth.NoxaUser
 import java.util.Calendar
 
 @Composable
@@ -69,11 +74,13 @@ fun HomeScreen(
     heroSong: Song?,
     sections: List<HomeMusicSection>,
     pinnedSongs: List<Song> = emptyList(),
+    /** Recently played songs — rendered as their own shelf. */
+    recentSongs: List<Song> = emptyList(),
     popularArtists: List<ArtistProfile> = emptyList(),
     resumeSong: Song?,
     isLoading: Boolean,
     errorMessage: String?,
-    currentUser: FirebaseUser?,
+    currentUser: NoxaUser?,
     isGuestMode: Boolean,
     isSigningIn: Boolean,
     currentPlayingSongId: String?,
@@ -82,6 +89,8 @@ fun HomeScreen(
     onDismissResume: () -> Unit,
     onSignInWithGoogle: (Activity) -> Unit,
     onRetry: () -> Unit,
+    /** Plays the shuffled Mix Sky queue (pinned + favorites + recent). */
+    onPlaySkyMix: () -> Unit = {},
     onOpenArtist: (String, String) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
@@ -476,12 +485,48 @@ fun HomeScreen(
                             .fillMaxWidth()
                             .padding(horizontal = 20.dp)
                     ) {
-                        Text(
-                            text = "📌 Pinned by Sky",
-                            color = NoxaTextPrimary,
-                            fontSize = 19.sp,
-                            fontWeight = FontWeight.Bold
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Rounded.PushPin,
+                                contentDescription = null,
+                                tint = NoxaLime,
+                                modifier = Modifier.size(19.dp)
+                            )
+                            Spacer(modifier = Modifier.width(7.dp))
+                            Text(
+                                text = "Pinned by Sky",
+                                color = NoxaTextPrimary,
+                                fontSize = 19.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(modifier = Modifier.weight(1f))
+                            // Mix Sky: one shuffled queue from Sky's pins, the
+                            // user's favorites and their recent listens.
+                            Row(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(50))
+                                    .background(NoxaLime.copy(alpha = 0.14f))
+                                    .border(1.dp, NoxaLime.copy(alpha = 0.5f), RoundedCornerShape(50))
+                                    .noxaClickable { onPlaySkyMix() }
+                                    .padding(horizontal = 12.dp, vertical = 6.dp)
+                                    .testTag("mix_sky_btn"),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Shuffle,
+                                    contentDescription = null,
+                                    tint = NoxaLime,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                                Spacer(modifier = Modifier.width(5.dp))
+                                Text(
+                                    text = "Mix Sky",
+                                    color = NoxaLime,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
                         Text(
                             text = "Rak khusus pilihan Sky",
                             color = NoxaTextSecondary,
@@ -505,8 +550,88 @@ fun HomeScreen(
                                 song = song,
                                 quote = PinnedTracks.find(song)?.quote.orEmpty(),
                                 isPlaying = song.id == currentPlayingSongId,
-                                onClick = { onPlaySong(song, pinnedSongs, index) }
+                                onClick = { onPlaySong(song, pinnedSongs, index) },
+                                // Cards materialise one after another instead of
+                                // popping in together — the iOS shelf feel.
+                                modifier = Modifier.noxaAppear(delayMillis = index * 70)
                             )
+                        }
+                    }
+                }
+            }
+        }
+
+        // C2. Dengar Terakhir — quick jumps back into recent listens.
+        if (recentSongs.isNotEmpty()) {
+            item(key = "recent_shelf") {
+                Column(modifier = Modifier.padding(top = 20.dp)) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 20.dp)
+                    ) {
+                        Text(
+                            text = "Dengar Terakhir",
+                            color = NoxaTextPrimary,
+                            fontSize = 19.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "Lanjutkan dari mana kamu berhenti",
+                            color = NoxaTextSecondary,
+                            fontSize = 12.sp
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    LazyRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        contentPadding = PaddingValues(horizontal = 20.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        itemsIndexed(
+                            items = recentSongs,
+                            key = { _, song -> "recent_${song.id}" },
+                            contentType = { _, _ -> "recent_card" }
+                        ) { index, song ->
+                            Column(
+                                modifier = Modifier
+                                    .width(96.dp)
+                                    .noxaAppear(delayMillis = index * 40)
+                                    .noxaClickable {
+                                        onPlaySong(song, recentSongs, index)
+                                    }
+                                    .testTag("recent_card_${song.id}"),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(96.dp)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(NoxaSurfaceElevated)
+                                        .border(1.dp, NoxaBorder, RoundedCornerShape(12.dp))
+                                ) {
+                                    AsyncImage(
+                                        model = ImageRequest.Builder(context)
+                                            .data(song.artworkUrl)
+                                            .size(192, 192)
+                                            .crossfade(true)
+                                            .build(),
+                                        contentDescription = song.title,
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                }
+                                Text(
+                                    text = song.title,
+                                    color = NoxaTextPrimary,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                         }
                     }
                 }
@@ -556,7 +681,8 @@ fun HomeScreen(
                                 modifier = Modifier
                                     .width(140.dp)
                                     .clip(RoundedCornerShape(14.dp))
-                                    .clickable {
+                                    .noxaAppear(delayMillis = index * 50)
+                                    .noxaClickable {
                                         onPlaySong(song, section.songs, index)
                                     }
                                     .testTag("section_song_${song.id}")
@@ -608,16 +734,24 @@ fun HomeScreen(
                                     }
 
                                     if (PinnedTracks.isPinned(song)) {
-                                        Box(
+                                        Row(
                                             modifier = Modifier
                                                 .align(Alignment.TopStart)
                                                 .padding(6.dp)
-                                                .clip(RoundedCornerShape(4.dp))
+                                                .clip(RoundedCornerShape(5.dp))
                                                 .background(NoxaLime)
-                                                .padding(horizontal = 5.dp, vertical = 2.dp)
+                                                .padding(horizontal = 5.dp, vertical = 2.dp),
+                                            verticalAlignment = Alignment.CenterVertically
                                         ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Star,
+                                                contentDescription = null,
+                                                tint = NoxaBlack,
+                                                modifier = Modifier.size(9.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(3.dp))
                                             Text(
-                                                text = "⭐ Pinned",
+                                                text = "Pinned",
                                                 color = NoxaBlack,
                                                 fontSize = 9.sp,
                                                 fontWeight = FontWeight.Bold
@@ -660,7 +794,7 @@ fun HomeScreen(
 }
 
 /**
- * A card on Sky's pin shelf: artwork with a ⭐ badge, the track — and the quote
+ * A card on Sky's pin shelf: artwork with a vector star badge, the track — and the quote
  * that explains why it was pinned. Fixed width so several pins scroll in a row.
  */
 @Composable
@@ -682,7 +816,7 @@ private fun PinnedShelfCard(
                 color = NoxaLime.copy(alpha = if (isPlaying) 0.9f else 0.4f),
                 shape = RoundedCornerShape(16.dp)
             )
-            .clickable { onClick() }
+            .noxaClickable { onClick() }
             .padding(12.dp)
             .testTag("pinned_card_${song.id}"),
         verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -706,15 +840,16 @@ private fun PinnedShelfCard(
                     modifier = Modifier
                         .align(Alignment.TopStart)
                         .padding(3.dp)
-                        .clip(RoundedCornerShape(4.dp))
+                        .clip(RoundedCornerShape(5.dp))
                         .background(NoxaLime)
-                        .padding(horizontal = 4.dp, vertical = 1.dp)
+                        .padding(3.dp),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Text(
-                        text = "⭐",
-                        color = NoxaBlack,
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.Black
+                    Icon(
+                        imageVector = Icons.Default.Star,
+                        contentDescription = "Pinned by Sky",
+                        tint = NoxaBlack,
+                        modifier = Modifier.size(10.dp)
                     )
                 }
             }

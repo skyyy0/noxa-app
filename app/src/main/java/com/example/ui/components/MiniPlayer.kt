@@ -1,6 +1,9 @@
 package com.example.ui.components
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
@@ -67,8 +70,16 @@ fun MiniPlayer(
 ) {
     AnimatedVisibility(
         visible = currentSong != null,
-        enter = slideInVertically(initialOffsetY = { it }),
-        exit = slideOutVertically(targetOffsetY = { it }),
+        // Soft spring entrance and a quicker tweened exit: the bar glides
+        // into place instead of snapping, iOS-style.
+        enter = slideInVertically(
+            animationSpec = spring(dampingRatio = 0.85f, stiffness = Spring.StiffnessMediumLow),
+            initialOffsetY = { it }
+        ),
+        exit = slideOutVertically(
+            animationSpec = tween(durationMillis = 200),
+            targetOffsetY = { it }
+        ),
         modifier = modifier
     ) {
         if (currentSong == null) return@AnimatedVisibility
@@ -143,11 +154,11 @@ fun MiniPlayer(
                     // Play/Pause Button
                     Box(
                         modifier = Modifier
-                            .size(38.dp)
-                            .clip(CircleShape)
-                            .background(NoxaLime)
-                            .clickable { onTogglePlayPause() }
-                            .testTag("mini_player_play_pause_btn"),
+                        .size(38.dp)
+                        .clip(CircleShape)
+                        .background(NoxaLime)
+                        .noxaClickable { onTogglePlayPause() }
+                        .testTag("mini_player_play_pause_btn"),
                         contentAlignment = Alignment.Center
                     ) {
                         if (isBuffering) {

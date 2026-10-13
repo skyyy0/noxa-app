@@ -1,6 +1,7 @@
 package com.example.ui.util
 
 import android.app.Activity
+import android.content.ClipData
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
@@ -19,6 +20,7 @@ import android.os.Environment
 import android.provider.MediaStore
 import android.text.TextPaint
 import android.text.TextUtils
+import android.util.Log
 import androidx.core.graphics.drawable.toBitmap
 import coil.ImageLoader
 import coil.imageLoader
@@ -28,6 +30,8 @@ import com.example.data.model.Song
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
+import kotlin.math.cos
+import kotlin.math.sin
 import androidx.core.content.FileProvider
 
 /**
@@ -44,6 +48,7 @@ object ShareCardRenderer {
 
     private const val CARD_SIZE = 1080
     private const val FILE_PROVIDER_SUFFIX = ".fileprovider"
+    private const val TAG = "ShareCard"
 
     /** Colors tuned to the NOXA theme (near-black with lime accents). */
     private val BG_TOP = Color.rgb(24, 30, 12)
@@ -62,6 +67,7 @@ object ShareCardRenderer {
             saveToGallery(context, bitmap, song)
             writeToCache(context, bitmap, song)
         } catch (e: Exception) {
+            Log.e(TAG, "Rendering/saving the share card failed", e)
             return false
         }
         return try {
@@ -75,13 +81,19 @@ object ShareCardRenderer {
                 putExtra(Intent.EXTRA_STREAM, uri)
                 putExtra(Intent.EXTRA_TEXT, NoxaLinks.shareText(song))
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                // Many share targets (and several OEM pickers) silently drop
+                // the URI grant carried only by EXTRA_STREAM; putting the uri
+                // into ClipData is what actually propagates the read grant.
+                clipData = ClipData.newUri(context.contentResolver, "NOXA share card", uri)
             }
             val chooser = Intent.createChooser(send, "Bagikan \"${song.title}\"").apply {
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 if (context !is Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             context.startActivity(chooser)
             true
         } catch (e: Exception) {
+            Log.e(TAG, "Opening the share sheet failed", e)
             false
         }
     }
@@ -129,18 +141,26 @@ object ShareCardRenderer {
             canvas.drawRoundRect(artRect, 44f, 44f, placeholder)
         }
 
-        // ⭐ badge for pinned tracks, top-left corner of the artwork.
+        // Vector "PINNED" badge for pinned tracks, top-left of the artwork:
+        // a drawn five-point star + label — no emoji glyphs on the card.
         if (PinnedTracks.isPinned(song)) {
             val badgePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = LIME }
-            val badge = RectF(artLeft + 18f, artTop + 18f, artLeft + 118f, artTop + 88f)
+            val badge = RectF(artLeft + 18f, artTop + 18f, artLeft + 172f, artTop + 88f)
             canvas.drawRoundRect(badge, 20f, 20f, badgePaint)
+            drawStar(
+                canvas = canvas,
+                cx = badge.left + 35f,
+                cy = badge.centerY(),
+                outerRadius = 21f,
+                paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK }
+            )
             val starPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
                 color = Color.BLACK
-                textSize = 40f
-                textAlign = Paint.Align.CENTER
+                textSize = 38f
+                textAlign = Paint.Align.LEFT
                 typeface = Typeface.DEFAULT_BOLD
             }
-            canvas.drawText("⭐ PINNED", badge.centerX(), badge.centerY() + 14f, starPaint)
+            canvas.drawText("PINNED", badge.left + 64f, badge.centerY() + 13f, starPaint)
         }
 
         // Title (single line, ellipsized) and artist below the artwork.
@@ -182,6 +202,21 @@ object ShareCardRenderer {
         canvas.drawText("skyvibes.my.id", CARD_SIZE / 2f, 1150f, linkPaint)
 
         return bitmap
+    }
+
+    /** Draws a clean five-point star (vector-style, not an emoji glyph). */
+    private fun drawStar(canvas: Canvas, cx: Float, cy: Float, outerRadius: Float, paint: Paint) {
+        val path = Path()
+        val innerRadius = outerRadius * 0.42f
+        for (i in 0 until 10) {
+            val radius = if (i % 2 == 0) outerRadius else innerRadius
+            val angle = Math.toRadians((-90 + i * 36).toDouble())
+            val x = cx + (radius * cos(angle)).toFloat()
+            val y = cy + (radius * sin(angle)).toFloat()
+            if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+        }
+        path.close()
+        canvas.drawPath(path, paint)
     }
 
     /**

@@ -2,6 +2,9 @@ package com.example.ui.components
 
 import android.view.SurfaceView
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -45,6 +48,7 @@ import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Subject
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.CircularProgressIndicator
@@ -57,6 +61,7 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -66,6 +71,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
@@ -360,10 +366,13 @@ fun FullPlayerSheet(
                             AudioQualityBadge(song = song)
                             if (PinnedTracks.isPinned(song)) {
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = "⭐",
-                                    fontSize = 13.sp,
-                                    modifier = Modifier.testTag("pinned_star")
+                                Icon(
+                                    imageVector = Icons.Default.Star,
+                                    contentDescription = "Lagu pin Sky",
+                                    tint = NoxaLime,
+                                    modifier = Modifier
+                                        .size(15.dp)
+                                        .testTag("pinned_star")
                                 )
                             }
                         }
@@ -428,10 +437,20 @@ fun FullPlayerSheet(
                             .size(68.dp)
                             .clip(CircleShape)
                             .background(NoxaLime)
-                            .clickable { onTogglePlayPause() }
+                            .noxaClickable { onTogglePlayPause() }
                             .testTag("full_player_play_pause_btn"),
                         contentAlignment = Alignment.Center
                     ) {
+                        // The glyph pops softly on every toggle — the small,
+                        // alive feeling iOS transport buttons have.
+                        val iconPop = remember { Animatable(1f) }
+                        LaunchedEffect(playerState.isPlaying) {
+                            iconPop.snapTo(0.72f)
+                            iconPop.animateTo(
+                                1f,
+                                spring(dampingRatio = 0.55f, stiffness = Spring.StiffnessHigh)
+                            )
+                        }
                         if (playerState.isBuffering) {
                             CircularProgressIndicator(
                                 modifier = Modifier.size(30.dp),
@@ -443,7 +462,12 @@ fun FullPlayerSheet(
                                 imageVector = if (playerState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                                 contentDescription = if (playerState.isPlaying) "Pause" else "Play",
                                 tint = Color.Black,
-                                modifier = Modifier.size(36.dp)
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .graphicsLayer {
+                                        scaleX = iconPop.value
+                                        scaleY = iconPop.value
+                                    }
                             )
                         }
                     }
@@ -654,10 +678,11 @@ fun FullPlayerSheet(
                                     )
                                 }
                                 if (PinnedTracks.isPinned(queueSong)) {
-                                    Text(
-                                        text = "⭐",
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Bold
+                                    Icon(
+                                        imageVector = Icons.Default.Star,
+                                        contentDescription = "Lagu pin Sky",
+                                        tint = NoxaLime,
+                                        modifier = Modifier.size(13.dp)
                                     )
                                 }
                             }

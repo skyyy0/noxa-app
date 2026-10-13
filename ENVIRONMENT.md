@@ -137,6 +137,49 @@ pengguna sebelum pemutaran pertama.
   Terlalu Manis (Slank), dan Laskar Pelangi (Nidji), masing-masing dengan
   kata-kata Sky sendiri yang tampil di rak pin, di kartu, dan di pemutar penuh.
 
+### v1.11 — kelima pin tampil, ikon vektor, akun tanpa Firebase, browse bergambar
+
+* **Semua 5 lagu pin kembali tampil** — pencarian pin kini menemukan lagu lewat
+  *top tracks* artis (kemudian fallback search), jadi "Dan" (Sheila On 7) dan
+  "Laskar Pelangi" (Nidji) tidak lagi tenggelam di hasil pencarian umum.
+  Quote kini menempel pada semua lagu pin berkat satu aturan matching yang
+  dipakai bersama (judul dengan akhiran remaster/live/bracket tetap cocok).
+* **Ikon vektor, bukan emoji** — rak pin, badge `Pinned`, bintang di pemutar
+  penuh & antrian, ikon rekap mingguan, dan badge pada kartu share kini
+  memakai ikon Material (PushPin/Star) dan star path hasil gambar sendiri,
+  bukan glyph emoji.
+* **Akun selalu bisa dibuat (tanpa keys)** — build rilis GitHub tidak
+  membawa `google-services.json`, sehingga Firebase Auth/Firestore tidak
+  tersedia dan pendaftaran gagal dengan pesan "belum dikonfigurasi". Kini
+  ada **akun bawaan aplikasi**: email + password (hash PBKDF2-HMAC-SHA256,
+  tidak ada password tersimpan), username unik **per perangkat**, sesi
+  bertahan setelah app ditutup. Firebase tetap dipakai otomatis pada build
+  yang membawa konfigurasinya (lengkap dengan registry Firestore).
+* **Animasi ala iOS** — kartu rak pin & shelf masuk bertahap (fade + naik
+  lembut), tombol play pemutar penuh & mini player memantul lembut saat
+  ditekan, ikon play/pause pop saat berganti, mini player meluncur dengan
+  spring.
+* **Bagikan gambar diperbaiki** — URI kartu share kini ikut ditaruh di
+  `ClipData` (pola resmi Android untuk meneruskan izin baca URI ke aplikasi
+  tujuan); banyak share target/OEM mengabaikan `EXTRA_STREAM` semata, yang
+  dulu bikin "Bagikan sebagai gambar" gagal. Setiap kegagalan kini juga
+  tercatat di logcat (`ShareCard`) supaya mudah didiagnosis.
+* **Explore Genres bergambar** — kartu browse di Search kini memakai foto
+  artis asli dari Deezer + cover Global Top 50 dengan scrim gradasi gelap
+  ala Spotify; kartu yang belum punya gambar tetap memakai warna temanya.
+* **Package baru `com.noxa.music`** — embel-embel `aistudio` dilepas dari
+  `applicationId`. Karena identitas instalasi berubah, APK baru terpasang
+  sebagai app baru (uninstall app lama lebih dulu); data lokal (akun, Riwayat
+  & Room) tidak ikut pindah.
+* **MV lebih tangguh** — resolusi stream kini mencoba kualitas pilihan, lalu
+  jatuh ke 360p dan 240p; kalau semua gagal dicoba ulang sekali setelah jeda.
+  Bila stream keburu expired di tengah pemutaran, pemutar video memicu
+  resolusi ulang otomatis (satu kali) alih-alih meninggalkan layar hitam.
+* **Tiga fitur baru** — shelf **Dengar Terakhir** di Home (loncat cepat ke
+  lagu yang baru didengar), tombol **Mix Sky** (antrian acak dari lagu pin +
+  favorit + riwayat), dan **long-press pada baris lagu** mana pun untuk
+  membuka menu cepat (antrian, playlist, bagikan) tanpa mencari tombol ⋮.
+
 ### Berbagi lagu: link NOXA & kartu canvas (v1.10)
 
 Sebelumnya membagikan lagu mengirim link Deezer (`deezer.com/track/…`). Sejak
@@ -160,7 +203,7 @@ di perangkat (judul/artis ikut terbawa).
 > Catatan Android: untuk https tanpa verifikasi App Links, Android menampilkan
 > pilihan aplikasi (chooser) saat link diketuk — pilih NOXA dan ingat pilihan
 > itu. Agar tanpa chooser, host `assetlinks.json` di `skyvibes.my.id`
-> (package `com.aistudio.noxa.music`) sesuai docs Android App Links.
+> (package `com.noxa.music`) sesuai docs Android App Links.
 > Pesan teks share tetap memakai format `🎵 Judul — Artis` + link +
 > `Didengarkan lewat NOXA Music`.
 

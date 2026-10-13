@@ -3,6 +3,8 @@ package com.example.ui.components
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -208,6 +210,7 @@ fun HeroSpotlightCard(
 }
 
 @Composable
+@OptIn(ExperimentalFoundationApi::class)
 fun SongListItem(
     song: Song,
     rank: Int? = null,
@@ -229,7 +232,12 @@ fun SongListItem(
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .clickable { onPlay() }
+            // Tap plays; long-press opens the same quick menu as the ⋮ button —
+            // the gesture Spotify users expect on every song row.
+            .combinedClickable(
+                onLongClick = { menuOpen = true },
+                onClick = { onPlay() }
+            )
             .padding(vertical = 8.dp, horizontal = 12.dp)
             .testTag("song_item_${song.id}"),
         verticalAlignment = Alignment.CenterVertically

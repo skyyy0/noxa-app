@@ -46,23 +46,29 @@ object PinnedTracks {
 
     /** The pinned entry for this song, or null when it is not pinned. */
     fun find(song: Song): PinnedTrack? = ALL.firstOrNull { pin ->
-        pin.title.equals(song.title.trim(), ignoreCase = true) &&
-            pin.artist.equals(song.artist.trim(), ignoreCase = true)
+        matches(pin, song.title, song.artist)
     }
 
     fun isPinned(song: Song): Boolean = find(song) != null
 
     /**
      * Whether a catalogue result is the pinned recording: titles travel with
-     * remaster/bracket suffixes across providers, so the pinned title must
-     * still match the *start* of the result's title.
+     * remaster/bracket/live suffixes across providers, so the pinned title must
+     * still match the *start* of the result's title. One rule, used both when
+     * matching live catalogue results and when looking up the quote for a song
+     * that is already in the UI — so a track that gets the badge always gets
+     * its quote too.
      */
     fun matchesResult(title: String, artist: String): Boolean = ALL.any { pin ->
+        matches(pin, title, artist)
+    }
+
+    private fun matches(pin: PinnedTrack, title: String, artist: String): Boolean {
         val t = title.trim()
-        (t.equals(pin.title, ignoreCase = true) ||
+        val titleMatches = t.equals(pin.title, ignoreCase = true) ||
             t.startsWith("${pin.title} ", ignoreCase = true) ||
             t.startsWith("${pin.title}(", ignoreCase = true) ||
-            t.startsWith("${pin.title} -", ignoreCase = true)) &&
-            pin.artist.equals(artist.trim(), ignoreCase = true)
+            t.startsWith("${pin.title} -", ignoreCase = true)
+        return titleMatches && pin.artist.equals(artist.trim(), ignoreCase = true)
     }
 }

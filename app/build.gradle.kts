@@ -28,11 +28,14 @@ android {
   compileSdk { version = release(36) { minorApiLevel = 1 } }
 
   defaultConfig {
-    applicationId = "com.aistudio.noxa.music"
+    // Renamed from com.aistudio.noxa.music: the app now carries its own
+    // identity instead of the AI-Studio template package. NOTE: this changes
+    // the install identity — the new APK installs as a fresh app.
+    applicationId = "com.noxa.music"
     minSdk = 24
     targetSdk = 36
-    versionCode = 7
-    versionName = "1.10"
+    versionCode = 9
+    versionName = "1.11"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }

@@ -166,12 +166,27 @@ class MusicRepository(
         )
     }
 
-    /** Sky's pinned track(s), fetched live so the shelf shows real artwork. */
-    private suspend fun loadPinned(): List<Song> =
-        PinnedTracks.ALL.mapNotNull { pin ->
-            deezer.search("${pin.artist} ${pin.title}", limit = 10)
-                .firstOrNull { PinnedTracks.matchesResult(it.title, it.artist) }
-        }
+    /**
+     * Sky's pinned track(s), fetched live so the shelf shows real artwork.
+     *
+     * Plain full-text search is unreliable for short titles ("Dan" by Sheila
+     * On 7 drowns in results where "dan" is just the Indonesian word for
+     * "and"), so the artist's top tracks are consulted first — every pinned
+     * song is a signature hit of its artist — with search queries as the
+     * fallback. All five pins resolve in parallel.
+     */
+    private suspend fun loadPinned(): List<Song> = coroutineScope {
+        PinnedTracks.ALL.map { pin ->
+            async {
+                val byTop = deezer.artistTopTracks(pin.artist, limit = 40)
+                    .firstOrNull { PinnedTracks.matchesResult(it.title, it.artist) }
+                byTop ?: deezer.search("${pin.artist} ${pin.title}", limit = 25)
+                    .firstOrNull { PinnedTracks.matchesResult(it.title, it.artist) }
+                    ?: deezer.search(pin.title, limit = 25)
+                        .firstOrNull { PinnedTracks.matchesResult(it.title, it.artist) }
+            }
+        }.awaitAll().filterNotNull()
+    }
 
     /** Artist profiles for the Home avatar shelf (the shelf artists themselves). */
     private suspend fun loadPopularArtists(): List<ArtistProfile> =
