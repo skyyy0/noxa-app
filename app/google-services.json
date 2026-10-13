@@ -51,6 +51,14 @@
       },
       "oauth_client": [
         {
+          "client_id": "421601545057-prbi5eormdei94uj1135iqgij5k2n13b.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.noxa.music",
+            "certificate_hash": "d034c3a8c92f60c29d9a7730dad1ecc8aafd65b9"
+          }
+        },
+        {
           "client_id": "421601545057-r3rtjg045701q19dbab8md91v5t00ktp.apps.googleusercontent.com",
           "client_type": 3
         }
