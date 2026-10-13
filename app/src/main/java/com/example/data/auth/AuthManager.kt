@@ -188,11 +188,13 @@ class AuthManager(private val context: Context) {
                 val credential = result.credential
                 if (credential is CustomCredential && credential.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
                     val googleIdToken = GoogleIdTokenCredential.createFrom(credential.data).idToken
+                    Log.w("AuthManager", "Google picker returned a token; verifying locally")
 
                     // 1) Verify the token against Google's own signing keys —
                     //    no Firebase Auth (and no console setup) required.
                     val identity = GoogleIdTokenVerifier.verify(googleIdToken, serverClientId)
                     if (identity != null) {
+                        Log.w("AuthManager", "Local Google verification OK for sub=${identity.subject}")
                         val user = NoxaUser(
                             uid = "google-" + identity.subject,
                             displayName = identity.name ?: identity.email?.substringBefore('@'),
@@ -210,6 +212,7 @@ class AuthManager(private val context: Context) {
 
                     // 2) Fallback: hand the token to Firebase — that path
                     //    works on projects where the Google provider is on.
+                    Log.w("AuthManager", "Local Google verification failed; trying Firebase hand-off")
                     val firebaseAuth = auth
                     if (firebaseAuth != null) {
                         val authCredential = GoogleAuthProvider.getCredential(googleIdToken, null)
@@ -423,7 +426,48 @@ class AuthManager(private val context: Context) {
                         }
                     }
 
-                    // 2) The on-device mirror (offline sign-in).
+                    // 2) Firebase Email/Password — the provider is enabled in
+                    //    the project, so sign-in also works when the keyless
+                    //    registry is unreachable. A wrong password here is
+                    //    expected on registry-only accounts; fall through.
+                    val firebaseAuth = auth
+                    if (firebaseAuth != null) {
+                        try {
+                            val fbResult = firebaseAuth
+                                .signInWithEmailAndPassword(email.trim(), password)
+                                .await()
+                            val fbUser = fbResult.user
+                            if (fbUser != null) {
+                                mirrorRemoteLocally(
+                                    com.example.data.support.BackendLogin(
+                                        uid = fbUser.uid,
+                                        email = fbUser.email ?: email.trim(),
+                                        username = fbUser.displayName
+                                            ?: fbUser.email?.substringBefore('@')
+                                            ?: "NOXA User",
+                                        role = com.example.data.support.AccountRole.USER
+                                    ),
+                                    password
+                                )
+                                val user = NoxaUser(
+                                    uid = fbUser.uid,
+                                    displayName = fbUser.displayName
+                                        ?: fbUser.email?.substringBefore('@'),
+                                    email = fbUser.email,
+                                    photoUrl = fbUser.photoUrl?.toString()
+                                )
+                                storeRemoteSession(user)
+                                _currentUser.value = user
+                                _isGuestMode.value = false
+                                onSuccess(user)
+                                return@launch
+                            }
+                        } catch (e: Exception) {
+                            Log.w("AuthManager", "Firebase email sign-in failed: ${e.message}")
+                        }
+                    }
+
+                    // 3) The on-device mirror (offline sign-in).
                     val account = localStore.authenticate(email, password)
                     if (account != null) {
                         val user = NoxaUser(
@@ -516,13 +560,19 @@ class AuthManager(private val context: Context) {
                             onSuccess(user)
                         }
 
-                        // Registry offline: Firebase when configured, else the
-                        // built-in local store — registration never dead-ends.
+                        // Registry offline: Firebase Email/Password when the
+                        // project has it enabled, else the built-in local
+                        // store — registration never dead-ends.
                         else -> {
                             try {
-                                registerWithoutRegistry(
-                                    email, trimmedName, password, onSuccess, onError
+                                val registered = registerWithFirebase(
+                                    email.trim(), trimmedName, password
                                 )
+                                if (!registered) {
+                                    registerWithoutRegistry(
+                                        email, trimmedName, password, onSuccess, onError
+                                    )
+                                }
                             } catch (e: Exception) {
                                 onError(humanizeAuthError(e))
                             }
@@ -564,6 +614,61 @@ class AuthManager(private val context: Context) {
         }
     }
 
+    /**
+     * Registration (or account recovery) through Firebase Email/Password.
+     * The provider is enabled in the project and needs no SHA registration,
+     * so sign-up keeps working even when the keyless registry is
+     * unreachable. Returns true when a session was established.
+     */
+    private suspend fun registerWithFirebase(
+        email: String,
+        username: String,
+        password: String
+    ): Boolean {
+        val firebaseAuth = auth ?: return false
+        val cleanEmail = email.trim().lowercase(java.util.Locale.ROOT)
+        val result = try {
+            firebaseAuth.createUserWithEmailAndPassword(cleanEmail, password).await()
+        } catch (e: Exception) {
+            val lower = e.message.orEmpty().lowercase()
+            if ("email already" in lower || "email_exists" in lower) {
+                // The address already lives in Firebase from an earlier
+                // attempt — recover the session with the same password.
+                try {
+                    firebaseAuth.signInWithEmailAndPassword(cleanEmail, password).await()
+                } catch (e2: Exception) {
+                    Log.w("AuthManager", "Firebase email recover failed: ${e2.message}")
+                    return false
+                }
+            } else {
+                Log.w("AuthManager", "Firebase email register failed: ${e.message}")
+                return false
+            }
+        }
+        val fbUser = result.user ?: return false
+        try {
+            val profile = com.google.firebase.auth.UserProfileChangeRequest.Builder()
+                .setDisplayName(username)
+                .build()
+            fbUser.updateProfile(profile).await()
+        } catch (e: Exception) {
+            Log.w("AuthManager", "Firebase profile update failed: ${e.message}")
+        }
+        // Mirror locally so the next sign-in also works offline.
+        localStore.createAccount(cleanEmail, username, password, fbUser.uid)
+        localStore.storeSessionUid(fbUser.uid)
+        val user = NoxaUser(
+            uid = fbUser.uid,
+            displayName = username,
+            email = cleanEmail,
+            photoUrl = null
+        )
+        storeRemoteSession(user)
+        _currentUser.value = user
+        _isGuestMode.value = false
+        return true
+    }
+
     /** Maps provider errors to Indonesian, human messages (never raw codes). */
     private fun humanizeAuthError(e: Exception): String {
         val msg = e.message.orEmpty()
@@ -574,6 +679,10 @@ class AuthManager(private val context: Context) {
             "operation-not-allowed" in lower || "sign-in provider is disabled" in lower ->
                 "Metode masuk ini belum diaktifkan di proyek auth. " +
                     "Gunakan masuk dengan Google, atau coba lagi nanti."
+            "missing_android_integration" in lower || "android integration" in lower ->
+                "Login Google ditolak Firebase: aplikasi (package com.noxa.music) " +
+                    "belum terdaftar di konsol Firebase — daftarkan dengan SHA-1 " +
+                    "keystore rilis, lalu unggah google-services.json baru."
             "invalid_email" in lower || "malformed" in lower || "badly formatted" in lower ->
                 "Format email tidak valid."
             "weak_password" in lower -> "Password minimal 6 karakter."

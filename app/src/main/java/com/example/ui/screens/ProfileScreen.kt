@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.QrCode
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.SupportAgent
@@ -115,6 +116,8 @@ fun ProfileScreen(
     // Account settings dialogs.
     var showUsernameDialog by remember { mutableStateOf(false) }
     var showPasswordDialog by remember { mutableStateOf(false) }
+    // Floating QRIS popup for supporting the developer.
+    var showQrisDialog by remember { mutableStateOf(false) }
 
     Column(
         modifier = modifier
@@ -658,7 +661,31 @@ fun ProfileScreen(
                     }
                     Icon(Icons.Default.OpenInNew, contentDescription = "Open", tint = NoxaTextTertiary, modifier = Modifier.size(16.dp))
                 }
+
+                Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(NoxaBorder))
+
+                // Support Developer NOXA — klik untuk popup QRIS donasi
+                // pembangunan & pengembangan NOXA.
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { showQrisDialog = true }
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.QrCode, contentDescription = "QRIS", tint = NoxaLime, modifier = Modifier.size(20.dp))
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text("Support Developer NOXA", color = NoxaTextPrimary, fontSize = 14.sp)
+                    }
+                    Icon(Icons.Default.ChevronRight, contentDescription = null, tint = NoxaPurple, modifier = Modifier.size(20.dp))
+                }
             }
+        }
+
+        if (showQrisDialog) {
+            QrisSupportDialog(onDismiss = { showQrisDialog = false })
         }
 
         Spacer(modifier = Modifier.height(24.dp))
@@ -1125,6 +1152,52 @@ private fun authFieldColors() = OutlinedTextFieldDefaults.colors(
     unfocusedTextColor = NoxaTextPrimary,
     cursorColor = NoxaLime
 )
+
+/**
+ * Floating QRIS popup: scan to support NOXA's construction & development.
+ * The image is Sky's own QRIS code (hosted on Cloudinary) — no backend or
+ * payment key involved, purely a picture in a dialog.
+ */
+@Composable
+private fun QrisSupportDialog(onDismiss: () -> Unit) {
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = NoxaSurfaceElevated,
+        title = {
+            Text("Support Developer NOXA", color = NoxaTextPrimary, fontWeight = FontWeight.Bold)
+        },
+        text = {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = "Scan QRIS ini untuk mendukung pembangunan dan pengembangan NOXA. Terima kasih!",
+                    color = NoxaTextSecondary,
+                    fontSize = 12.sp
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                coil.compose.AsyncImage(
+                    model = QRIS_IMAGE_URL,
+                    contentDescription = "QRIS Support Developer NOXA",
+                    contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                )
+            }
+        },
+        confirmButton = {
+            androidx.compose.material3.TextButton(onClick = onDismiss) {
+                Text("Tutup", color = NoxaLime, fontWeight = FontWeight.Bold)
+            }
+        }
+    )
+}
+
+/** Sky's QRIS image, hosted publicly on Cloudinary. */
+private const val QRIS_IMAGE_URL =
+    "https://res.cloudinary.com/dnxjhd4ii/image/upload/v1791893298/qr_ID1025429530401_12.10.26_1791782626_1791782626188_voxeei.jpg"
 
 /**
  * Vector icons that Material does not ship — drawn here so cards never rely

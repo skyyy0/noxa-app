@@ -63,68 +63,92 @@ internal object GoogleIdTokenVerifier {
      */
     suspend fun verify(idToken: String, expectedAudience: String): Identity? =
         withContext(Dispatchers.IO) {
-            try {
-                val parts = idToken.split(".")
-                if (parts.size != 3) return@withContext null
-
-                val header = JSONObject(String(base64UrlDecode(parts[0]), Charsets.UTF_8))
-                val payload = JSONObject(String(base64UrlDecode(parts[1]), Charsets.UTF_8))
-                if (!"RS256".equals(header.optString("alg"), ignoreCase = true)) {
-                    return@withContext null
-                }
-
-                val nowSeconds = System.currentTimeMillis() / 1000
-                val exp = payload.optLong("exp", 0L)
-                if (exp in 1 until (nowSeconds - CLOCK_SKEW_SECONDS)) return@withContext null
-
-                val issuer = payload.optString("iss")
-                val issuerOk = issuer == "accounts.google.com" ||
-                    issuer == "https://accounts.google.com"
-                if (!issuerOk) return@withContext null
-                if (payload.optString("aud") != expectedAudience) return@withContext null
-
-                val key = publicKey(header.optString("kid")) ?: return@withContext null
-                val signature = Signature.getInstance("SHA256withRSA")
-                signature.initVerify(key)
-                signature.update(
-                    (parts[0] + "." + parts[1]).toByteArray(Charsets.US_ASCII)
-                )
-                if (!signature.verify(base64UrlDecode(parts[2]))) return@withContext null
-
-                val subject = payload.optString("sub")
-                if (subject.isBlank()) return@withContext null
-
-                Identity(
-                    subject = subject,
-                    email = payload.optString("email").ifBlank { null },
-                    name = payload.optString("name").ifBlank { null },
-                    pictureUrl = payload.optString("picture").ifBlank { null }
-                )
-            } catch (e: Exception) {
-                null
+            val keys = currentKeys()
+            if (keys.isNotEmpty()) {
+                verifyWithKeys(idToken, expectedAudience, keys)?.let { return@withContext it }
             }
+            // A token whose `kid` is unknown usually means the cached set
+            // predates a rotation — force exactly one fresh fetch.
+            val refreshed = refetchKeys()
+            if (refreshed.isEmpty()) return@withContext null
+            verifyWithKeys(idToken, expectedAudience, refreshed)
         }
 
-    /** The public key for [kid], refetching Google's set once when unknown. */
-    private fun publicKey(kid: String): java.security.PublicKey? {
-        val now = System.currentTimeMillis()
+    /**
+     * Verifies [idToken] against an already-fetched key set. Pure and
+     * side-effect free — internal so unit tests can drive it with a
+     * self-made RSA key (Google's own key set is never reachable from a
+     * test, but the exact parsing and signature path is what gets proven).
+     */
+    internal fun verifyWithKeys(
+        idToken: String,
+        expectedAudience: String,
+        keys: Map<String, java.security.PublicKey>
+    ): Identity? {
+        try {
+            val parts = idToken.split(".")
+            if (parts.size != 3) return null
+
+            val header = JSONObject(String(base64UrlDecode(parts[0]), Charsets.UTF_8))
+            val payload = JSONObject(String(base64UrlDecode(parts[1]), Charsets.UTF_8))
+            if (!"RS256".equals(header.optString("alg"), ignoreCase = true)) {
+                return null
+            }
+
+            val nowSeconds = System.currentTimeMillis() / 1000
+            val exp = payload.optLong("exp", 0L)
+            if (exp in 1 until (nowSeconds - CLOCK_SKEW_SECONDS)) return null
+
+            val issuer = payload.optString("iss")
+            val issuerOk = issuer == "accounts.google.com" ||
+                issuer == "https://accounts.google.com"
+            if (!issuerOk) return null
+            if (payload.optString("aud") != expectedAudience) return null
+
+            val key = keys[header.optString("kid")] ?: singleKeyOrNull(keys) ?: return null
+            val signature = Signature.getInstance("SHA256withRSA")
+            signature.initVerify(key)
+            signature.update(
+                (parts[0] + "." + parts[1]).toByteArray(Charsets.US_ASCII)
+            )
+            if (!signature.verify(base64UrlDecode(parts[2]))) return null
+
+            val subject = payload.optString("sub")
+            if (subject.isBlank()) return null
+
+            return Identity(
+                subject = subject,
+                email = payload.optString("email").ifBlank { null },
+                name = payload.optString("name").ifBlank { null },
+                pictureUrl = payload.optString("picture").ifBlank { null }
+            )
+        } catch (e: Exception) {
+            return null
+        }
+    }
+
+    /** Cached Google keys, fetched (and cached) on first use. */
+    private fun currentKeys(): Map<String, java.security.PublicKey> {
         synchronized(cacheLock) {
-            if (cachedKeys.isNotEmpty() && now - cacheFetchedAt < CACHE_TTL_MS) {
-                return cachedKeys[kid] ?: singleKeyOrNull(cachedKeys)
+            if (cachedKeys.isNotEmpty() &&
+                System.currentTimeMillis() - cacheFetchedAt < CACHE_TTL_MS
+            ) {
+                return cachedKeys
             }
         }
+        return refetchKeys()
+    }
+
+    /** Ignores the cache age, fetches once and stores the fresh set. */
+    private fun refetchKeys(): Map<String, java.security.PublicKey> {
         val fetched = fetchKeys()
         if (fetched.isNotEmpty()) {
             synchronized(cacheLock) {
                 cachedKeys = fetched
-                cacheFetchedAt = now
+                cacheFetchedAt = System.currentTimeMillis()
             }
         }
-        synchronized(cacheLock) {
-            val keys = cachedKeys
-            if (keys.isEmpty()) return null
-            return keys[kid] ?: singleKeyOrNull(keys)
-        }
+        return synchronized(cacheLock) { cachedKeys }
     }
 
     /** Tokens normally carry a `kid`; fall back to the sole key when absent. */
@@ -147,16 +171,25 @@ internal object GoogleIdTokenVerifier {
             if (response.isSuccessful) response.body?.string() else null
         } ?: return emptyMap()
 
-        val keysJson = JSONObject(body).optJSONArray("keys") ?: return emptyMap()
-        val result = HashMap<String, java.security.PublicKey>()
-        for (i in 0 until keysJson.length()) {
-            val key = keysJson.optJSONObject(i) ?: continue
-            if (!"RSA".equals(key.optString("kty"), ignoreCase = true)) continue
-            publicKeyFrom(key)?.let { result[key.optString("kid")] = it }
-        }
-        result
+        parseJwks(body)
     } catch (e: Exception) {
         emptyMap()
+    }
+
+    /** Parses a JWKS document into `kid` -> public key. Internal for tests. */
+    internal fun parseJwks(body: String): Map<String, java.security.PublicKey> {
+        return try {
+            val keysJson = JSONObject(body).optJSONArray("keys") ?: return emptyMap()
+            val result = HashMap<String, java.security.PublicKey>()
+            for (i in 0 until keysJson.length()) {
+                val key = keysJson.optJSONObject(i) ?: continue
+                if (!"RSA".equals(key.optString("kty"), ignoreCase = true)) continue
+                publicKeyFrom(key)?.let { result[key.optString("kid")] = it }
+            }
+            result
+        } catch (e: Exception) {
+            emptyMap()
+        }
     }
 
     /** Parses one JWKS entry: `x5c` certificate when present, else `n`+`e`. */

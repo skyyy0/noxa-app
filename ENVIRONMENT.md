@@ -342,6 +342,31 @@ pengguna sebelum pemutaran pertama.
   cadangan.
 * **Versi** — `versionName` **1.14.0** / `versionCode` 12.
 
+### v1.14.1 — login email/Google tangguh, ikon Google resmi, dukung developer (QRIS)
+
+* **Login/daftar email jadi tiga lapis** — urutan barunya: registry keyless
+  (Telegraph) → **Firebase Email/Password** (provider kini aktif di proyek;
+  tanpa SHA, langsung jalan) → akun lokal. Kalau registry tidak terjangkau,
+  email yang sudah ada di Firebase tetap bisa masuk, dan pendaftaran tetap
+  berhasil lewat Firebase sebelum jatuh ke lokal. Email yang sudah terdaftar
+  di Firebase otomatis dipulihkan (sign-in) saat daftar ulang.
+* **Login Google — akar masalah terdiagnosa** — token Google diverifikasi
+  lokal terhadap kunci publik Google (jalur utama, terbukti oleh unit test
+  baru yang menandatangani JWT sendiri + JWKS format Google tanpa `x5c`).
+  Cadangan Firebase selama ini **pasti gagal** karena `google-services.json`
+  tidak punya klien Android (client_type 1) untuk package `com.noxa.music`
+  — hanya klien web. **Yang harus di konsol Firebase**: daftarkan app
+  `com.noxa.music` dengan SHA-1 & SHA-256 keystore rilis, lalu unggah
+  google-services.json baru. Error `MISSING_ANDROID_INTEGRATION` kini
+  diterjemahkan jujur, dan setiap tahap picker→verifikasi→Firebase
+  tercatat di logcat (`AuthManager`).
+* **Ikon Google resmi** — tombol Google di halaman Get Started kini
+  memakai ikon “G” empat warna resmi Google (vektor), bukan huruf G.
+* **Support Developer NOXA** — menu baru di Profile (Direct Links) membuka
+  popup mengambang berisi gambar QRIS untuk mendukung pembangunan &
+  pengembangan NOXA.
+* **Versi** — `versionName` **1.14.1** / `versionCode` 13.
+
 ### Berbagi lagu: link NOXA & kartu canvas (v1.10)
 
 Sebelumnya membagikan lagu mengirim link Deezer (`deezer.com/track/…`). Sejak
