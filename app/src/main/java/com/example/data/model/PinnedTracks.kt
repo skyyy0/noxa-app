@@ -63,7 +63,14 @@ object PinnedTracks {
         matches(pin, title, artist)
     }
 
-    private fun matches(pin: PinnedTrack, title: String, artist: String): Boolean {
+    /**
+     * Whether a catalogue result is THIS specific pinned recording (not just
+     * any pin's). The home feed uses it while resolving each pin so two pins
+     * of the same artist (Kangen & Pupus are both Dewa 19) can never grab
+     * the same track — that duplicated song ids and crashed the shelf with
+     * "Key \"deezer:…\" was already used".
+     */
+    fun matches(pin: PinnedTrack, title: String, artist: String): Boolean {
         val t = title.trim()
         val titleMatches = t.equals(pin.title, ignoreCase = true) ||
             t.startsWith("${pin.title} ", ignoreCase = true) ||

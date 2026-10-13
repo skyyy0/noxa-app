@@ -201,8 +201,13 @@ class AuthManager(private val context: Context) {
 
     /**
      * Email/password sign-in — the Google-free path, so an account works on any
-     * device without a Google account on it. Falls back to the built-in local
-     * store on builds without Firebase configuration.
+     * device without a Google account on it.
+     *
+     * Order matters: the shared keyless registry (Telegraph) is consulted
+     * FIRST on every build — that is where cross-device accounts, including
+     * the developer account, actually live. Firebase and the on-device mirror
+     * follow as fallbacks, and a dead registry reports a connection problem
+     * instead of blaming the password.
      */
     fun signInWithEmail(
         email: String,
@@ -212,10 +217,11 @@ class AuthManager(private val context: Context) {
         onError: (String) -> Unit = {}
     ) {
         _isSigningIn.value = true
-        if (auth == null) {
-            scope.launch {
-                try {
-                    // 1) Shared registry first — that is where the developer
+        scope.launch {
+            var failure: String? = null
+            var registryUnreachable = false
+            try {
+                // 1) Shared registry first — that is where the developer
                     //    account (and every account across devices) lives.
                     when (val remote = backend.authenticate(email, password)) {
                         is com.example.data.support.RemoteAuthResult.Ok -> {
@@ -232,54 +238,63 @@ class AuthManager(private val context: Context) {
                             _currentUser.value = user
                             _isGuestMode.value = false
                             onSuccess(user)
+                            return@launch
                         }
 
-                        // 2) Not in the registry (or registry offline):
-                        //    fall back to the built-in local store.
-                        com.example.data.support.RemoteAuthResult.Rejected,
+                        com.example.data.support.RemoteAuthResult.Rejected -> Unit
+
                         com.example.data.support.RemoteAuthResult.Unreachable -> {
-                            val account = localStore.authenticate(email, password)
-                            if (account == null) {
-                                onError("Email atau password salah.")
-                            } else {
-                                val user = NoxaUser(
-                                    uid = account.uid,
-                                    displayName = account.username,
-                                    email = account.email,
-                                    photoUrl = null
-                                )
-                                _currentUser.value = user
-                                _isGuestMode.value = false
-                                onSuccess(user)
-                            }
+                            registryUnreachable = true
                         }
                     }
+
+                    // 2) Firebase, when this build carries its configuration.
+                    if (auth != null) {
+                        try {
+                            val result =
+                                auth.signInWithEmailAndPassword(email.trim(), password).await()
+                            val user = result.user
+                            if (user != null) {
+                                _currentUser.value = toNoxaUser(user)
+                                _isGuestMode.value = false
+                                onSuccess(_currentUser.value!!)
+                                return@launch
+                            }
+                        } catch (e: Exception) {
+                            failure = humanizeAuthError(e)
+                        }
+                    }
+
+                    // 3) The on-device mirror (offline sign-in).
+                    val account = localStore.authenticate(email, password)
+                    if (account != null) {
+                        val user = NoxaUser(
+                            uid = account.uid,
+                            displayName = account.username,
+                            email = account.email,
+                            photoUrl = null
+                        )
+                        _currentUser.value = user
+                        _isGuestMode.value = false
+                        onSuccess(user)
+                        return@launch
+                    }
+
+                    onError(
+                        failure
+                            ?: if (registryUnreachable) {
+                                "Server akun tidak terjangkau. Periksa koneksi internet lalu coba lagi."
+                            } else {
+                                "Email atau password salah."
+                            }
+                    )
                 } catch (e: Exception) {
                     onError("Masuk gagal. Coba lagi.")
                 } finally {
                     _isSigningIn.value = false
                 }
             }
-            return
         }
-        scope.launch {
-            try {
-                val result = auth.signInWithEmailAndPassword(email.trim(), password).await()
-                val user = result.user
-                if (user != null) {
-                    _currentUser.value = toNoxaUser(user)
-                    _isGuestMode.value = false
-                    onSuccess(_currentUser.value!!)
-                } else {
-                    onError("Masuk gagal. Coba lagi.")
-                }
-            } catch (e: Exception) {
-                onError(humanizeAuthError(e))
-            } finally {
-                _isSigningIn.value = false
-            }
-        }
-    }
 
     /**
      * Email/password registration with a **unique username**. On Firebase
@@ -308,10 +323,11 @@ class AuthManager(private val context: Context) {
 
         _isSigningIn.value = true
 
-        if (auth == null) {
-            scope.launch {
-                try {
-                    // One uid for both registries, generated up front.
+        // The shared keyless registry is consulted on EVERY build — it is the
+        // app's real account store (roles, support chat, admin console).
+        scope.launch {
+            try {
+                // One uid for both registries, generated up front.
                     val uid = "noxa-" + System.currentTimeMillis().toString(36) +
                         "-" + (1000..9999).random()
                     val (remoteLogin, remoteFailure) =
@@ -343,24 +359,15 @@ class AuthManager(private val context: Context) {
                             onSuccess(user)
                         }
 
-                        // Registry offline: local registration still works.
+                        // Registry offline: Firebase when configured, else the
+                        // built-in local store — registration never dead-ends.
                         else -> {
-                            when (val result =
-                                localStore.createAccount(email, trimmedName, password)) {
-                                is LocalAccountStore.CreateResult.Failed -> onError(result.message)
-                                is LocalAccountStore.CreateResult.Created -> {
-                                    val account = result.account
-                                    localStore.storeSessionUid(account.uid)
-                                    val user = NoxaUser(
-                                        uid = account.uid,
-                                        displayName = account.username,
-                                        email = account.email,
-                                        photoUrl = null
-                                    )
-                                    _currentUser.value = user
-                                    _isGuestMode.value = false
-                                    onSuccess(user)
-                                }
+                            try {
+                                registerWithoutRegistry(
+                                    email, trimmedName, password, onSuccess, onError
+                                )
+                            } catch (e: Exception) {
+                                onError(humanizeAuthError(e))
                             }
                         }
                     }
@@ -370,52 +377,73 @@ class AuthManager(private val context: Context) {
                     _isSigningIn.value = false
                 }
             }
+        }
+
+    /**
+     * Registration while the shared registry is unreachable: Firebase when the
+     * build carries its configuration, otherwise the built-in local store.
+     */
+    private suspend fun registerWithoutRegistry(
+        email: String,
+        username: String,
+        password: String,
+        onSuccess: (NoxaUser) -> Unit,
+        onError: (String) -> Unit
+    ) {
+        if (auth == null) {
+            when (val result = localStore.createAccount(email, username, password)) {
+                is LocalAccountStore.CreateResult.Failed -> onError(result.message)
+                is LocalAccountStore.CreateResult.Created -> {
+                    val account = result.account
+                    localStore.storeSessionUid(account.uid)
+                    _currentUser.value = NoxaUser(
+                        uid = account.uid,
+                        displayName = account.username,
+                        email = account.email,
+                        photoUrl = null
+                    )
+                    _isGuestMode.value = false
+                    onSuccess(_currentUser.value!!)
+                }
+            }
             return
         }
 
-        scope.launch {
-            try {
-                // Fast, friendly check before creating anything.
-                if (UsernameRegistry.isTaken(trimmedName) == true) {
-                    onError("Username \"$trimmedName\" sudah dipakai. Pilih yang lain.")
-                    return@launch
-                }
-
-                val result = auth.createUserWithEmailAndPassword(email.trim(), password).await()
-                val user = result.user
-                if (user == null) {
-                    onError("Pendaftaran gagal. Coba lagi.")
-                    return@launch
-                }
-
-                when (val claim = UsernameRegistry.claim(user.uid, trimmedName)) {
-                    UsernameRegistry.ClaimResult.TAKEN,
-                    UsernameRegistry.ClaimResult.INVALID -> {
-                        try { user.delete().await() } catch (ignored: Exception) { Unit }
-                        auth.signOut()
-                        onError("Username \"$trimmedName\" sudah dipakai. Pilih yang lain.")
-                        return@launch
-                    }
-
-                    // Unreachable Firestore: the account still works; the name
-                    // is stored locally as the display name (documented tradeoff).
-                    UsernameRegistry.ClaimResult.AVAILABLE,
-                    UsernameRegistry.ClaimResult.UNAVAILABLE -> Unit
-                }
-
-                runCatching {
-                    user.updateProfile(userProfileChangeRequest { displayName = trimmedName })
-                        .await()
-                }
-                _currentUser.value = toNoxaUser(user)
-                _isGuestMode.value = false
-                onSuccess(_currentUser.value!!)
-            } catch (e: Exception) {
-                onError(humanizeAuthError(e))
-            } finally {
-                _isSigningIn.value = false
-            }
+        // Fast, friendly check before creating anything.
+        if (UsernameRegistry.isTaken(username) == true) {
+            onError("Username \"$username\" sudah dipakai. Pilih yang lain.")
+            return
         }
+
+        val result = auth.createUserWithEmailAndPassword(email.trim(), password).await()
+        val user = result.user
+        if (user == null) {
+            onError("Pendaftaran gagal. Coba lagi.")
+            return
+        }
+
+        when (val claim = UsernameRegistry.claim(user.uid, username)) {
+            UsernameRegistry.ClaimResult.TAKEN,
+            UsernameRegistry.ClaimResult.INVALID -> {
+                try { user.delete().await() } catch (ignored: Exception) { Unit }
+                auth.signOut()
+                onError("Username \"$username\" sudah dipakai. Pilih yang lain.")
+                return
+            }
+
+            // Unreachable Firestore: the account still works; the name
+            // is stored locally as the display name (documented tradeoff).
+            UsernameRegistry.ClaimResult.AVAILABLE,
+            UsernameRegistry.ClaimResult.UNAVAILABLE -> Unit
+        }
+
+        runCatching {
+            user.updateProfile(userProfileChangeRequest { displayName = username })
+                .await()
+        }
+        _currentUser.value = toNoxaUser(user)
+        _isGuestMode.value = false
+        onSuccess(_currentUser.value!!)
     }
 
     /** Maps provider errors to Indonesian, human messages (never raw codes). */

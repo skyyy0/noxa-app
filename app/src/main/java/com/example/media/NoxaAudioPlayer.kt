@@ -362,6 +362,23 @@ class NoxaAudioPlayer(private val context: Context) {
         }
     }
 
+    /**
+     * The queue position [next] would land on (shuffle & repeat honoured), or
+     * -1 when there is nothing to skip to. The view model reads this to resolve
+     * a queued preview's full audio *before* the skip switches tracks, so the
+     * skip button plays the full track instead of the 30 second clip.
+     */
+    val pendingNextIndex: Int
+        get() = when {
+            exoPlayer.hasNextMediaItem() -> exoPlayer.nextMediaItemIndex
+            exoPlayer.repeatMode == Player.REPEAT_MODE_ALL && exoPlayer.mediaItemCount > 0 -> 0
+            else -> -1
+        }
+
+    /** Same for [previous]; -1 means previous would only restart the song. */
+    val pendingPreviousIndex: Int
+        get() = if (exoPlayer.hasPreviousMediaItem()) exoPlayer.previousMediaItemIndex else -1
+
     fun previous() {
         if (_progress.value.positionMs > 3000 || !exoPlayer.hasPreviousMediaItem()) {
             seekTo(0L)

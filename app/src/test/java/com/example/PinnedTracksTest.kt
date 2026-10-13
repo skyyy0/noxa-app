@@ -63,6 +63,20 @@ class PinnedTracksTest {
     }
 
     @Test
+    fun perPinMatchingKeepsSisterPinsApart() {
+        // Regression: the home feed used the any-pin matcher while resolving
+        // each pin, so both Dewa 19 pins grabbed the same top track, the shelf
+        // rendered one song twice and Home crashed with a duplicate LazyRow
+        // key ("Key \"deezer:…\" was already used").
+        val kangen = PinnedTracks.ALL.first { it.title == "Kangen" }
+        val pupus = PinnedTracks.ALL.first { it.title == "Pupus" }
+        assertTrue(PinnedTracks.matches(kangen, "Kangen (2019 Remaster)", "Dewa 19"))
+        assertFalse(PinnedTracks.matches(kangen, "Pupus", "Dewa 19"))
+        assertTrue(PinnedTracks.matches(pupus, "Pupus", "Dewa 19"))
+        assertFalse(PinnedTracks.matches(pupus, "Kangen", "Dewa 19"))
+    }
+
+    @Test
     fun findUsesTheSameTolerantMatchingSoEveryShownPinGetsItsQuote() {
         // A catalogue title that travelled with a suffix still resolves to its
         // pin — this is exactly the case that used to show a card without quote.

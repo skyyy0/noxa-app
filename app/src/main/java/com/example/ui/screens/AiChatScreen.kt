@@ -21,15 +21,18 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -127,8 +130,11 @@ fun AiChatScreen(
             .fillMaxWidth()
             .background(NoxaBlack)
             .statusBarsPadding()
-            .imePadding()
-            .navigationBarsPadding()
+            // Keyboard and navigation bar share the bottom edge: taking the
+            // LARGER of the two (instead of padding both) keeps the composer
+            // exactly above the keyboard on 3-button nav phones too, where
+            // the old double padding shoved the input row up under the header.
+            .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))
     ) {
         AiHeader(onBack = onBack, onClear = onClearChat)
 
@@ -156,7 +162,9 @@ fun AiChatScreen(
                     )
                 }
             }
-            items(messages, key = { "${it.hashCode()}-$it" }) { message ->
+            // Positional key: two identical AI replies used to share a key
+            // ("hash-text") and crash the list with "Key was already used".
+            itemsIndexed(messages, key = { index, message -> "$index-${message.fromUser}" }) { _, message ->
                 AiMessageRow(
                     message = message,
                     isPlaying = message.songId != null && message.songId == playingSongId,

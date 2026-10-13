@@ -70,7 +70,7 @@ class AudiusRepository {
                     apiKey = developerKey
                 )
             }
-            response?.data.orEmpty().mapNotNull { it.toSong() }
+            response?.data.orEmpty().mapNotNull { it.toSong() }.distinctBy { it.id }
         }
 
     /**
@@ -93,22 +93,23 @@ class AudiusRepository {
         val response = safeCall {
             apiService.trendingTracks(limit = limit, appName = APP_NAME, apiKey = developerKey)
         }
-        response?.data.orEmpty().mapNotNull { it.toSong() }
+        // Ids are LazyRow keys on Home — never let a duplicate slip through.
+        response?.data.orEmpty().mapNotNull { it.toSong() }.distinctBy { it.id }
     }
 
     /** Real trending chart for a single genre. */
     suspend fun trendingByGenre(genre: String, limit: Int = SEARCH_LIMIT): List<Song> =
         withContext(Dispatchers.IO) {
             val response = safeCall {
-                apiService.trendingTracksByGenre(
-                    genre = genre,
-                    limit = limit,
-                    appName = APP_NAME,
-                    apiKey = developerKey
-                )
-            }
-            response?.data.orEmpty().mapNotNull { it.toSong() }
+            apiService.trendingTracksByGenre(
+                genre = genre,
+                limit = limit,
+                appName = APP_NAME,
+                apiKey = developerKey
+            )
         }
+        response?.data.orEmpty().mapNotNull { it.toSong() }.distinctBy { it.id }
+    }
 
     private suspend fun safeCall(block: suspend () -> Response<AudiusTrackListResponse>): AudiusTrackListResponse? {
         return try {

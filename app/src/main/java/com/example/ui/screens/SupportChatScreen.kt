@@ -13,8 +13,11 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -117,8 +120,9 @@ fun SupportChatScreen(
             // Without statusBarsPadding the back button slid under the clock
             // on tall-status-bar devices.
             .statusBarsPadding()
-            .imePadding()
-            .navigationBarsPadding()
+            // Keyboard and nav bar share the bottom edge — pad by the larger
+            // of the two so the composer never floats above the keyboard.
+            .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))
     ) {
         SupportChatHeader(onBack = onBack)
 

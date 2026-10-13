@@ -257,6 +257,44 @@ pengguna sebelum pemutaran pertama.
   rapi dan profesional (tanpa bahasa gaul), sapaan "Anda", kesan aplikasi
   resmi; saran chat yang tidak pantas dihapus. Efek & kontrol musik tetap.
 
+### v1.13.3 — tombol skip full-track, crash rak pin, keyboard chat, akun global
+
+* **Tombol skip pemutar penuh kini full-track** — skip (lanjut/sebelumnya)
+  dulu langsung lompat ke entri antrian mentah, jadi lagu Deezer berikutnya
+  mulai sebagai klip preview 30 detik; lagu utuh hanya didapat dengan keluar
+  dan menekan lagunya manual. Kini target skip di-resolve dulu persis seperti
+  tap (ladder resolusi bersama + `pendingNextIndex`/`pendingPreviousIndex` di
+  pemutar, hormati shuffle/repeat), dan entri antrian tetap fallback jujur
+  bila stream utuh tidak tersedia.
+* **Force-close rak pin (duplikat key) diperbaiki** — resolusi pin kini
+  memakai matcher *per-pin*: "Kangen" dan "Pupus" (sama-sama Dewa 19) dulu
+  bisa merebut lagu top-track yang sama → satu lagu tampil dua kali di rak →
+  LazyRow melempar `IllegalArgumentException: Key "deezer:…" was already
+  used` tepat saat Home selesai memuat. Semua rak Home (dan Audius) juga
+  kini `distinctBy { it.id }` sebagai jaring pengaman, dan key chat AI
+  berganti posisional (dua balasan AI identik dulu bisa crash list chat).
+* **Keyboard chat tidak lagi menumpuk ke atas** — komposer NOXA AI &
+  NOXA Support kini memakai `ime ∪ navigationBars` (padding = terbesar dari
+  keduanya) plus `android:windowSoftInputMode="adjustResize"` pada activity:
+  di HP dengan tombol navigasi 3-button, input dulu terdorong dobel ke atas
+  saat keyboard muncul.
+* **Login akun global diperbaiki** — sign-in & daftar kini konsultasikan
+  registry Telegraph (Telegraph = database tanpa key) di SEMUA build; dulu
+  build ber-Firebase melompatinya, sehingga akun developer `skydev@noxa.com`
+  (yang hanya hidup di registry) tidak pernah bisa masuk. Baca registry
+  kini retry dengan backoff, dan server yang tak terjangkau melapor jujur
+  ("server tidak terjangkau"), bukan menyalahkan password.
+* **Firebase valid kembali** — `google-services.json` untuk
+  `com.noxa.music` ikut di-commit (repo privat, pola sama dengan keystore
+  rilis): Firebase Auth/Firestore & Google Sign-In aktif otomatis di setiap
+  build CI, tanpa secret tambahan. Firebase jadi lapis kedua setelah
+  registry (konflik email diselesaikan registry dulu).
+* **Lapor bug via Telegram** — baris WhatsApp di Profil diganti Telegram
+  (ikon vektor pesan kertas, `@sekaynotdev`); laporan tetap bisa lewat Chat
+  NOXA Support di dalam aplikasi.
+* **Versi** — `versionName`/`versionCode` akhirnya ikut rilis: **1.13.3 (10)**.
+  Android minimal: **7.0 (API 24)**.
+
 ### Berbagi lagu: link NOXA & kartu canvas (v1.10)
 
 Sebelumnya membagikan lagu mengirim link Deezer (`deezer.com/track/…`). Sejak

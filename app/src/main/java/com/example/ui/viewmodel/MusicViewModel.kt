@@ -712,13 +712,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         }
         if (needsYoutubeResolve || wantsFullAudio) player.showResolving()
         safeScope.launch {
-            var resolved = streamResolver.resolve(song)
-            if (resolved == null && needsYoutubeResolve) {
-                resolved = runCatching { youtubeRepository.resolveAudio(song) }.getOrNull()
-            }
-            if (resolved == null && wantsFullAudio) {
-                resolved = runCatching { youtubeRepository.findFullAudio(song) }.getOrNull()
-            }
+            val resolved = resolvePlaybackSource(song)
             when {
                 resolved != null -> {
                     val resolvedQueue = queue.map { if (it.id == resolved.id) resolved else it }
@@ -735,6 +729,25 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 else -> player.playSong(song, queue, index)
             }
         }
+    }
+
+    /**
+     * One shared resolution ladder, used by both a fresh tap and a skip:
+     * your own resolver first, then native YouTube audio, then the full-audio
+     * matcher for a Deezer preview. Returns null when nothing better than the
+     * song's own (preview) URL was found.
+     */
+    private suspend fun resolvePlaybackSource(song: Song): Song? {
+        streamResolver.resolve(song)?.let { return it }
+        if (song.source == MusicSource.YOUTUBE && song.streamUrl.isBlank()) {
+            runCatching { youtubeRepository.resolveAudio(song) }.getOrNull()?.let { return it }
+        }
+        if (song.source == MusicSource.DEEZER && song.isPreview &&
+            usagePolicyStore.isYouTubePolicyAccepted
+        ) {
+            runCatching { youtubeRepository.findFullAudio(song) }.getOrNull()?.let { return it }
+        }
+        return null
     }
 
     /**
@@ -812,11 +825,47 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun next() {
-        player.next()
+        skipTo(player.pendingNextIndex, plainSkip = { player.next() })
     }
 
     fun previous() {
-        player.previous()
+        // More than three seconds in, previous restarts the current song —
+        // no track change, so nothing to resolve.
+        if (player.progress.value.positionMs > 3000L) {
+            player.previous()
+            return
+        }
+        skipTo(player.pendingPreviousIndex, plainSkip = { player.previous() })
+    }
+
+    /**
+     * Skip that keeps full audio. The old skip jumped straight to the raw
+     * queue entry, so a queued Deezer track started as its 30 second preview —
+     * only a manual tap (which resolves first) played the full song. Now the
+     * target is resolved exactly like a tap before the player advances, and
+     * the queued entry remains the honest fallback when no full stream exists.
+     */
+    private fun skipTo(targetIndex: Int, plainSkip: () -> Unit) {
+        val target = player.uiState.value.queue.getOrNull(targetIndex)
+        val needsFullAudio = target != null &&
+            ((target.source == MusicSource.YOUTUBE && target.streamUrl.isBlank()) ||
+                (target.source == MusicSource.DEEZER && target.isPreview &&
+                    usagePolicyStore.isYouTubePolicyAccepted))
+        if (!needsFullAudio) {
+            plainSkip()
+            return
+        }
+        player.showResolving()
+        safeScope.launch {
+            val resolved = resolvePlaybackSource(target)
+            if (resolved != null) {
+                player.updateSongStream(resolved)
+            } else {
+                // Nothing better available: the queued (preview) entry plays.
+                player.clearError()
+            }
+            plainSkip()
+        }
     }
 
     fun toggleShuffle() {

@@ -120,35 +120,48 @@ class NoxaBackend {
 
     /**
      * Reads the full backend state, or `null` when unreachable/corrupt.
+     *
+     * Telegraph occasionally answers slowly or rate-limits an anonymous call;
+     * a single failed read used to surface as "Email atau password salah."
+     * during sign-in. Every read now retries with a short backoff before it
+     * gives up honestly.
      */
     suspend fun readState(): BackendState? = withContext(Dispatchers.IO) {
-        val raw = httpGet("$API_BASE/getPage/$PAGE_PATH?return_content=true")
-            ?: return@withContext null
-        try {
-            val root = JSONObject(raw)
-            if (!root.optBoolean("ok")) return@withContext null
-            val content = root.getJSONObject("result").optJSONArray("content")
-                ?: return@withContext null
-            var payload: String? = null
-            for (i in 0 until content.length()) {
-                val node = content.optJSONObject(i) ?: continue
-                val children = node.optJSONArray("children") ?: continue
-                for (j in 0 until children.length()) {
-                    val text = children.optString(j)
-                    if (text.startsWith("{")) {
-                        payload = text
-                        break
+        repeat(READ_ATTEMPTS) { attempt ->
+            val raw = httpGet("$API_BASE/getPage/$PAGE_PATH?return_content=true")
+            if (raw != null) {
+                val parsed = try {
+                    val root = JSONObject(raw)
+                    if (!root.optBoolean("ok")) null else {
+                        val content = root.getJSONObject("result").optJSONArray("content")
+                        var payload: String? = null
+                        if (content != null) {
+                            for (i in 0 until content.length()) {
+                                val node = content.optJSONObject(i) ?: continue
+                                val children = node.optJSONArray("children") ?: continue
+                                for (j in 0 until children.length()) {
+                                    val text = children.optString(j)
+                                    if (text.startsWith("{")) {
+                                        payload = text
+                                        break
+                                    }
+                                }
+                                if (payload != null) break
+                            }
+                        }
+                        payload?.let { parseState(JSONObject(it)) }
                     }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.w(TAG, "State parse failed: ${e.message}")
+                    null
                 }
-                if (payload != null) break
+                if (parsed != null) return@withContext parsed
             }
-            payload?.let { parseState(JSONObject(it)) }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            Log.w(TAG, "State parse failed: ${e.message}")
-            null
+            if (attempt < READ_ATTEMPTS - 1) delay(350L * (attempt + 1))
         }
+        null
     }
 
     // ----------------------------------------------------------------- write
@@ -561,7 +574,7 @@ class NoxaBackend {
         val request = Request.Builder()
             .url(url)
             .header("Accept", "application/json")
-            .header("User-Agent", "NOXA/1.12")
+            .header("User-Agent", "NOXA/1.13.3")
             .build()
         client.newCall(request).execute().use { response ->
             if (response.isSuccessful) response.body?.string() else null
@@ -574,7 +587,7 @@ class NoxaBackend {
     private fun httpPost(url: String, body: FormBody): String? = try {
         val request = Request.Builder()
             .url(url)
-            .header("User-Agent", "NOXA/1.12")
+            .header("User-Agent", "NOXA/1.13.3")
             .post(body)
             .build()
         client.newCall(request).execute().use { response ->
@@ -663,6 +676,9 @@ class NoxaBackend {
         private const val PAGE_TITLE = "NOXA Backend Core"
         private const val PAGE_TOKEN =
             "7941e33f1aeb16bf70aed150bdf81ef1f0700eee189f7ca79cdbf2a416bf"
+
+        /** How often a read is retried before giving up (slow/rate-limited CDN). */
+        private const val READ_ATTEMPTS = 3
 
         /** Returned to callers when the backend itself is unreachable. */
         const val UNREACHABLE = "server_noxa_tidak_tersedia"

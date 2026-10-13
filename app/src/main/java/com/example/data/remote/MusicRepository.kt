@@ -184,11 +184,15 @@ class MusicRepository(
         val pinnedDeferred = async { gate.withPermit { safeShelf { loadPinned() } } }
         val artistsDeferred = async { gate.withPermit { safeShelf { loadPopularArtists() } } }
 
+        // Belt-and-braces de-duplication: every shelf is keyed by song id in
+        // a LazyRow, so a single duplicated id anywhere would crash Home with
+        // "Key \"deezer:…\" was already used".
         val sections = (shelfDeferred + chartDeferred + audiusDeferred)
             .awaitAll()
             .filterNotNull()
             .filter { it.songs.isNotEmpty() }
             .distinctBy { it.title }
+            .map { section -> section.copy(songs = section.songs.distinctBy { it.id }) }
 
         HomeFeed(
             hero = heroDeferred.await(),
@@ -210,14 +214,18 @@ class MusicRepository(
     private suspend fun loadPinned(): List<Song> = coroutineScope {
         PinnedTracks.ALL.map { pin ->
             async {
+                // Match THIS pin only. The old check matched *any* pin, so both
+                // Dewa 19 pins resolved to the same top track and the shelf
+                // rendered one song twice — a duplicate LazyRow key that
+                // force-closed the app while Home loaded.
                 val byTop = deezer.artistTopTracks(pin.artist, limit = 40)
-                    .firstOrNull { PinnedTracks.matchesResult(it.title, it.artist) }
+                    .firstOrNull { PinnedTracks.matches(pin, it.title, it.artist) }
                 byTop ?: deezer.search("${pin.artist} ${pin.title}", limit = 25)
-                    .firstOrNull { PinnedTracks.matchesResult(it.title, it.artist) }
+                    .firstOrNull { PinnedTracks.matches(pin, it.title, it.artist) }
                     ?: deezer.search(pin.title, limit = 25)
-                        .firstOrNull { PinnedTracks.matchesResult(it.title, it.artist) }
+                        .firstOrNull { PinnedTracks.matches(pin, it.title, it.artist) }
             }
-        }.awaitAll().filterNotNull()
+        }.awaitAll().filterNotNull().distinctBy { it.id }
     }
 
     /** Artist profiles for the Home avatar shelf (the shelf artists themselves). */

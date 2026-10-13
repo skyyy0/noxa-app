@@ -54,6 +54,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -783,12 +787,13 @@ fun ProfileScreen(
 
                 Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(NoxaBorder))
 
-                // Report Bug WhatsApp
+                // Report Bug via Telegram — lapor di aplikasi (Chat NOXA
+                // Support di atas) atau langsung ke Sky di Telegram.
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable {
-                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://wa.me/6289510146933?text=Halo%20Sky,%20saya%20ingin%20lapor%20bug%20di%20NOXA%20Android"))
+                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://t.me/sekaynotdev"))
                             context.startActivity(intent)
                         }
                         .padding(horizontal = 16.dp, vertical = 14.dp),
@@ -796,9 +801,16 @@ fun ProfileScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Phone, contentDescription = "WhatsApp", tint = NoxaLime, modifier = Modifier.size(20.dp))
+                        // Telegram paper-plane, drawn as a vector: Material has
+                        // no Telegram glyph and emoji never rendered on cards.
+                        Icon(
+                            imageVector = TelegramIcons.Plane,
+                            contentDescription = "Telegram",
+                            tint = Color(0xFF229ED9),
+                            modifier = Modifier.size(20.dp)
+                        )
                         Spacer(modifier = Modifier.width(12.dp))
-                        Text("Report Bug / Contact Sky (+6289510146933)", color = NoxaTextPrimary, fontSize = 14.sp)
+                        Text("Telegram Sky — @sekaynotdev", color = NoxaTextPrimary, fontSize = 14.sp)
                     }
                     Icon(Icons.Default.OpenInNew, contentDescription = "Open", tint = NoxaTextTertiary, modifier = Modifier.size(16.dp))
                 }
@@ -1269,3 +1281,38 @@ private fun authFieldColors() = OutlinedTextFieldDefaults.colors(
     unfocusedTextColor = NoxaTextPrimary,
     cursorColor = NoxaLime
 )
+
+/**
+ * Vector icons that Material does not ship — drawn here so cards never rely
+ * on emoji glyphs (which render inconsistently on OEM launchers).
+ */
+private object TelegramIcons {
+    /** The Telegram paper plane. */
+    val Plane: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "TelegramPlane",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f
+        ).apply {
+            path(fill = SolidColor(Color(0xFF229ED9))) {
+                moveTo(9.78f, 18.65f)
+                lineTo(10.06f, 14.42f)
+                lineTo(17.74f, 7.5f)
+                curveTo(18.08f, 7.19f, 17.67f, 7.04f, 17.22f, 7.31f)
+                lineTo(7.74f, 13.3f)
+                lineTo(3.64f, 12.0f)
+                curveTo(2.76f, 11.75f, 2.75f, 11.14f, 3.84f, 10.7f)
+                lineTo(19.81f, 4.54f)
+                curveTo(20.54f, 4.21f, 21.24f, 4.72f, 20.96f, 5.84f)
+                lineTo(18.24f, 18.65f)
+                curveTo(18.05f, 19.56f, 17.5f, 19.78f, 16.74f, 19.36f)
+                lineTo(12.6f, 16.3f)
+                lineTo(10.61f, 18.23f)
+                curveTo(10.38f, 18.46f, 10.19f, 18.65f, 9.78f, 18.65f)
+                close()
+            }
+        }.build()
+    }
+}

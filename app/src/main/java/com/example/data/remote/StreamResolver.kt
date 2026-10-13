@@ -77,7 +77,7 @@ class StreamResolver {
             val request = Request.Builder()
                 .url(url)
                 .header("Accept", "application/json")
-                .header("User-Agent", "NOXA/1.7")
+                .header("User-Agent", "NOXA/1.13.3")
                 .build()
             client.newCall(request).execute().use { response ->
                 if (response.isSuccessful) response.body?.string() else null
