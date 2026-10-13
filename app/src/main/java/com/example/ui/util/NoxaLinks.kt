@@ -19,7 +19,6 @@ object NoxaLinks {
 
     /** The familiar share message, now pointing at the NOXA link. */
     fun shareText(song: Song): String = buildString {
-        append("🎵 ")
         append(song.title)
         append(" — ")
         append(song.artist)

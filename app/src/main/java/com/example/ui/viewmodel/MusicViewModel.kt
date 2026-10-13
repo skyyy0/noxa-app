@@ -2,6 +2,7 @@ package com.example.ui.viewmodel
 
 import android.app.Activity
 import android.app.Application
+import android.util.Log
 import android.view.SurfaceView
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -24,6 +25,7 @@ import com.example.media.MvPlayer
 import com.example.media.PlaybackProgress
 import com.example.media.PlayerUiState
 import com.example.data.auth.NoxaUser
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -37,7 +39,10 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+
+private const val TAG = "MusicViewModel"
 
 /** How many preview tracks in a queue get warmed for full audio ahead of time. */
 private const val PREVIEW_WARM_LIMIT = 3
@@ -274,6 +279,22 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         dao.getPlaylistSummaries()
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    // -------------------------------------------------------------- NOXA AI
+
+    private val aiRepository by lazy {
+        com.example.data.ai.NoxaAiRepository(getApplication())
+    }
+
+    private val _aiMessages = MutableStateFlow<List<com.example.data.ai.AiChatMessage>>(emptyList())
+    val aiMessages: StateFlow<List<com.example.data.ai.AiChatMessage>> =
+        _aiMessages.asStateFlow()
+
+    private val _isAiThinking = MutableStateFlow(false)
+    val isAiThinking: StateFlow<Boolean> = _isAiThinking.asStateFlow()
+
+    private val _aiError = MutableStateFlow<String?>(null)
+    val aiError: StateFlow<String?> = _aiError.asStateFlow()
+
     init {
         authManager.attemptSilentAutoSignIn(viewModelScope)
         restoreLastSession()
@@ -286,6 +307,8 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         observeCurrentSong()
         observeAutoplaySimilar()
         observeWeeklyRecap()
+        // Restore the NOXA AI transcript so the assistant keeps continuity.
+        _aiMessages.value = aiRepository.loadHistory()
     }
 
     /**
@@ -330,10 +353,14 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     private fun recordPlay(song: Song?) {
         if (song == null) return
         viewModelScope.launch {
-            dao.insertPlayRecord(
-                PlayRecordEntity(songId = song.id, title = song.title, artist = song.artist)
-            )
-            dao.prunePlayRecords(System.currentTimeMillis() - PLAY_RECORD_RETENTION_MS)
+            try {
+                dao.insertPlayRecord(
+                    PlayRecordEntity(songId = song.id, title = song.title, artist = song.artist)
+                )
+                dao.prunePlayRecords(System.currentTimeMillis() - PLAY_RECORD_RETENTION_MS)
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not record play: ${e.message}")
+            }
         }
     }
 
@@ -423,7 +450,16 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         }
         _lyricsState.value = LyricsUiState.Loading
         lyricsJob = viewModelScope.launch {
-            val lyrics = lyricsRepository.lyricsFor(song)
+            // LRCLIB occasionally answers with non-JSON bodies; a parse hiccup
+            // must never kill playback (this runs on every song change).
+            val lyrics = try {
+                lyricsRepository.lyricsFor(song)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "Lyrics failed: ${e.javaClass.simpleName}: ${e.message}")
+                null
+            }
             _lyricsState.value = if (lyrics == null) {
                 LyricsUiState.Unavailable("Lirik untuk \"${song.title}\" belum tersedia.")
             } else {
@@ -445,17 +481,24 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             _isHomeLoading.value = true
             _homeError.value = null
-
-            val feed = repository.getHomeFeed()
-            _homeSections.value = feed.sections
-            _heroSong.value = feed.hero
-            _pinnedSongs.value = feed.pinned
-            _popularArtists.value = feed.artists
-            if (feed.sections.isEmpty() && feed.hero == null) {
+            try {
+                val feed = repository.getHomeFeed()
+                _homeSections.value = feed.sections
+                _heroSong.value = feed.hero
+                _pinnedSongs.value = feed.pinned
+                _popularArtists.value = feed.artists
+                if (feed.sections.isEmpty() && feed.hero == null) {
+                    _homeError.value =
+                        "Tidak ada data dari server musik. Periksa koneksi internet lalu coba lagi."
+                }
+            } catch (e: Exception) {
+                // A failed feed must surface as a retryable error, never a crash.
+                Log.w(TAG, "Home feed failed: ${e.javaClass.simpleName}: ${e.message}")
                 _homeError.value =
-                    "Tidak ada data dari server musik. Periksa koneksi internet lalu coba lagi."
+                    "Beranda tidak bisa dimuat. Periksa koneksi internet lalu coba lagi."
+            } finally {
+                _isHomeLoading.value = false
             }
-            _isHomeLoading.value = false
         }
     }
 
@@ -685,7 +728,9 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             queue
                 .filter { it.source == MusicSource.YOUTUBE && it.streamUrl.isBlank() }
                 .forEach { queued ->
-                    youtubeRepository.resolveAudio(queued)?.let { player.updateSongStream(it) }
+                    runCatching { youtubeRepository.resolveAudio(queued) }
+                        .getOrNull()
+                        ?.let { player.updateSongStream(it) }
                 }
 
             if (usagePolicyStore.isYouTubePolicyAccepted) {
@@ -693,7 +738,9 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                     .filter { it.source == MusicSource.DEEZER && it.isPreview }
                     .take(PREVIEW_WARM_LIMIT)
                     .forEach { queued ->
-                        youtubeRepository.findFullAudio(queued)?.let { player.updateSongStream(it) }
+                        runCatching { youtubeRepository.findFullAudio(queued) }
+                            .getOrNull()
+                            ?.let { player.updateSongStream(it) }
                     }
             }
         }
@@ -718,7 +765,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         }
         viewModelScope.launch {
             val resolved = if (needsYoutube) {
-                youtubeRepository.resolveAudio(song)
+                runCatching { youtubeRepository.resolveAudio(song) }.getOrNull()
             } else {
                 runCatching { youtubeRepository.findFullAudio(song) }.getOrNull()
             }
@@ -815,7 +862,8 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         mvAutoRetries = 0
         _videoUiState.value = VideoUiState.Loading
         viewModelScope.launch {
-            _videoUiState.value = resolveMvState(song)
+            _videoUiState.value = runCatching { resolveMvState(song) }
+                .getOrElse { VideoUiState.Unavailable("MV tidak tersedia untuk lagu ini.") }
         }
     }
 
@@ -856,7 +904,8 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         mvAutoRetries++
         viewModelScope.launch {
             _videoUiState.value = VideoUiState.Loading
-            val state = resolveMvState(song)
+            val state = runCatching { resolveMvState(song) }
+                .getOrElse { VideoUiState.Unavailable("MV tidak tersedia untuk lagu ini.") }
             _videoUiState.value = state
             (state as? VideoUiState.Ready)?.let { ready ->
                 mvPlayer.playOnSurface(
@@ -996,5 +1045,327 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     override fun onCleared() {
         mvPlayer.release()
         super.onCleared()
+    }
+
+    // ------------------------------------------------- NOXA Support & Admin
+
+    /** Keyless shared backend: accounts, roles, support threads. */
+    private val backend = com.example.data.support.NoxaBackend()
+
+    private val _supportState =
+        MutableStateFlow<com.example.ui.screens.SupportUiState>(com.example.ui.screens.SupportUiState.Loading)
+    val supportState: StateFlow<com.example.ui.screens.SupportUiState> =
+        _supportState.asStateFlow()
+
+    private val _devState =
+        MutableStateFlow<com.example.ui.screens.DevUiState>(com.example.ui.screens.DevUiState.Loading)
+    val devState: StateFlow<com.example.ui.screens.DevUiState> = _devState.asStateFlow()
+
+    /** Loads the user's support thread (or explains why chat is unavailable). */
+    fun openSupportChat() {
+        viewModelScope.launch {
+            _supportState.value = com.example.ui.screens.SupportUiState.Loading
+            _supportState.value = loadSupportState()
+        }
+    }
+
+    fun refreshSupportChat() {
+        viewModelScope.launch { _supportState.value = loadSupportState() }
+    }
+
+    private suspend fun loadSupportState(): com.example.ui.screens.SupportUiState {
+        val user = authManager.currentUser.value
+            ?: return com.example.ui.screens.SupportUiState.NeedsLogin
+        val state = runCatching { backend.readState() }.getOrNull()
+            ?: return com.example.ui.screens.SupportUiState.Offline
+        return com.example.ui.screens.SupportUiState.Ready(state.threads[user.uid])
+    }
+
+    /**
+     * Sends one user message. The latest crash trace (captured by
+     * NoxaApplication) rides along automatically on the first message of a
+     * turn, so bug reports arrive with the real stack trace attached.
+     */
+    fun sendSupportMessage(text: String) {
+        val user = authManager.currentUser.value ?: return
+        val ready = _supportState.value as? com.example.ui.screens.SupportUiState.Ready ?: return
+        if (ready.sending) return
+        viewModelScope.launch {
+            _supportState.value = ready.copy(sending = true, error = null)
+            val crash = readLatestCrashTrace()
+            val ok = runCatching {
+                backend.sendUserMessage(
+                    uid = user.uid,
+                    username = user.displayName ?: user.email ?: "user",
+                    text = text,
+                    crashTrace = crash
+                )
+            }.getOrDefault(false)
+            _supportState.value = when (val fresh = loadSupportState()) {
+                is com.example.ui.screens.SupportUiState.Ready -> fresh.copy(
+                    error = if (ok) null else "Pesan gagal dikirim. Periksa koneksi lalu coba lagi."
+                )
+
+                else -> fresh
+            }
+        }
+    }
+
+    private fun readLatestCrashTrace(): String? = try {
+        java.io.File(getApplication<Application>().filesDir, "crash/latest-crash.txt")
+            .takeIf { it.exists() && it.length() > 0 }
+            ?.readText()
+    } catch (e: Exception) {
+        null
+    }
+
+    // ------------------------------------------------------------ admin only
+
+    /** Loads the NOXA Admin console (developer role only). */
+    fun openDevPanel() {
+        viewModelScope.launch {
+            _devState.value = com.example.ui.screens.DevUiState.Loading
+            _devState.value = loadDevState()
+        }
+    }
+
+    fun refreshDevPanel() {
+        viewModelScope.launch { _devState.value = loadDevState() }
+    }
+
+    private suspend fun loadDevState(): com.example.ui.screens.DevUiState {
+        val user = authManager.currentUser.value
+        if (user == null || user.role != com.example.data.support.AccountRole.DEVELOPER) {
+            return com.example.ui.screens.DevUiState.Offline
+        }
+        val state = runCatching { backend.readState() }.getOrNull()
+            ?: return com.example.ui.screens.DevUiState.Offline
+        return com.example.ui.screens.DevUiState.Ready(
+            accounts = state.accounts.values
+                .map {
+                    com.example.data.support.BackendLogin(
+                        uid = it.uid,
+                        email = it.email,
+                        username = it.username,
+                        role = it.role,
+                        createdAt = it.createdAt
+                    )
+                }
+                .sortedByDescending { it.createdAt },
+            threads = state.threads.values
+                .sortedByDescending { it.lastUserAt.coerceAtLeast(it.lastSupportAt) }
+        )
+    }
+
+    /** Staff reply: clears the user's pending flag, unlocking their composer. */
+    fun sendSupportReply(threadUid: String, text: String) {
+        viewModelScope.launch {
+            (_devState.value as? com.example.ui.screens.DevUiState.Ready)?.let {
+                _devState.value = it.copy(busy = true)
+            }
+            runCatching { backend.sendSupportMessage(threadUid, text) }
+            _devState.value = loadDevState()
+        }
+    }
+
+    /** Dev-console account creation with a role. Result: null = success. */
+    fun createAccountAsDev(
+        email: String,
+        username: String,
+        password: String,
+        role: com.example.data.support.AccountRole,
+        onResult: (String?) -> Unit
+    ) {
+        viewModelScope.launch {
+            if (!com.example.data.auth.LocalAccountStore.isEmailFormatValid(email)) {
+                onResult("Format email tidak valid.")
+                return@launch
+            }
+            com.example.data.auth.UsernameRegistry.validate(username)?.let {
+                onResult(it)
+                return@launch
+            }
+            if (password.length < 6) {
+                onResult("Password minimal 6 karakter.")
+                return@launch
+            }
+            (_devState.value as? com.example.ui.screens.DevUiState.Ready)?.let {
+                _devState.value = it.copy(busy = true)
+            }
+            val (login, failure) =
+                backend.createAccountAsStaff(email, username, password, role)
+            _devState.value = loadDevState()
+            onResult(if (login != null) null else failure ?: "Akun gagal dibuat. Coba lagi.")
+        }
+    }
+
+    fun changeAccountRole(uid: String, role: com.example.data.support.AccountRole) {
+        viewModelScope.launch {
+            runCatching { backend.updateRole(uid, role) }
+            _devState.value = loadDevState()
+        }
+    }
+
+    /**
+     * Sends one message to NOXA AI. Replies can carry action tags: a play tag
+     * resolves the song against the catalogue and starts it immediately, a
+     * playlist tag builds the playlist — exactly the "AI controls the music"
+     * behaviour, executed by the app rather than trusted to the model.
+     */
+    fun sendAiMessage(text: String) {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty() || _isAiThinking.value) return
+        _aiMessages.update { it + com.example.data.ai.AiChatMessage(fromUser = true, text = trimmed) }
+        _aiError.value = null
+        _isAiThinking.value = true
+        viewModelScope.launch {
+            val reply = try {
+                aiRepository.chat(trimmed)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "NOXA AI failed: ${e.javaClass.simpleName}: ${e.message}")
+                _aiError.value = "NOXA AI lagi sulit dihubungi. Periksa koneksi lalu coba lagi."
+                _isAiThinking.value = false
+                return@launch
+            }
+
+            var cardSong: Song? = null
+            var note: String? = null
+            val notes = mutableListOf<String>()
+            for (action in reply.actions) {
+                when (action) {
+                    is com.example.data.ai.NoxaAiAction.Play -> {
+                        val song = resolveAiSong(action)
+                        if (song != null) {
+                            cardSong = song
+                            playSong(song)
+                        } else {
+                            note = "lagu nggak ketemu di katalog NOXA"
+                        }
+                    }
+
+                    is com.example.data.ai.NoxaAiAction.CreatePlaylist -> {
+                        createPlaylistFromAi(action)?.let { notes.add(it) }
+                    }
+                }
+            }
+
+            val body = if (notes.isEmpty()) reply.text
+            else reply.text + "\n" + notes.joinToString("\n")
+            _aiMessages.update {
+                it + com.example.data.ai.AiChatMessage(
+                    fromUser = false,
+                    text = body,
+                    songId = cardSong?.id,
+                    songTitle = cardSong?.title,
+                    songArtist = cardSong?.artist,
+                    songArtwork = cardSong?.artworkUrl?.takeIf { url -> url.isNotBlank() },
+                    songNote = note
+                )
+            }
+            aiRepository.saveHistory(_aiMessages.value)
+            _isAiThinking.value = false
+        }
+    }
+
+    /** Song card tap: replay by id, or toggle pause when it is already on. */
+    fun playAiSongMessage(message: com.example.data.ai.AiChatMessage) {
+        val id = message.songId ?: return
+        if (player.uiState.value.currentSong?.id == id) {
+            togglePlayPause()
+            return
+        }
+        viewModelScope.launch {
+            val song = runCatching { repository.songFromDeepLink(id) }.getOrNull()
+                ?: runCatching {
+                    if (id.startsWith("youtube:")) {
+                        youtubeRepository.songByVideoId(id.removePrefix("youtube:"))
+                    } else null
+                }.getOrNull()
+                ?: runCatching {
+                    repository.search(
+                        listOfNotNull(message.songArtist, message.songTitle).joinToString(" ")
+                    ).firstOrNull()
+                }.getOrNull()
+            if (song != null) playSong(song) else {
+                player.showError("Lagu dari NOXA AI tidak bisa dimuat ulang.")
+            }
+        }
+    }
+
+    fun clearAiChat() {
+        _aiMessages.value = emptyList()
+        _aiError.value = null
+        aiRepository.resetSession()
+    }
+
+    /** Finds the AI's requested song in the catalogue, best match first. */
+    private suspend fun resolveAiSong(action: com.example.data.ai.NoxaAiAction.Play): Song? {
+        val query = listOf(action.artist, action.title)
+            .filter { it.isNotBlank() }
+            .joinToString(" ")
+        val results = runCatching { repository.search(query) }.getOrDefault(emptyList())
+        return results.firstOrNull { song ->
+            val titleMatches = song.title.contains(action.title, ignoreCase = true) ||
+                action.title.contains(song.title, ignoreCase = true)
+            val artistMatches = action.artist.isBlank() ||
+                song.artist.contains(action.artist, ignoreCase = true) ||
+                action.artist.contains(song.artist, ignoreCase = true)
+            titleMatches && artistMatches
+        } ?: results.firstOrNull()
+    }
+
+    /** Builds the AI-requested playlist; returns a status line for the chat. */
+    private suspend fun createPlaylistFromAi(
+        action: com.example.data.ai.NoxaAiAction.CreatePlaylist
+    ): String? {
+        val name = action.name.ifBlank { "Playlist NOXA AI" }
+        var playlistId: Long? = null
+        var added = 0
+        for (track in action.tracks.take(20)) {
+            val song = runCatching { repository.search(track) }
+                .getOrDefault(emptyList())
+                .firstOrNull() ?: continue
+            if (playlistId == null) {
+                playlistId = dao.insertPlaylist(
+                    PlaylistEntity(name = name, description = "Dibuat oleh NOXA AI")
+                )
+            }
+            dao.insertPlaylistSong(PlaylistSongEntity.fromSong(playlistId, song, added))
+            added++
+        }
+        return if (playlistId != null && added > 0) {
+            "Playlist \"$name\" sudah jadi, berisi $added lagu. Cek di Library."
+        } else {
+            "Playlist gagal dibuat — coba sebut judul lagu yang lebih spesifik."
+        }
+    }
+
+    // ---------------------------------------------------- pengaturan akun
+
+    /** Ganti username (server + mirror lokal). Result: null = sukses. */
+    fun changeUsername(newUsername: String, onResult: (String?) -> Unit) {
+        authManager.changeUsername(
+            newUsername,
+            viewModelScope,
+            onSuccess = { onResult(null) },
+            onError = { onResult(it) }
+        )
+    }
+
+    /** Ganti password (verifikasi password lama dulu). Result: null = sukses. */
+    fun changePassword(
+        currentPassword: String,
+        newPassword: String,
+        onResult: (String?) -> Unit
+    ) {
+        authManager.changePassword(
+            currentPassword,
+            newPassword,
+            viewModelScope,
+            onSuccess = { onResult(null) },
+            onError = { onResult(it) }
+        )
     }
 }

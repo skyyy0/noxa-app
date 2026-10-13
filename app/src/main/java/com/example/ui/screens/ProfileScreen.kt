@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -36,6 +37,7 @@ import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.SupportAgent
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -64,6 +66,8 @@ import com.example.data.local.AppSettingsStore
 import com.example.ui.theme.NoxaBlack
 import com.example.ui.theme.NoxaBorder
 import com.example.ui.theme.NoxaLime
+import com.example.ui.theme.NoxaPurple
+import com.example.ui.theme.NoxaPurpleDeep
 import com.example.ui.theme.NoxaSurface
 import com.example.ui.theme.NoxaSurfaceElevated
 import com.example.ui.theme.NoxaSurfaceSecondary
@@ -87,6 +91,13 @@ fun ProfileScreen(
     onSetAutoResumeOnOpen: (Boolean) -> Unit,
     onSignOut: () -> Unit,
     onNavigateToAboutSky: () -> Unit,
+    onOpenAiChat: () -> Unit,
+    onOpenSupportChat: () -> Unit,
+    onOpenDevPanel: () -> Unit,
+    /** null = sukses, String = pesan error. */
+    onChangeUsername: (String, (String?) -> Unit) -> Unit,
+    /** null = sukses, String = pesan error. */
+    onChangePassword: (String, String, (String?) -> Unit) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -101,6 +112,14 @@ fun ProfileScreen(
     var authPassword by remember { mutableStateOf("") }
     var authUsername by remember { mutableStateOf("") }
     var authError by remember { mutableStateOf<String?>(null) }
+
+    // NOXA Bot eye-cover state: while the password field is focused and has
+    // content, the mascot covers its eyes ("I'm not looking!").
+    var passwordFocused by remember { mutableStateOf(false) }
+
+    // Account settings dialogs.
+    var showUsernameDialog by remember { mutableStateOf(false) }
+    var showPasswordDialog by remember { mutableStateOf(false) }
 
     Column(
         modifier = modifier
@@ -265,18 +284,48 @@ fun ProfileScreen(
                         colors = authFieldColors()
                     )
                     Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = authPassword,
-                        onValueChange = { authPassword = it; authError = null },
-                        label = { Text("Password") },
-                        singleLine = true,
-                        visualTransformation = PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("auth_password_field"),
-                        colors = authFieldColors()
-                    )
+                    if (registerMode) {
+                        // Password with the NOXA Bot mascot + strength meter.
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            com.example.ui.components.PasswordGuardRobot(
+                                covering = passwordFocused && authPassword.isNotEmpty()
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            OutlinedTextField(
+                                value = authPassword,
+                                onValueChange = { authPassword = it; authError = null },
+                                label = { Text("Password") },
+                                singleLine = true,
+                                visualTransformation = PasswordVisualTransformation(),
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .onFocusChanged { passwordFocused = it.isFocused }
+                                    .testTag("auth_password_field"),
+                                colors = authFieldColors()
+                            )
+                        }
+                        if (authPassword.isNotEmpty()) {
+                            Spacer(modifier = Modifier.height(6.dp))
+                            com.example.ui.components.PasswordStrengthBar(
+                                password = authPassword,
+                                modifier = Modifier.padding(start = 64.dp)
+                            )
+                        }
+                    } else {
+                        OutlinedTextField(
+                            value = authPassword,
+                            onValueChange = { authPassword = it; authError = null },
+                            label = { Text("Password") },
+                            singleLine = true,
+                            visualTransformation = PasswordVisualTransformation(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("auth_password_field"),
+                            colors = authFieldColors()
+                        )
+                    }
 
                     authError?.let { message ->
                         Spacer(modifier = Modifier.height(6.dp))
@@ -353,6 +402,48 @@ fun ProfileScreen(
             }
         }
 
+        // PENGATURAN AKUN — ganti username & password dari aplikasi.
+        if (currentUser != null && currentUser.email != null) {
+            Text(
+                text = "Pengaturan Akun",
+                color = NoxaTextPrimary,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
+            )
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = NoxaSurfaceElevated),
+                border = androidx.compose.foundation.BorderStroke(1.dp, NoxaBorder)
+            ) {
+                Column(modifier = Modifier.padding(vertical = 4.dp)) {
+                    AccountSettingRow(
+                        icon = Icons.Default.Person,
+                        title = "Ganti Username",
+                        subtitle = "Username tampil di profil & chat support",
+                        onClick = { showUsernameDialog = true },
+                        tag = "settings_change_username"
+                    )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(1.dp)
+                            .background(NoxaBorder)
+                    )
+                    AccountSettingRow(
+                        icon = Icons.Default.Security,
+                        title = "Ganti Password",
+                        subtitle = "Verifikasi password lama dulu",
+                        onClick = { showPasswordDialog = true },
+                        tag = "settings_change_password"
+                    )
+                }
+            }
+        }
+
         Spacer(modifier = Modifier.height(24.dp))
 
         // MINI WEEKLY RECAP
@@ -375,7 +466,7 @@ fun ProfileScreen(
         ) {
             if (weeklyRecap.plays == 0) {
                 Text(
-                    text = "Belum ada lagu yang diputar minggu ini. Putar lagu dulu ya 🎵",
+                    text = "Belum ada lagu yang diputar minggu ini. Putar lagu dulu ya.",
                     color = NoxaTextSecondary,
                     fontSize = 13.sp,
                     modifier = Modifier.padding(16.dp)
@@ -488,6 +579,155 @@ fun ProfileScreen(
         }
 
         Spacer(modifier = Modifier.height(20.dp))
+
+        // NOXA AI — asisten musik yang bisa putar lagu & bikin playlist.
+        Text(
+            text = "Asisten",
+            color = NoxaTextPrimary,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
+        )
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .clickable { onOpenAiChat() }
+                .testTag("ai_chat_nav_card"),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = NoxaSurfaceElevated),
+            border = androidx.compose.foundation.BorderStroke(1.5.dp, NoxaLime.copy(alpha = 0.5f))
+        ) {
+            Row(
+                modifier = Modifier.padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                com.example.ui.screens.AiAvatar(size = 46.dp)
+                Spacer(modifier = Modifier.width(14.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Chat dengan NOXA AI",
+                        color = NoxaTextPrimary,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "Minta putar lagu, bikin playlist, atau curhat — asisten musik kamu",
+                        color = NoxaTextSecondary,
+                        fontSize = 12.sp
+                    )
+                }
+                Icon(
+                    imageVector = Icons.Default.ChevronRight,
+                    contentDescription = null,
+                    tint = NoxaLime,
+                    modifier = Modifier.size(24.dp)
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        // CHAT DENGAN NOXA SUPPORT — lapor bug & keluhan langsung dari app.
+        Text(
+            text = "Bantuan",
+            color = NoxaTextPrimary,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
+        )
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .clickable { onOpenSupportChat() }
+                .testTag("support_chat_nav_card"),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = NoxaSurfaceElevated),
+            border = androidx.compose.foundation.BorderStroke(1.5.dp, NoxaPurple.copy(alpha = 0.5f))
+        ) {
+            Row(
+                modifier = Modifier.padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(46.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(NoxaPurple),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.SupportAgent,
+                        contentDescription = "NOXA Support",
+                        tint = NoxaTextPrimary,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.width(14.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    com.example.ui.components.SupportIdentityRow(name = "Chat dengan NOXA Support")
+                    Text(
+                        text = "Lapor bug atau keluhan — dibalas langsung di aplikasi",
+                        color = NoxaTextSecondary,
+                        fontSize = 12.sp
+                    )
+                }
+                Icon(
+                    imageVector = Icons.Default.ChevronRight,
+                    contentDescription = null,
+                    tint = NoxaPurple,
+                    modifier = Modifier.size(24.dp)
+                )
+            }
+        }
+
+        // NOXA ADMIN — hanya untuk akun developer.
+        if (currentUser?.role == com.example.data.support.AccountRole.DEVELOPER) {
+            Spacer(modifier = Modifier.height(12.dp))
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp)
+                    .clickable { onOpenDevPanel() }
+                    .testTag("dev_panel_nav_card"),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = NoxaSurfaceSecondary),
+                border = androidx.compose.foundation.BorderStroke(1.5.dp, NoxaPurple)
+            ) {
+                Row(
+                    modifier = Modifier.padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(46.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(NoxaPurpleDeep),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        com.example.ui.components.VerifiedBadgePurple(size = 26.dp)
+                    }
+                    Spacer(modifier = Modifier.width(14.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        com.example.ui.components.SupportIdentityRow(name = "NOXA Admin")
+                        Text(
+                            text = "Kelola akun, buat akun admin/partner, balas laporan user",
+                            color = NoxaTextSecondary,
+                            fontSize = 12.sp
+                        )
+                    }
+                    Icon(
+                        imageVector = Icons.Default.ChevronRight,
+                        contentDescription = null,
+                        tint = NoxaPurple,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
 
         // Direct Links Card
         Card(
@@ -752,7 +992,207 @@ fun ProfileScreen(
             }
         }
     }
+
+    if (showUsernameDialog && currentUser != null) {
+        ChangeUsernameDialog(
+            currentUsername = currentUser.displayName.orEmpty(),
+            onChange = onChangeUsername,
+            onDismiss = { showUsernameDialog = false }
+        )
+    }
+    if (showPasswordDialog) {
+        ChangePasswordDialog(
+            onChange = onChangePassword,
+            onDismiss = { showPasswordDialog = false }
+        )
+    }
 }
+
+/** One navigation row in the "Pengaturan Akun" card. */
+@Composable
+private fun AccountSettingRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit,
+    tag: String
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onClick() }
+            .padding(horizontal = 16.dp, vertical = 14.dp)
+            .testTag(tag),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(icon, contentDescription = null, tint = NoxaLime, modifier = Modifier.size(20.dp))
+            Spacer(modifier = Modifier.width(12.dp))
+            Column {
+                Text(title, color = NoxaTextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                Text(subtitle, color = NoxaTextSecondary, fontSize = 11.sp)
+            }
+        }
+        Icon(
+            Icons.Default.ChevronRight,
+            contentDescription = null,
+            tint = NoxaTextTertiary,
+            modifier = Modifier.size(16.dp)
+        )
+    }
+}
+
+/** Dialog for changing the signed-in account's username. */
+@Composable
+private fun ChangeUsernameDialog(
+    currentUsername: String,
+    onChange: (String, (String?) -> Unit) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var value by remember { mutableStateOf(currentUsername) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        containerColor = NoxaSurfaceElevated,
+        title = {
+            Text("Ganti Username", color = NoxaTextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = value,
+                    onValueChange = { value = it; error = null },
+                    label = { Text("Username baru") },
+                    singleLine = true,
+                    colors = authFieldColors(),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                error?.let {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(it, color = NoxaErrorText, fontSize = 12.sp)
+                }
+            }
+        },
+        confirmButton = {
+            Text(
+                text = if (busy) "Menyimpan..." else "Simpan",
+                color = if (busy) NoxaTextTertiary else NoxaLime,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(10.dp))
+                    .clickable(enabled = !busy) {
+                        busy = true
+                        onChange(value.trim()) { result ->
+                            busy = false
+                            if (result == null) onDismiss() else error = result
+                        }
+                    }
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+            )
+        },
+        dismissButton = {
+            Text(
+                text = "Batal",
+                color = NoxaTextSecondary,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(10.dp))
+                    .clickable { onDismiss() }
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+            )
+        }
+    )
+}
+
+/** Dialog for changing the password (old + new + strength meter). */
+@Composable
+private fun ChangePasswordDialog(
+    onChange: (String, String, (String?) -> Unit) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var current by remember { mutableStateOf("") }
+    var fresh by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        containerColor = NoxaSurfaceElevated,
+        title = {
+            Text("Ganti Password", color = NoxaTextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = current,
+                    onValueChange = { current = it; error = null },
+                    label = { Text("Password lama") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    colors = authFieldColors(),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = fresh,
+                    onValueChange = { fresh = it; error = null },
+                    label = { Text("Password baru") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    colors = authFieldColors(),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                if (fresh.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(7.dp))
+                    com.example.ui.components.PasswordStrengthBar(password = fresh)
+                }
+                error?.let {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(it, color = NoxaErrorText, fontSize = 12.sp)
+                }
+            }
+        },
+        confirmButton = {
+            Text(
+                text = if (busy) "Menyimpan..." else "Simpan",
+                color = if (busy) NoxaTextTertiary else NoxaLime,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(10.dp))
+                    .clickable(enabled = !busy) {
+                        busy = true
+                        onChange(current, fresh) { result ->
+                            busy = false
+                            if (result == null) onDismiss() else error = result
+                        }
+                    }
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+            )
+        },
+        dismissButton = {
+            Text(
+                text = "Batal",
+                color = NoxaTextSecondary,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(10.dp))
+                    .clickable { onDismiss() }
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+            )
+        }
+    )
+}
+
+private val NoxaErrorText = androidx.compose.ui.graphics.Color(0xFFFF6B61)
 
 /** Handle shape for usernames registered through Firestore. */
 private val USERNAME_HANDLE = Regex("^[A-Za-z0-9_.]{3,20}$")

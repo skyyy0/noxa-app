@@ -64,6 +64,7 @@ class NoxaApplication : Application(), ImageLoaderFactory {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        installCrashLogger()
         try {
             com.google.firebase.FirebaseApp.initializeApp(this)
         } catch (e: Exception) {
@@ -79,6 +80,32 @@ class NoxaApplication : Application(), ImageLoaderFactory {
         player = NoxaAudioPlayer(this)
         authManager = com.example.data.auth.AuthManager(this)
         connectMediaSession()
+    }
+
+    /**
+     * Keeps the last crash stack trace on disk (`files/crash/latest-crash.txt`).
+     * The exception is still delivered to the previous handler (the app behaves
+     * exactly as before), but the NOXA support chat can now attach the real
+     * stack trace to a bug report instead of guessing.
+     */
+    private fun installCrashLogger() {
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            try {
+                val dir = java.io.File(filesDir, "crash").apply { mkdirs() }
+                java.io.File(dir, "latest-crash.txt").writeText(
+                    buildString {
+                        appendLine("time=${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US).format(java.util.Date())}")
+                        appendLine("thread=${thread.name}")
+                        appendLine(throwable.toString())
+                        throwable.stackTrace.forEach { appendLine("\tat $it") }
+                    }
+                )
+            } catch (_: Exception) {
+                // Never let the logger itself cause a second failure.
+            }
+            previous?.uncaughtException(thread, throwable)
+        }
     }
 
     private fun connectMediaSession() {

@@ -61,14 +61,17 @@ import com.example.ui.components.MiniPlayer
 import com.example.ui.components.ShareSheetDialog
 import com.example.ui.components.YouTubePolicyDialog
 import com.example.ui.screens.AboutSkyScreen
+import com.example.ui.screens.AiChatScreen
 import com.example.ui.screens.AlbumScreen
 import com.example.ui.screens.ArtistScreen
+import com.example.ui.screens.DevPanelScreen
 import com.example.ui.screens.EqualizerScreen
 import com.example.ui.screens.HomeScreen
 import com.example.ui.screens.LibraryScreen
 import com.example.ui.screens.PlaylistDetailScreen
 import com.example.ui.screens.ProfileScreen
 import com.example.ui.screens.SearchScreen
+import com.example.ui.screens.SupportChatScreen
 import com.example.ui.theme.NoxaBlack
 import com.example.ui.theme.NoxaBorder
 import com.example.ui.theme.NoxaLime
@@ -110,6 +113,15 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector)
         const val ROUTE = "album/{$ARG_ID}"
         fun routeFor(id: Long) = "album/$id"
     }
+
+    /** NOXA AI chat — asisten musik yang bisa kontrol pemutar. */
+    object AiChat : Screen("ai_chat", "AI", Icons.Default.Person)
+
+    /** NOXA Support chat (lapor bug & keluhan). */
+    object SupportChat : Screen("support_chat", "Support", Icons.Default.Person)
+
+    /** NOXA Admin console — developer role only. */
+    object DevPanel : Screen("dev_panel", "Admin", Icons.Default.Person)
 }
 
 @Composable
@@ -479,6 +491,21 @@ fun NoxaApp(
                         onSignOut = { viewModel.signOut() },
                         onNavigateToAboutSky = {
                             navController.navigate(Screen.AboutSky.route)
+                        },
+                        onOpenAiChat = {
+                            navController.navigate(Screen.AiChat.route)
+                        },
+                        onOpenSupportChat = {
+                            navController.navigate(Screen.SupportChat.route)
+                        },
+                        onOpenDevPanel = {
+                            navController.navigate(Screen.DevPanel.route)
+                        },
+                        onChangeUsername = { name, onResult ->
+                            viewModel.changeUsername(name, onResult)
+                        },
+                        onChangePassword = { current, fresh, onResult ->
+                            viewModel.changePassword(current, fresh, onResult)
                         }
                     )
                 }
@@ -489,6 +516,49 @@ fun NoxaApp(
                         onPlaySong = { song -> viewModel.playSong(song) },
                         onTogglePlayPause = { viewModel.togglePlayPause() },
                         onBack = { navController.popBackStack() }
+                    )
+                }
+
+                composable(Screen.AiChat.route) {
+                    val aiMessages by viewModel.aiMessages.collectAsStateWithLifecycle()
+                    val isAiThinking by viewModel.isAiThinking.collectAsStateWithLifecycle()
+                    val aiError by viewModel.aiError.collectAsStateWithLifecycle()
+                    AiChatScreen(
+                        messages = aiMessages,
+                        isThinking = isAiThinking,
+                        error = aiError,
+                        playingSongId = playerState.currentSong?.id,
+                        onBack = { navController.popBackStack() },
+                        onSend = { viewModel.sendAiMessage(it) },
+                        onPlaySongMessage = { viewModel.playAiSongMessage(it) },
+                        onClearChat = { viewModel.clearAiChat() }
+                    )
+                }
+
+                composable(Screen.SupportChat.route) {
+                    val supportState by viewModel.supportState.collectAsStateWithLifecycle()
+                    LaunchedEffect(Unit) { viewModel.openSupportChat() }
+                    SupportChatScreen(
+                        state = supportState,
+                        onBack = { navController.popBackStack() },
+                        onRefresh = { viewModel.refreshSupportChat() },
+                        onSend = { viewModel.sendSupportMessage(it) },
+                        onLoginHint = { navigateToTab(Screen.Profile) }
+                    )
+                }
+
+                composable(Screen.DevPanel.route) {
+                    val devState by viewModel.devState.collectAsStateWithLifecycle()
+                    LaunchedEffect(Unit) { viewModel.openDevPanel() }
+                    DevPanelScreen(
+                        state = devState,
+                        onBack = { navController.popBackStack() },
+                        onRefresh = { viewModel.refreshDevPanel() },
+                        onReply = { uid, text -> viewModel.sendSupportReply(uid, text) },
+                        onCreateAccount = { email, username, password, role, onResult ->
+                            viewModel.createAccountAsDev(email, username, password, role, onResult)
+                        },
+                        onChangeRole = { uid, role -> viewModel.changeAccountRole(uid, role) }
                     )
                 }
             }

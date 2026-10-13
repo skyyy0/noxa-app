@@ -1,15 +1,38 @@
 package com.example.data.remote
 
+import android.util.Log
 import com.example.data.model.AlbumDetail
 import com.example.data.model.AlbumInfo
 import com.example.data.model.ArtistProfile
 import com.example.data.model.PinnedTracks
 import com.example.data.model.Song
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+
+/**
+ * Runs one home-shelf fetch so a single misbehaving provider degrades to an
+ * empty shelf instead of failing the whole feed.
+ *
+ * The feed used to be built fail-fast: one HTTP hiccup, mapping bug or OOM
+ * inside any shelf made [MusicRepository.getHomeFeed] throw, the exception
+ * escaped the view model's coroutine, and the app force-closed right while
+ * Home still showed "Memuat musik...". Now every shelf is independent — a
+ * broken provider only loses its own shelf. Cancellation still propagates so
+ * structured concurrency keeps working.
+ */
+internal suspend fun <T> safeShelf(block: suspend () -> T): T? =
+    try {
+        block()
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Log.w("MusicRepository", "Shelf failed: ${e.javaClass.simpleName}: ${e.message}")
+        null
+    }
 
 /** One horizontally scrolling shelf on the home screen. */
 data class HomeMusicSection(
@@ -114,55 +137,64 @@ class MusicRepository(
         // shelves still load in parallel instead of one after another.
         val gate = Semaphore(permits = 3)
 
-        val heroDeferred = async { gate.withPermit { loadHero() } }
+        // Every shelf is wrapped in safeShelf: one failing provider loses its
+        // own shelf but can never take the whole feed (and the app) down.
+        val heroDeferred = async { gate.withPermit { safeShelf { loadHero() } } }
 
         val shelfDeferred = ARTIST_SHELVES.map { shelf ->
             async {
                 gate.withPermit {
-                    HomeMusicSection(
-                        title = shelf.title,
-                        subtitle = shelf.subtitle,
-                        songs = deezer.artistTopTracks(shelf.artistName, limit = SHELF_SIZE)
-                    )
+                    safeShelf {
+                        HomeMusicSection(
+                            title = shelf.title,
+                            subtitle = shelf.subtitle,
+                            songs = deezer.artistTopTracks(shelf.artistName, limit = SHELF_SIZE)
+                        )
+                    }
                 }
             }
         }
 
         val chartDeferred = async {
             gate.withPermit {
-                HomeMusicSection(
-                    title = "Global Top 50",
-                    subtitle = "Tangga lagu Deezer hari ini",
-                    songs = deezer.chart(limit = SHELF_SIZE)
-                )
+                safeShelf {
+                    HomeMusicSection(
+                        title = "Global Top 50",
+                        subtitle = "Tangga lagu Deezer hari ini",
+                        songs = deezer.chart(limit = SHELF_SIZE)
+                    )
+                }
             }
         }
 
         val audiusDeferred = async {
             gate.withPermit {
-                HomeMusicSection(
-                    title = "Komunitas Audius",
-                    subtitle = "Lagu penuh dari artis independen",
-                    songs = audius.trending(limit = SHELF_SIZE)
-                )
+                safeShelf {
+                    HomeMusicSection(
+                        title = "Komunitas Audius",
+                        subtitle = "Lagu penuh dari artis independen",
+                        songs = audius.trending(limit = SHELF_SIZE)
+                    )
+                }
             }
         }
 
         // Sky's pinned pick + artist avatars, fetched in the same pass so the
         // Home screen still renders from one snapshot.
-        val pinnedDeferred = async { gate.withPermit { loadPinned() } }
-        val artistsDeferred = async { gate.withPermit { loadPopularArtists() } }
+        val pinnedDeferred = async { gate.withPermit { safeShelf { loadPinned() } } }
+        val artistsDeferred = async { gate.withPermit { safeShelf { loadPopularArtists() } } }
 
         val sections = (shelfDeferred + chartDeferred + audiusDeferred)
             .awaitAll()
+            .filterNotNull()
             .filter { it.songs.isNotEmpty() }
             .distinctBy { it.title }
 
         HomeFeed(
             hero = heroDeferred.await(),
             sections = sections,
-            pinned = pinnedDeferred.await(),
-            artists = artistsDeferred.await()
+            pinned = pinnedDeferred.await().orEmpty(),
+            artists = artistsDeferred.await().orEmpty()
         )
     }
 

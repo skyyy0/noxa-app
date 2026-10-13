@@ -11,5 +11,7 @@ data class NoxaUser(
     val uid: String,
     val displayName: String?,
     val email: String?,
-    val photoUrl: String?
+    val photoUrl: String?,
+    /** Privilege level; only DEVELOPER unlocks the NOXA Admin console. */
+    val role: com.example.data.support.AccountRole = com.example.data.support.AccountRole.USER
 )

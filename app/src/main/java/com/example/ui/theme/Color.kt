@@ -27,3 +27,8 @@ val NoxaBorderSubtle = Color(0xFF1E1E22)
 // Player & Status
 val NoxaError = Color(0xFFFF453A)
 val NoxaSuccess = Color(0xFF30D158)
+
+// NOXA Support identity — the purple verified badge of NOXA Support / staff.
+val NoxaPurple = Color(0xFFA855F7)
+val NoxaPurpleDeep = Color(0xFF7C3AED)
+val NoxaPurpleGlow = 0x40A855F7

@@ -180,6 +180,63 @@ pengguna sebelum pemutaran pertama.
   favorit + riwayat), dan **long-press pada baris lagu** mana pun untuk
   membuka menu cepat (antrian, playlist, bagikan) tanpa mencari tombol ⋮.
 
+### v1.12 — crash fix, akun global + support chat, panel developer
+
+* **Force-close "memuat lagu" diperbaiki** — feed Home dibangun fail-fast:
+  satu kegagalan provider (HTTP error, bug mapping, OOM) membuat exception
+  lolos dari coroutine view model dan membunuh aplikasi tepat saat Home masih
+  menampilkan "Memuat musik...". Kini setiap rak melewati `safeShelf`
+  (rak yang gagal hanya kehilangan raknya sendiri), `loadHome` punya
+  `try/catch` dengan tombol coba lagi, dan jalur lirik/panas-antrian/MV ikut
+  dijaga. **Crash logger**: trace exception terakhir disimpan ke
+  `files/crash/latest-crash.txt` dan otomatis terlampir di laporan support
+  pertama setiap giliran.
+* **Registry akun global keyless (Telegraph)** — halaman Telegraph tunggal
+  (`api.telegra.ph`) menjadi dokumen JSON bersama: semua instalasi membaca &
+  menulis registry yang sama tanpa API key. Password tetap hanya hash
+  PBKDF2-HMAC-SHA256 (60k iterasi). Pendaftaran/masuk kini mencoba server
+  dulu, lalu jatuh ke akun lokal per-perangkat; akun yang dibuat di server
+  otomatis di-mirror lokal (masuk offline tetap bisa).
+* **Akun developer bawaan** — `skydev@noxa.com` / `skydevnoxa` role
+  `DEVELOPER` (ter-seed di server). Masuk lewat form email biasa.
+* **Chat NOXA Support** — menu "Chat dengan NOXA Support" di Profile:
+  lapor bug/keluhan langsung dari aplikasi. Aturan Sky: user hanya bisa kirim
+  **satu pesan sampai Support membalas**; composer terkunci otomatis.
+  Badge verified **ungu** kustom (canvas + glow) khusus identitas Support.
+* **NOXA Admin (panel developer)** — role DEVELOPER melihat kartu "NOXA
+  Admin": jumlah akun terdaftar, semua thread laporan + balas instan, dan
+  "Buat Akun untuk User" dengan role picker (Admin/Partner/Moderator/User)
+  plus kartu info akun siap salin setelah dibuat.
+* **Pengaturan akun** — ganti username & password dari aplikasi (verifikasi
+  password lama; tersinkron ke server + mirror lokal).
+* **Form daftar lebih matang** — bar kekuatan password (Lemah → Sangat
+  Kuat) dan NOXA Bot: maskot robot vektor yang **menutup mata** saat kamu
+  mengetik password (tidak ikut melihat, katanya).
+* **Emoji diganti vektor** — sisa glyph emoji di UI (rekap, share text)
+  diganti teks/icon Material; ikon baru digambar sebagai path vektor.
+
+### v1.13 — NOXA AI (asisten musik di dalam app)
+
+* **Chat NOXA AI** — menu "Chat dengan NOXA AI" di Profile membuka chat
+  dengan asisten berbasis endpoint chat Omegatech (`api.omegatech.app`,
+  tanpa API key) yang punya memori sesi (`sessionId`/`chatId` dipersist). **AI
+  bisa kontrol musik**: prompt ketat menyuruh model mengakhiri balasan dengan
+  tag `[NOXA_PLAY|artis|judul]` atau `[NOXA_PLAYLIST|nama|judul1;judul2]`,
+  lalu aplikasi yang mengeksekusi — cari di katalog, putar, atau bikin
+  playlist. Tag tidak pernah tampil di bubble; emoji di-strip dari balasan
+  meski model nakal, dan prompt melarang emoji + menyamar sebagai AI lain.
+* **Kepribadian & efek** — gaya santai/nyeleneh (curhat putusin pacar bisa
+  berujung rekomendasi lagu yang nyeleneh). Saat AI "berpikir", muncul efek
+  gradasi lime shimmer + avatar berdenyut ala AI modern. Kartu lagu
+  "DIPILIH OLEH NOXA AI" tampil di chat lengkap dengan artwork & tombol
+  putar; riwayat chat dipersist antar buka app.
+* **Catatan Play Protect** — peringatan "aplikasi belum pernah dilihat
+  developer ini" muncul karena NOXA disebarkan di luar Play Store; itu
+  kebijakan sisi server Google dan tidak bisa dimatikan dari APK. APK NOXA
+  ditandatangani keystore yang stabil (`my-upload-key.jks`) sehingga
+  reputasi sertifikat menumpuk seiring waktu, dan instalasi tetap bisa
+  dilanjutkan lewat "Tetap instal".
+
 ### Berbagi lagu: link NOXA & kartu canvas (v1.10)
 
 Sebelumnya membagikan lagu mengirim link Deezer (`deezer.com/track/…`). Sejak

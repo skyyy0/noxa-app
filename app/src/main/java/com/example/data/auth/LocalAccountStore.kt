@@ -34,7 +34,9 @@ class LocalAccountStore(context: Context) {
     suspend fun createAccount(
         email: String,
         username: String,
-        password: String
+        password: String,
+        /** Shared uid with the remote registry, so both sides agree on identity. */
+        uid: String = "local-" + System.currentTimeMillis() + "-" + (0..9999).random()
     ): CreateResult = mutex.withLock {
         val cleanEmail = email.trim().lowercase(Locale.ROOT)
         val cleanName = username.trim()
@@ -49,7 +51,7 @@ class LocalAccountStore(context: Context) {
 
         val salt = PasswordVault.newSalt()
         val account = LocalAccount(
-            uid = "local-" + System.currentTimeMillis() + "-" + (accounts.size + 1),
+            uid = uid,
             email = cleanEmail,
             username = cleanName,
             saltHex = PasswordVault.toHex(salt),
@@ -59,6 +61,28 @@ class LocalAccountStore(context: Context) {
         accounts[cleanEmail] = account
         save(accounts)
         CreateResult.Created(account)
+    }
+
+    /** Renames a local account (mirrors a remote username change). */
+    fun updateUsername(uid: String, newUsername: String) {
+        val accounts = load().toMutableMap()
+        val email = accounts.entries.firstOrNull { it.value.uid == uid }?.key ?: return
+        val account = accounts.getValue(email)
+        accounts[email] = account.copy(username = newUsername.trim())
+        save(accounts)
+    }
+
+    /** Changes a local account's password (fresh salt + hash). */
+    fun updatePassword(uid: String, newPassword: String) {
+        val accounts = load().toMutableMap()
+        val email = accounts.entries.firstOrNull { it.value.uid == uid }?.key ?: return
+        val account = accounts.getValue(email)
+        val salt = PasswordVault.newSalt()
+        accounts[email] = account.copy(
+            saltHex = PasswordVault.toHex(salt),
+            hashHex = PasswordVault.toHex(PasswordVault.hash(newPassword, salt))
+        )
+        save(accounts)
     }
 
     /** Returns the matching account, or null when the credentials are wrong. */

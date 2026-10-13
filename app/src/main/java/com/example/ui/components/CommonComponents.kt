@@ -1,5 +1,11 @@
 package com.example.ui.components
 
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -45,11 +51,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
@@ -61,6 +72,8 @@ import com.example.ui.theme.NoxaLime
 import com.example.ui.theme.NoxaSurface
 import com.example.ui.theme.NoxaSurfaceElevated
 import com.example.ui.theme.NoxaSurfaceSecondary
+import com.example.ui.theme.NoxaPurple
+import com.example.ui.theme.NoxaPurpleDeep
 import com.example.ui.theme.NoxaTextPrimary
 import com.example.ui.theme.NoxaTextSecondary
 import com.example.ui.theme.NoxaTextTertiary
@@ -388,6 +401,107 @@ fun SongListItem(
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * The **NOXA Support verified badge** — a purple, hand-drawn seal with a soft
+ * glow, deliberately different from every blue artist tick and from the lime
+ * brand accents. Only NOXA Support / staff accounts wear it.
+ */
+@Composable
+fun VerifiedBadgePurple(
+    size: Dp = 16.dp,
+    modifier: Modifier = Modifier
+) {
+    val infinite = rememberInfiniteTransition(label = "badge_glow")
+    val glow by infinite.animateFloat(
+        initialValue = 0.55f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1400),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "badge_glow_alpha"
+    )
+    Box(modifier = modifier.size(size), contentAlignment = Alignment.Center) {
+        // Halo behind the seal.
+        Box(
+            modifier = Modifier
+                .size(size * 1.45f)
+                .background(
+                    Brush.radialGradient(
+                        listOf(NoxaPurple.copy(alpha = 0.55f * glow), Color.Transparent)
+                    ),
+                    CircleShape
+                )
+        )
+        Canvas(modifier = Modifier.size(size)) {
+            val r = this.size.minDimension / 2f
+            val center = this.size / 2f
+            // Rounded seal body with a gradient from bright to deep purple.
+            drawCircle(
+                brush = Brush.linearGradient(
+                    listOf(NoxaPurple, NoxaPurpleDeep)
+                ),
+                radius = r
+            )
+            // Inner rim for a jewel-like finish.
+            drawCircle(
+                color = Color.White.copy(alpha = 0.35f),
+                radius = r * 0.86f,
+                style = Stroke(width = r * 0.10f)
+            )
+            // White check mark.
+            val s = this.size.width
+            val check = Path().apply {
+                moveTo(s * 0.30f, s * 0.52f)
+                lineTo(s * 0.44f, s * 0.66f)
+                lineTo(s * 0.72f, s * 0.36f)
+            }
+            drawPath(
+                check,
+                color = Color.White,
+                style = Stroke(
+                    width = s * 0.11f,
+                    cap = StrokeCap.Round,
+                    join = StrokeJoin.Round
+                )
+            )
+        }
+    }
+}
+
+/**
+ * Inline "name + purple badge" header used by the NOXA Support chat and the
+ * staff replies inside the admin console.
+ */
+@Composable
+fun SupportIdentityRow(
+    name: String,
+    modifier: Modifier = Modifier,
+    subtitle: String? = null,
+    nameColor: Color = NoxaTextPrimary,
+    badgeSize: Dp = 15.dp
+) {
+    Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            text = name,
+            color = nameColor,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Bold
+        )
+        Spacer(modifier = Modifier.width(5.dp))
+        VerifiedBadgePurple(size = badgeSize)
+        if (subtitle != null) {
+            Spacer(modifier = Modifier.width(7.dp))
+            Text(
+                text = subtitle,
+                color = NoxaTextTertiary,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium
+            )
         }
     }
 }
