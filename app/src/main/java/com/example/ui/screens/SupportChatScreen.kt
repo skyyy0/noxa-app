@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -16,6 +17,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
@@ -98,10 +100,23 @@ fun SupportChatScreen(
     onLoginHint: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
-    Column(
+    // Centered, width-capped column: on tablets and wide phones the chat
+    // stays a comfortable reading width instead of stretching edge to edge.
+    Box(
         modifier = modifier
             .fillMaxSize()
+            .background(NoxaBlack),
+        contentAlignment = Alignment.Center
+    ) {
+    Column(
+        modifier = Modifier
+            .fillMaxHeight()
+            .widthIn(max = 680.dp)
+            .fillMaxWidth()
             .background(NoxaBlack)
+            // Without statusBarsPadding the back button slid under the clock
+            // on tall-status-bar devices.
+            .statusBarsPadding()
             .imePadding()
             .navigationBarsPadding()
     ) {
@@ -190,6 +205,7 @@ fun SupportChatScreen(
 
             is SupportUiState.Ready -> ReadyChatBody(s, onSend)
         }
+    }
     }
 }
 

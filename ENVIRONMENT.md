@@ -237,6 +237,26 @@ pengguna sebelum pemutaran pertama.
   reputasi sertifikat menumpuk seiring waktu, dan instalasi tetap bisa
   dilanjutkan lewat "Tetap instal".
 
+### v1.13.1 — tahan-crash jalur pemutar, layout semua ukuran layar, NOXA AI bahasa baku
+
+* **Force-close "memuat lagu" ditangani menyeluruh** — semua 34 tugas latar
+  view model kini berjalan di scope ber-handler (`safeScope`): throwable
+  tak tertangkap (kegagalan parse ekstrem, lonjakan memori saat artwork
+  Home ter-decode bersamaan dengan ekstraksi audio penuh, dll) sekarang
+  muncul sebagai pesan error jujur di pemutar + tercatat di crash log,
+  bukan membunuh aplikasi. Crash logger tetap menulis
+  `files/crash/latest-crash.txt` yang otomatis terlampir di chat NOXA
+  Support — jadi bila penyebabnya crash native (codec) yang tak bisa
+  ditangkap kode mana pun, laporan dari aplikasi langsung membawa stack
+  trace aslinya.
+* **Layout semua perangkat** — chat NOXA Support, NOXA AI, dan NOXA Admin
+  kini punya `statusBarsPadding` (tombol kembali tidak lagi tertutup jam
+  di HP ber-status-bar tinggi) dan lebar maksimal 680dp yang di-center,
+  sehingga nyaman di HP kecil, HP tinggi/lebar, maupun tablet.
+* **NOXA AI bahasa baku** — persona diubah ke bahasa Indonesia baku yang
+  rapi dan profesional (tanpa bahasa gaul), sapaan "Anda", kesan aplikasi
+  resmi; saran chat yang tidak pantas dihapus. Efek & kontrol musik tetap.
+
 ### Berbagi lagu: link NOXA & kartu canvas (v1.10)
 
 Sebelumnya membagikan lagu mengirim link Deezer (`deezer.com/track/…`). Sejak

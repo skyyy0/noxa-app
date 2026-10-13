@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -80,9 +81,9 @@ import com.example.ui.theme.NoxaTextTertiary
 
 private val AiSuggestions = listOf(
     "Putar Dewa 19 Kangen",
-    "Lagu galau buat mantan",
-    "Buat playlist semangat kerja",
-    "Rekomendasi lagu Indonesia enak didengar"
+    "Rekomendasi lagu pop Indonesia",
+    "Buat playlist fokus kerja",
+    "Lagu santai untuk perjalanan"
 )
 
 /**
@@ -112,9 +113,18 @@ fun AiChatScreen(
         if (last > 0) listState.animateScrollToItem(last - 1)
     }
 
-    Column(
+    // Centered + width-capped: comfortable on tablets and tall/wide phones.
+    Box(
         modifier = modifier
             .fillMaxSize()
+            .background(NoxaBlack),
+        contentAlignment = Alignment.Center
+    ) {
+    Column(
+        modifier = Modifier
+            .fillMaxHeight()
+            .widthIn(max = 680.dp)
+            .fillMaxWidth()
             .background(NoxaBlack)
             .statusBarsPadding()
             .imePadding()
@@ -172,6 +182,7 @@ fun AiChatScreen(
                 }
             }
         )
+    }
     }
 }
 
@@ -271,7 +282,7 @@ private fun AiWelcomeCard(onSuggestion: (String) -> Unit) {
                     .padding(horizontal = 14.dp, vertical = 10.dp)
             ) {
                 Text(
-                    "Halo, gue NOXA AI. Mau dengerin apa hari ini? Minta gue putar lagu, bikin playlist, atau curhat aja — gue siap.",
+                    "Halo, saya NOXA AI — asisten musik Anda. Ingin mendengarkan lagu apa hari ini? Minta saya putar lagu, menyusun playlist, atau ceritakan suasana hati Anda.",
                     color = NoxaTextPrimary,
                     fontSize = 14.sp,
                     lineHeight = 20.sp
@@ -538,7 +549,7 @@ private fun AiThinkingRow() {
             }
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                "NOXA AI sedang berpikir...",
+                "NOXA AI sedang memproses...",
                 color = NoxaTextTertiary,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Medium

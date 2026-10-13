@@ -10,12 +10,15 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -124,10 +127,22 @@ fun DevPanelScreen(
     var selectedThreadUid by remember { mutableStateOf<String?>(null) }
     var showCreateForm by remember { mutableStateOf(false) }
 
-    Column(
+    // Centered + width-capped so the admin console reads well on tablets
+    // and never hides its header under the status bar on any device.
+    Box(
         modifier = modifier
             .fillMaxSize()
+            .background(NoxaBlack),
+        contentAlignment = Alignment.Center
+    ) {
+    Column(
+        modifier = Modifier
+            .fillMaxHeight()
+            .widthIn(max = 680.dp)
+            .fillMaxWidth()
             .background(NoxaBlack)
+            .statusBarsPadding()
+            .navigationBarsPadding()
     ) {
         DevHeader(
             showCreateForm = showCreateForm || selectedThreadUid != null,
@@ -218,6 +233,7 @@ fun DevPanelScreen(
                 }
             }
         }
+    }
     }
 }
 

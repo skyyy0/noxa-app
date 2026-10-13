@@ -128,7 +128,8 @@ class UiRenderSmokeTest {
         )
         compose.setContent {
             HomeScreen(
-                heroSong = null,
+                // Hero included: this path was never rendered in tests before.
+                heroSong = song("deezer:99", "Blinding Lights", "The Weeknd"),
                 sections = sections,
                 pinnedSongs = pinned,
                 recentSongs = recent,

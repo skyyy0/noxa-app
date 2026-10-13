@@ -26,6 +26,8 @@ import com.example.media.PlaybackProgress
 import com.example.media.PlayerUiState
 import com.example.data.auth.NoxaUser
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -285,6 +287,25 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         com.example.data.ai.NoxaAiRepository(getApplication())
     }
 
+    /**
+     * All background work runs through this scope: same job & main dispatcher
+     * as [viewModelScope] (cancelled with the view model), but with a
+     * [CoroutineExceptionHandler]. Before it existed, ANY uncaught throwable
+     * inside a play-path coroutine — an OOM spike while the home grid decodes
+     * artwork during "memuat lagu", an exotic parse error, a codec-adjacent
+     * failure — killed the whole app. Now it surfaces as an honest player
+     * error and gets logged, so the app survives and the crash log records it.
+     */
+    private val safeScope = CoroutineScope(
+        viewModelScope.coroutineContext + CoroutineExceptionHandler { _, throwable ->
+            Log.e(TAG, "Background task failed", throwable)
+            player.showError(
+                "Terjadi kesalahan saat memuat musik. Coba lagi — jika berulang, " +
+                    "laporkan lewat Chat NOXA Support."
+            )
+        }
+    )
+
     private val _aiMessages = MutableStateFlow<List<com.example.data.ai.AiChatMessage>>(emptyList())
     val aiMessages: StateFlow<List<com.example.data.ai.AiChatMessage>> =
         _aiMessages.asStateFlow()
@@ -337,7 +358,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun observeCurrentSong() {
-        viewModelScope.launch {
+        safeScope.launch {
             player.uiState
                 .map { it.currentSong }
                 .distinctUntilChangedBy { it?.id }
@@ -352,7 +373,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     /** Counts a play for the weekly recap and prunes records past retention. */
     private fun recordPlay(song: Song?) {
         if (song == null) return
-        viewModelScope.launch {
+        safeScope.launch {
             try {
                 dao.insertPlayRecord(
                     PlayRecordEntity(songId = song.id, title = song.title, artist = song.artist)
@@ -366,7 +387,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Recomputes the weekly recap whenever a new play lands. */
     private fun observeWeeklyRecap() {
-        viewModelScope.launch {
+        safeScope.launch {
             dao.getPlayRecordsSince(System.currentTimeMillis() - WEEK_MS)
                 .collect { records ->
                     if (records.isEmpty()) {
@@ -393,7 +414,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     private var autoplayAppendedFor: String? = null
 
     private fun observeAutoplaySimilar() {
-        viewModelScope.launch {
+        safeScope.launch {
             combine(player.uiState, player.progress) { state, progress -> state to progress }
                 .collect { (state, progress) ->
                     if (!settingsStore.autoplaySimilar) return@collect
@@ -414,7 +435,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun appendSimilarTracks(song: Song, playedQueue: List<Song>) {
-        viewModelScope.launch {
+        safeScope.launch {
             val artistId = song.artistId.toLongOrNull()
                 ?: runCatching { repository.findArtistId(song.artist) }.getOrNull()
             val similar = if (artistId != null) {
@@ -449,7 +470,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         _lyricsState.value = LyricsUiState.Loading
-        lyricsJob = viewModelScope.launch {
+        lyricsJob = safeScope.launch {
             // LRCLIB occasionally answers with non-JSON bodies; a parse hiccup
             // must never kill playback (this runs on every song change).
             val lyrics = try {
@@ -478,7 +499,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
      * Never falls back to simulated songs: on failure [homeError] is populated.
      */
     fun loadHome() {
-        viewModelScope.launch {
+        safeScope.launch {
             _isHomeLoading.value = true
             _homeError.value = null
             try {
@@ -548,7 +569,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        searchJob = viewModelScope.launch {
+        searchJob = safeScope.launch {
             delay(350)
             _isSearching.value = true
             val results = searchAll(query.trim())
@@ -560,7 +581,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     fun performSearch(query: String) {
         _searchQuery.value = query
         searchJob?.cancel()
-        searchJob = viewModelScope.launch {
+        searchJob = safeScope.launch {
             _isSearching.value = true
             val results = searchAll(query.trim())
             _searchResults.value = results
@@ -643,7 +664,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
      * `youtube:<id>`), with an honest error when the id no longer resolves.
      */
     fun playSharedSong(songId: String) {
-        viewModelScope.launch {
+        safeScope.launch {
             val song = if (songId.startsWith("youtube:")) {
                 runCatching {
                     youtubeRepository.songByVideoId(songId.removePrefix("youtube:"))
@@ -690,7 +711,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         if (needsYoutubeResolve || wantsFullAudio) player.showResolving()
-        viewModelScope.launch {
+        safeScope.launch {
             var resolved = streamResolver.resolve(song)
             if (resolved == null && needsYoutubeResolve) {
                 resolved = runCatching { youtubeRepository.resolveAudio(song) }.getOrNull()
@@ -724,7 +745,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
      * does not turn into one YouTube search per track.
      */
     private fun warmQueueStreams(queue: List<Song>) {
-        viewModelScope.launch {
+        safeScope.launch {
             queue
                 .filter { it.source == MusicSource.YOUTUBE && it.streamUrl.isBlank() }
                 .forEach { queued ->
@@ -763,7 +784,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             play(song)
             return
         }
-        viewModelScope.launch {
+        safeScope.launch {
             val resolved = if (needsYoutube) {
                 runCatching { youtubeRepository.resolveAudio(song) }.getOrNull()
             } else {
@@ -861,7 +882,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         }
         mvAutoRetries = 0
         _videoUiState.value = VideoUiState.Loading
-        viewModelScope.launch {
+        safeScope.launch {
             _videoUiState.value = runCatching { resolveMvState(song) }
                 .getOrElse { VideoUiState.Unavailable("MV tidak tersedia untuk lagu ini.") }
         }
@@ -902,7 +923,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         mvAutoRetries++
-        viewModelScope.launch {
+        safeScope.launch {
             _videoUiState.value = VideoUiState.Loading
             val state = runCatching { resolveMvState(song) }
                 .getOrElse { VideoUiState.Unavailable("MV tidak tersedia untuk lagu ini.") }
@@ -936,7 +957,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
 
     // Room Favorites
     fun toggleFavorite(song: Song) {
-        viewModelScope.launch {
+        safeScope.launch {
             // The current state is read from the database, not from a cached list,
             // so two fast taps can never cancel each other out.
             if (dao.isFavoriteOnce(song.id)) {
@@ -950,20 +971,20 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     fun isFavorite(songId: String): Boolean = favoriteIds.value.contains(songId)
 
     fun clearHistory() {
-        viewModelScope.launch {
+        safeScope.launch {
             dao.clearHistory()
         }
     }
 
     // Playlists
     fun createPlaylist(name: String, description: String = "") {
-        viewModelScope.launch {
+        safeScope.launch {
             dao.insertPlaylist(PlaylistEntity(name = name, description = description))
         }
     }
 
     fun deletePlaylist(id: Long) {
-        viewModelScope.launch {
+        safeScope.launch {
             dao.deletePlaylistSongs(id)
             dao.deletePlaylist(id)
         }
@@ -975,13 +996,13 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     fun playlistSongIds(playlistId: Long): Flow<List<String>> = dao.getPlaylistSongIds(playlistId)
 
     fun addSongToPlaylist(playlistId: Long, song: Song, position: Int = Int.MAX_VALUE) {
-        viewModelScope.launch {
+        safeScope.launch {
             dao.insertPlaylistSong(PlaylistSongEntity.fromSong(playlistId, song, position))
         }
     }
 
     fun removeSongFromPlaylist(playlistId: Long, songId: String) {
-        viewModelScope.launch {
+        safeScope.launch {
             dao.deletePlaylistSong(playlistId, songId)
         }
     }
@@ -996,7 +1017,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     fun openArtistProfile(artistId: String, artistName: String, onFound: (Long) -> Unit) {
         artistId.toLongOrNull()?.let { onFound(it); return }
         if (artistName.isBlank()) return
-        viewModelScope.launch {
+        safeScope.launch {
             val id = runCatching { repository.findArtistId(artistName) }.getOrNull()
             if (id != null) {
                 onFound(id)
@@ -1009,7 +1030,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     /** Loads the artist page: header, top tracks and discography. */
     fun loadArtist(artistId: Long) {
         artistJob?.cancel()
-        artistJob = viewModelScope.launch {
+        artistJob = safeScope.launch {
             _artistUiState.value = ArtistUiState.Loading
             val profile = runCatching { repository.artistProfile(artistId) }.getOrNull()
             if (profile == null) {
@@ -1029,7 +1050,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     /** Loads the album page: header plus the full tracklist. */
     fun loadAlbum(albumId: Long) {
         albumJob?.cancel()
-        albumJob = viewModelScope.launch {
+        albumJob = safeScope.launch {
             _albumUiState.value = AlbumUiState.Loading
             val detail = runCatching { repository.albumDetail(albumId) }.getOrNull()
             if (detail == null) {
@@ -1063,14 +1084,14 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Loads the user's support thread (or explains why chat is unavailable). */
     fun openSupportChat() {
-        viewModelScope.launch {
+        safeScope.launch {
             _supportState.value = com.example.ui.screens.SupportUiState.Loading
             _supportState.value = loadSupportState()
         }
     }
 
     fun refreshSupportChat() {
-        viewModelScope.launch { _supportState.value = loadSupportState() }
+        safeScope.launch { _supportState.value = loadSupportState() }
     }
 
     private suspend fun loadSupportState(): com.example.ui.screens.SupportUiState {
@@ -1090,7 +1111,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         val user = authManager.currentUser.value ?: return
         val ready = _supportState.value as? com.example.ui.screens.SupportUiState.Ready ?: return
         if (ready.sending) return
-        viewModelScope.launch {
+        safeScope.launch {
             _supportState.value = ready.copy(sending = true, error = null)
             val crash = readLatestCrashTrace()
             val ok = runCatching {
@@ -1123,14 +1144,14 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Loads the NOXA Admin console (developer role only). */
     fun openDevPanel() {
-        viewModelScope.launch {
+        safeScope.launch {
             _devState.value = com.example.ui.screens.DevUiState.Loading
             _devState.value = loadDevState()
         }
     }
 
     fun refreshDevPanel() {
-        viewModelScope.launch { _devState.value = loadDevState() }
+        safeScope.launch { _devState.value = loadDevState() }
     }
 
     private suspend fun loadDevState(): com.example.ui.screens.DevUiState {
@@ -1159,7 +1180,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Staff reply: clears the user's pending flag, unlocking their composer. */
     fun sendSupportReply(threadUid: String, text: String) {
-        viewModelScope.launch {
+        safeScope.launch {
             (_devState.value as? com.example.ui.screens.DevUiState.Ready)?.let {
                 _devState.value = it.copy(busy = true)
             }
@@ -1176,7 +1197,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         role: com.example.data.support.AccountRole,
         onResult: (String?) -> Unit
     ) {
-        viewModelScope.launch {
+        safeScope.launch {
             if (!com.example.data.auth.LocalAccountStore.isEmailFormatValid(email)) {
                 onResult("Format email tidak valid.")
                 return@launch
@@ -1200,7 +1221,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun changeAccountRole(uid: String, role: com.example.data.support.AccountRole) {
-        viewModelScope.launch {
+        safeScope.launch {
             runCatching { backend.updateRole(uid, role) }
             _devState.value = loadDevState()
         }
@@ -1218,14 +1239,15 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         _aiMessages.update { it + com.example.data.ai.AiChatMessage(fromUser = true, text = trimmed) }
         _aiError.value = null
         _isAiThinking.value = true
-        viewModelScope.launch {
+        safeScope.launch {
             val reply = try {
                 aiRepository.chat(trimmed)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 Log.w(TAG, "NOXA AI failed: ${e.javaClass.simpleName}: ${e.message}")
-                _aiError.value = "NOXA AI lagi sulit dihubungi. Periksa koneksi lalu coba lagi."
+                _aiError.value =
+                    "Layanan NOXA AI sedang sulit dihubungi. Periksa koneksi internet lalu coba lagi."
                 _isAiThinking.value = false
                 return@launch
             }
@@ -1276,7 +1298,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             togglePlayPause()
             return
         }
-        viewModelScope.launch {
+        safeScope.launch {
             val song = runCatching { repository.songFromDeepLink(id) }.getOrNull()
                 ?: runCatching {
                     if (id.startsWith("youtube:")) {
