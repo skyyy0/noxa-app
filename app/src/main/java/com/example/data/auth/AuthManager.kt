@@ -199,7 +199,10 @@ class AuthManager(private val context: Context) {
                             uid = "google-" + identity.subject,
                             displayName = identity.name ?: identity.email?.substringBefore('@'),
                             email = identity.email,
-                            photoUrl = identity.pictureUrl
+                            photoUrl = identity.pictureUrl,
+                            // Sky's Google account is a developer account by
+                            // definition — auto-detected on every sign-in.
+                            role = roleForEmail(identity.email)
                         )
                         // Persisted in the same store as remote sessions, so
                         // the Google account survives an app restart.
@@ -219,7 +222,8 @@ class AuthManager(private val context: Context) {
                         val authResult = firebaseAuth.signInWithCredential(authCredential).await()
                         val user = authResult.user
                         if (user != null) {
-                            _currentUser.value = toNoxaUser(user)
+                            _currentUser.value =
+                                toNoxaUser(user).copy(role = roleForEmail(user.email))
                             _isGuestMode.value = false
                             onSuccess(_currentUser.value!!)
                         } else {
@@ -339,7 +343,7 @@ class AuthManager(private val context: Context) {
             val result = firebaseAuth.signInWithCredential(credential).await()
             val user = result.user
             if (user != null) {
-                val noxaUser = toNoxaUser(user)
+                val noxaUser = toNoxaUser(user).copy(role = roleForEmail(user.email))
                 storeRemoteSession(noxaUser)
                 _currentUser.value = noxaUser
                 _isGuestMode.value = false
@@ -454,7 +458,8 @@ class AuthManager(private val context: Context) {
                                     displayName = fbUser.displayName
                                         ?: fbUser.email?.substringBefore('@'),
                                     email = fbUser.email,
-                                    photoUrl = fbUser.photoUrl?.toString()
+                                    photoUrl = fbUser.photoUrl?.toString(),
+                                    role = roleForEmail(fbUser.email)
                                 )
                                 storeRemoteSession(user)
                                 _currentUser.value = user
@@ -661,13 +666,26 @@ class AuthManager(private val context: Context) {
             uid = fbUser.uid,
             displayName = username,
             email = cleanEmail,
-            photoUrl = null
+            photoUrl = null,
+            role = roleForEmail(cleanEmail)
         )
         storeRemoteSession(user)
         _currentUser.value = user
         _isGuestMode.value = false
         return true
     }
+
+    /**
+     * Sky's Google account doubles as the developer account, so signing in
+     * with it always opens the NOXA Admin console — no email+password
+     * round-trip needed.
+     */
+    private fun roleForEmail(email: String?): com.example.data.support.AccountRole =
+        if (email.equals(DEVELOPER_GOOGLE_EMAIL, ignoreCase = true)) {
+            com.example.data.support.AccountRole.DEVELOPER
+        } else {
+            com.example.data.support.AccountRole.USER
+        }
 
     /** Maps provider errors to Indonesian, human messages (never raw codes). */
     private fun humanizeAuthError(e: Exception): String {
@@ -768,15 +786,25 @@ class AuthManager(private val context: Context) {
         }
         scope.launch {
             try {
+                // Per-device cooldown; registry accounts are additionally
+                // checked server-side so the 7-day rule holds everywhere.
+                val localWait = localStore.cooldownRemaining(
+                    user.uid, "username", com.example.data.support.NoxaBackend.USERNAME_COOLDOWN_MS
+                )
+                if (localWait > 0L) {
+                    onError(com.example.data.support.NoxaBackend.cooldownMessage("username", localWait))
+                    return@launch
+                }
                 val reachable = runCatching { backend.readState() != null }.getOrDefault(false)
                 if (reachable) {
-                    val updated = backend.updateUsername(user.uid, trimmed)
-                    if (!updated) {
-                        onError("Username \"$trimmed\" sudah dipakai. Pilih yang lain.")
+                    val refusal = backend.updateUsername(user.uid, trimmed)
+                    if (refusal != null) {
+                        onError(refusal)
                         return@launch
                     }
                 }
                 localStore.updateUsername(user.uid, trimmed)
+                localStore.markChanged(user.uid, "username")
                 val updated = user.copy(displayName = trimmed)
                 if (reachable) storeRemoteSession(updated)
                 _currentUser.value = updated
@@ -813,6 +841,14 @@ class AuthManager(private val context: Context) {
         }
         scope.launch {
             try {
+                // Per-device cooldown for the 14-day password rule.
+                val localWait = localStore.cooldownRemaining(
+                    user.uid, "password", com.example.data.support.NoxaBackend.PASSWORD_COOLDOWN_MS
+                )
+                if (localWait > 0L) {
+                    onError(com.example.data.support.NoxaBackend.cooldownMessage("password", localWait))
+                    return@launch
+                }
                 val email = user.email
                 if (email.isNullOrBlank()) {
                     onError("Akun ini tidak punya email untuk verifikasi.")
@@ -843,18 +879,70 @@ class AuthManager(private val context: Context) {
                     )
                     return@launch
                 }
-                var changed = false
+                var refusal: String? = null
                 if (remoteReachable) {
-                    changed = backend.updatePassword(user.uid, newPassword)
+                    refusal = backend.updatePassword(user.uid, newPassword)
                 }
-                localStore.updatePassword(user.uid, newPassword)
-                if (remoteReachable && !changed) {
-                    onError("Ganti password gagal di server. Coba lagi.")
+                if (remoteReachable && refusal != null) {
+                    onError(refusal)
                     return@launch
                 }
+                localStore.updatePassword(user.uid, newPassword)
+                localStore.markChanged(user.uid, "password")
                 onSuccess()
             } catch (e: Exception) {
                 onError("Ganti password gagal. Coba lagi.")
+            }
+        }
+    }
+
+    /**
+     * Permanently deletes the signed-in account after the caller re-confirms
+     * the email. The registry account (and its support thread), the Firebase
+     * user when this session came from it, and the on-device mirror are all
+     * cleared before the session ends.
+     */
+    fun deleteAccount(
+        confirmEmail: String,
+        scope: CoroutineScope,
+        onSuccess: () -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
+        val user = _currentUser.value
+        if (user == null) {
+            onError("Belum masuk ke akun.")
+            return
+        }
+        val email = user.email
+        if (email.isNullOrBlank()) {
+            onError("Akun ini tidak punya email untuk verifikasi.")
+            return
+        }
+        if (!email.equals(confirmEmail.trim(), ignoreCase = true)) {
+            onError("Email tidak sesuai. Ketik email akun kamu: $email")
+            return
+        }
+        scope.launch {
+            try {
+                // 1) Global registry (account + support thread).
+                runCatching { backend.deleteAccount(email) }
+                // 2) Firebase user, when the session lives there.
+                val fbUser = auth?.currentUser
+                if (fbUser != null && fbUser.email.equals(email, ignoreCase = true)) {
+                    runCatching { fbUser.delete().await() }
+                }
+                // 3) On-device mirror.
+                runCatching { localStore.deleteAccount(email) }
+                // 4) End the session everywhere.
+                auth?.signOut()
+                localStore.clearSession()
+                clearRemoteSession()
+                _currentUser.value = null
+                _isGuestMode.value = true
+                onSuccess()
+            } catch (e: Exception) {
+                Log.e("AuthManager", "Delete account failed", e)
+                onError("Hapus akun gagal. Coba lagi.")
             }
         }
     }
@@ -877,6 +965,9 @@ class AuthManager(private val context: Context) {
     }
 
     private companion object {
+        /** Sky's Google account — auto-promoted to DEVELOPER everywhere. */
+        const val DEVELOPER_GOOGLE_EMAIL = "sekay77771@gmail.com"
+
         const val KEY_REMOTE_UID = "uid"
         const val KEY_REMOTE_USERNAME = "username"
         const val KEY_REMOTE_EMAIL = "email"

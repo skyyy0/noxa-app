@@ -12,8 +12,8 @@ object PinnedTracks {
 
     /** Sky's words for this drop, shown in the full player under the controls. */
     const val SKY_QUOTE =
-        "ada lagu yang cuma berdurasi beberapa menit, " +
-            "tapi bisa membawa kita kembali ke masa yang udah ga mungkin diulang."
+        "ada lagu yang hanya berdurasi beberapa menit, " +
+            "tapi bisa membawa kita kembali ke masa yang sudah tidak mungkin dapat diulang."
 
     /** A pinned pick: matched against songs by title + artist (case-insensitive). */
     data class PinnedTrack(val title: String, val artist: String, val quote: String)

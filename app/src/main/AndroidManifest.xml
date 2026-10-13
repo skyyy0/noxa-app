@@ -25,8 +25,15 @@
             android:exported="true"
             android:label="@string/app_name"
             android:launchMode="singleTask"
-            android:theme="@style/Theme.MyApplication"
-            android:windowSoftInputMode="adjustResize">
+            android:theme="@style/Theme.MyApplication">
+            <!--
+                No windowSoftInputMode=adjustResize: MainActivity already calls
+                enableEdgeToEdge(), and on several OEM builds adjustResize AND
+                the Compose ime insets both shrink the layout — the chat
+                composer then floated with a keyboard-sized gap below it.
+                Inset padding alone (WindowInsets.ime in the chat screens) is
+                the single, reliable mechanism on every supported API level.
+            -->
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
 

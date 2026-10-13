@@ -7,4 +7,9 @@
     <cache-path
         name="shared_cards"
         path="share/" />
+    <!-- In-app update downloads, handed to the system installer via the
+         same FileProvider once complete. -->
+    <external-files-path
+        name="update_apks"
+        path="updates/" />
 </paths>

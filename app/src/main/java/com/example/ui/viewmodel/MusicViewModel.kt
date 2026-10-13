@@ -325,6 +325,12 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             resumeLastSession()
         }
         loadHome()
+        // In-app update check: quiet and delayed so it never competes with
+        // the first home load; a newer published version forces a dialog.
+        safeScope.launch {
+            delay(5_000)
+            checkForUpdate()
+        }
         observeCurrentSong()
         observeAutoplaySimilar()
         observeWeeklyRecap()
@@ -507,6 +513,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 _homeSections.value = feed.sections
                 _heroSong.value = feed.hero
                 _pinnedSongs.value = feed.pinned
+                resolveMissingPins(feed.pinned)
                 _popularArtists.value = feed.artists
                 if (feed.sections.isEmpty() && feed.hero == null) {
                     _homeError.value =
@@ -519,6 +526,31 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                     "Beranda tidak bisa dimuat. Periksa koneksi internet lalu coba lagi."
             } finally {
                 _isHomeLoading.value = false
+            }
+        }
+    }
+
+    /**
+     * A pin the Deezer catalogue no longer serves (Nidji's "Laskar Pelangi"
+     * was delisted) is resolved from the YouTube source instead, so the Sky
+     * shelf always shows all five picks.
+     */
+    private suspend fun resolveMissingPins(existing: List<Song>) {
+        val present = existing
+            .mapNotNull { song -> com.example.data.model.PinnedTracks.find(song)?.title }
+            .toSet()
+        val missing = com.example.data.model.PinnedTracks.ALL.filter { it.title !in present }
+        if (missing.isEmpty()) return
+        val extras = missing.mapNotNull { pin ->
+            runCatching {
+                youtubeRepository.search("${pin.artist} ${pin.title}")
+            }.getOrDefault(emptyList())
+                .firstOrNull { com.example.data.model.PinnedTracks.matches(pin, it.title, it.artist) }
+        }
+        if (extras.isEmpty()) return
+        _pinnedSongs.value = (existing + extras).sortedBy { song ->
+            com.example.data.model.PinnedTracks.ALL.indexOfFirst {
+                com.example.data.model.PinnedTracks.matches(it, song.title, song.artist)
             }
         }
     }
@@ -1151,6 +1183,176 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Keyless shared backend: accounts, roles, support threads. */
     private val backend = com.example.data.support.NoxaBackend()
+
+    // ------------------------------------------------------------- updates
+
+    /** Latest update published by the developer, when this build is older. */
+    private val _updateInfo =
+        MutableStateFlow<com.example.data.support.NoxaBackend.UpdateInfo?>(null)
+    val updateInfo: StateFlow<com.example.data.support.NoxaBackend.UpdateInfo?> =
+        _updateInfo.asStateFlow()
+
+    enum class UpdatePhase { Idle, Resolving, Downloading, ReadyToInstall, Failed }
+
+    private val _updatePhase = MutableStateFlow(UpdatePhase.Idle)
+    val updatePhase: StateFlow<UpdatePhase> = _updatePhase.asStateFlow()
+
+    private val _updateError = MutableStateFlow<String?>(null)
+    val updateError: StateFlow<String?> = _updateError.asStateFlow()
+
+    /** Quiet check on every app open: a newer published version forces the dialog. */
+    fun checkForUpdate() {
+        safeScope.launch {
+            val info = runCatching { backend.readState()?.update }.getOrNull() ?: return@launch
+            if (info.versionCode > com.example.BuildConfig.VERSION_CODE) {
+                _updateInfo.value = info
+            }
+        }
+    }
+
+    /**
+     * Downloads the pushed APK in-app (MediaFire links are resolved to their
+     * direct file first), then hands it to the system installer — the
+     * official Android "update" popup, no file manager needed.
+     */
+    fun downloadUpdate() {
+        val info = _updateInfo.value ?: return
+        val phase = _updatePhase.value
+        if (phase == UpdatePhase.Resolving || phase == UpdatePhase.Downloading) return
+        safeScope.launch {
+            _updatePhase.value = UpdatePhase.Resolving
+            _updateError.value = null
+            val direct = runCatching {
+                com.example.data.remote.UpdateRepository.resolveDirectApkUrl(info.url)
+            }.getOrNull()
+            if (direct == null) {
+                _updatePhase.value = UpdatePhase.Failed
+                _updateError.value =
+                    "Link update tidak bisa diakses. Coba lagi nanti atau lapor ke Support."
+                return@launch
+            }
+            val app = getApplication<Application>()
+            val dir = java.io.File(app.getExternalFilesDir(null), "updates").apply { mkdirs() }
+            val target = java.io.File(dir, "noxa-${info.versionName}.apk")
+            if (target.exists()) target.delete()
+            val dm = app.getSystemService(android.content.Context.DOWNLOAD_SERVICE)
+                as android.app.DownloadManager
+            val id = try {
+                dm.enqueue(
+                    android.app.DownloadManager.Request(android.net.Uri.parse(direct))
+                        .setTitle("Update NOXA ${info.versionName}")
+                        .setNotificationVisibility(
+                            android.app.DownloadManager.Request.VISIBILITY_VISIBLE
+                        )
+                        .setDestinationUri(android.net.Uri.fromFile(target))
+                        .setMimeType("application/vnd.android.package")
+                )
+            } catch (e: Exception) {
+                Log.w(TAG, "Update download failed to start: ${e.message}")
+                _updatePhase.value = UpdatePhase.Failed
+                _updateError.value = "Unduhan gagal dimulai. Coba lagi."
+                return@launch
+            }
+            _updatePhase.value = UpdatePhase.Downloading
+            while (true) {
+                delay(700)
+                var finished = false
+                var success = false
+                runCatching {
+                    dm.query(android.app.DownloadManager.Query().setFilterById(id))?.use { c ->
+                        if (!c.moveToFirst()) {
+                            finished = true
+                            success = true
+                        } else {
+                            val status = c.getInt(
+                                c.getColumnIndexOrThrow(android.app.DownloadManager.COLUMN_STATUS)
+                            )
+                            finished = status == android.app.DownloadManager.STATUS_SUCCESSFUL ||
+                                status == android.app.DownloadManager.STATUS_FAILED
+                            success = status == android.app.DownloadManager.STATUS_SUCCESSFUL
+                        }
+                    }
+                }
+                if (finished) {
+                    if (success && target.exists()) {
+                        _updatePhase.value = UpdatePhase.ReadyToInstall
+                        installApk(app, target)
+                    } else {
+                        _updatePhase.value = UpdatePhase.Failed
+                        _updateError.value = "Unduhan update gagal. Coba lagi."
+                    }
+                    return@launch
+                }
+            }
+        }
+    }
+
+    /** Opens the official Android installer for the downloaded APK. */
+    private fun installApk(app: Application, file: java.io.File) {
+        try {
+            val uri = androidx.core.content.FileProvider.getUriForFile(
+                app, "${app.packageName}.fileprovider", file
+            )
+            val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "application/vnd.android.package")
+                addFlags(
+                    android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                        android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+                )
+            }
+            app.startActivity(intent)
+        } catch (e: Exception) {
+            Log.w(TAG, "Installer launch failed: ${e.message}")
+            _updatePhase.value = UpdatePhase.Failed
+            _updateError.value = "Panel instalasi Android tidak bisa dibuka: ${e.message}"
+        }
+    }
+
+    /** Developer-only: publish an APK link as a forced update for every user. */
+    fun pushUpdate(
+        url: String,
+        versionName: String,
+        versionCode: Long,
+        note: String,
+        onResult: (String?) -> Unit
+    ) {
+        safeScope.launch {
+            val cleanUrl = url.trim()
+            if (!cleanUrl.startsWith("http")) {
+                onResult("Link APK harus diawali http/https (file langsung atau link MediaFire).")
+                return@launch
+            }
+            if (versionCode <= com.example.BuildConfig.VERSION_CODE) {
+                onResult(
+                    "Version code harus lebih besar dari versi sekarang " +
+                        "(${com.example.BuildConfig.VERSION_CODE})."
+                )
+                return@launch
+            }
+            val ok = runCatching {
+                backend.publishUpdate(
+                    com.example.data.support.NoxaBackend.UpdateInfo(
+                        versionCode = versionCode,
+                        versionName = versionName.trim().ifBlank { "v$versionCode" },
+                        url = cleanUrl,
+                        note = note.trim(),
+                        at = System.currentTimeMillis()
+                    )
+                )
+            }.getOrDefault(false)
+            onResult(if (ok) null else "Publish gagal — server tidak terjangkau. Coba lagi.")
+        }
+    }
+
+    /** Permanently deletes the signed-in account (email must be re-typed). */
+    fun deleteAccount(confirmEmail: String, onResult: (String?) -> Unit) {
+        authManager.deleteAccount(
+            confirmEmail = confirmEmail,
+            scope = safeScope,
+            onSuccess = { onResult(null) },
+            onError = { onResult(it) }
+        )
+    }
 
     private val _supportState =
         MutableStateFlow<com.example.ui.screens.SupportUiState>(com.example.ui.screens.SupportUiState.Loading)

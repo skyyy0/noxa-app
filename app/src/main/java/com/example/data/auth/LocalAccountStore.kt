@@ -85,6 +85,35 @@ class LocalAccountStore(context: Context) {
         save(accounts)
     }
 
+    /**
+     * Permanently deletes an account from the device store. Clears the
+     * session when the deleted account is the signed-in one. Returns false
+     * when the email matched nothing.
+     */
+    fun deleteAccount(email: String): Boolean {
+        val cleanEmail = email.trim().lowercase(Locale.ROOT)
+        val accounts = load().toMutableMap()
+        val removed = accounts.remove(cleanEmail) ?: return false
+        save(accounts)
+        if (sessionUid == removed.uid) clearSession()
+        return true
+    }
+
+    /** Remaining cooldown (ms) before the account may change username/password again. */
+    fun cooldownRemaining(uid: String, kind: String, periodMs: Long): Long {
+        val last = prefs.getLong(cooldownKey(uid, kind), 0L)
+        if (last == 0L) return 0L
+        val wait = last + periodMs - System.currentTimeMillis()
+        return if (wait > 0L) wait else 0L
+    }
+
+    /** Marks "username"/"password" changed now, starting its cooldown. */
+    fun markChanged(uid: String, kind: String) {
+        prefs.edit().putLong(cooldownKey(uid, kind), System.currentTimeMillis()).apply()
+    }
+
+    private fun cooldownKey(uid: String, kind: String) = "cooldown_${kind}_$uid"
+
     /** Returns the matching account, or null when the credentials are wrong. */
     suspend fun authenticate(email: String, password: String): LocalAccount? = mutex.withLock {
         val cleanEmail = email.trim().lowercase(Locale.ROOT)

@@ -105,6 +105,8 @@ fun ProfileScreen(
     onChangeUsername: (String, (String?) -> Unit) -> Unit,
     /** null = sukses, String = pesan error. */
     onChangePassword: (String, String, (String?) -> Unit) -> Unit,
+    /** null = sukses, String = pesan error. */
+    onDeleteAccount: (String, (String?) -> Unit) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -116,6 +118,9 @@ fun ProfileScreen(
     // Account settings dialogs.
     var showUsernameDialog by remember { mutableStateOf(false) }
     var showPasswordDialog by remember { mutableStateOf(false) }
+    // Sign-out confirmation & permanent account deletion.
+    var showSignOutDialog by remember { mutableStateOf(false) }
+    var showDeleteAccountDialog by remember { mutableStateOf(false) }
     // Floating QRIS popup for supporting the developer.
     var showQrisDialog by remember { mutableStateOf(false) }
 
@@ -214,7 +219,7 @@ fun ProfileScreen(
 
                 if (currentUser != null) {
                     androidx.compose.material3.OutlinedButton(
-                        onClick = onSignOut,
+                        onClick = { showSignOutDialog = true },
                         shape = RoundedCornerShape(20.dp),
                         border = androidx.compose.foundation.BorderStroke(1.dp, NoxaBorder),
                         modifier = Modifier.fillMaxWidth()
@@ -290,6 +295,19 @@ fun ProfileScreen(
                         subtitle = "Verifikasi password lama dulu",
                         onClick = { showPasswordDialog = true },
                         tag = "settings_change_password"
+                    )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(1.dp)
+                            .background(NoxaBorder)
+                    )
+                    AccountSettingRow(
+                        icon = Icons.Default.Delete,
+                        title = "Hapus Akun",
+                        subtitle = "Permanen — data akun & chat support ikut terhapus",
+                        onClick = { showDeleteAccountDialog = true },
+                        tag = "settings_delete_account"
                     )
                 }
             }
@@ -889,6 +907,27 @@ fun ProfileScreen(
             onDismiss = { showPasswordDialog = false }
         )
     }
+    if (showSignOutDialog) {
+        ConfirmSignOutDialog(
+            onConfirm = {
+                showSignOutDialog = false
+                onSignOut()
+            },
+            onDismiss = { showSignOutDialog = false }
+        )
+    }
+    if (showDeleteAccountDialog && currentUser?.email != null) {
+        val accountEmail = currentUser.email!!
+        DeleteAccountDialog(
+            accountEmail = accountEmail,
+            onDelete = { email, onError ->
+                onDeleteAccount(email) { error ->
+                    if (error == null) showDeleteAccountDialog = false else onError(error)
+                }
+            },
+            onDismiss = { showDeleteAccountDialog = false }
+        )
+    }
 }
 
 /** One navigation row in the "Pengaturan Akun" card. */
@@ -1152,6 +1191,146 @@ private fun authFieldColors() = OutlinedTextFieldDefaults.colors(
     unfocusedTextColor = NoxaTextPrimary,
     cursorColor = NoxaLime
 )
+
+/** Yes/No confirmation — signing out now asks before ending the session. */
+@Composable
+private fun ConfirmSignOutDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = NoxaSurfaceElevated,
+        title = {
+            Text("Yakin ingin keluar?", color = NoxaTextPrimary, fontWeight = FontWeight.Bold)
+        },
+        text = {
+            Text(
+                "Sesi akun kamu akan diakhiri di perangkat ini. Masuk kembali kapan saja.",
+                color = NoxaTextSecondary,
+                fontSize = 13.sp
+            )
+        },
+        confirmButton = {
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(NoxaLime)
+                    .clickable { onConfirm() }
+                    .padding(horizontal = 20.dp, vertical = 10.dp)
+                    .testTag("sign_out_confirm_btn")
+            ) {
+                Text("Yes, Sign Out", color = NoxaBlack, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+            }
+        },
+        dismissButton = {
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(20.dp))
+                    .border(1.dp, NoxaBorder, RoundedCornerShape(20.dp))
+                    .clickable { onDismiss() }
+                    .padding(horizontal = 20.dp, vertical = 10.dp)
+                    .testTag("sign_out_cancel_btn")
+            ) {
+                Text("No", color = NoxaTextSecondary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+            }
+        }
+    )
+}
+
+/**
+ * Permanent account deletion: the email must be re-typed exactly, so this
+ * irreversible step can never happen through a stray tap.
+ */
+@Composable
+private fun DeleteAccountDialog(
+    accountEmail: String,
+    onDelete: (String, (String) -> Unit) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var typed by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = NoxaSurfaceElevated,
+        title = {
+            Text("Hapus Akun Permanen", color = NoxaLime, fontWeight = FontWeight.Bold)
+        },
+        text = {
+            Column {
+                Text(
+                    text = "Semua data akun kamu — termasuk chat support — akan dihapus " +
+                        "permanen dan tidak bisa dikembalikan. Ketik email akun untuk " +
+                        "mengonfirmasi:",
+                    color = NoxaTextSecondary,
+                    fontSize = 12.sp
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+                Text(
+                    accountEmail,
+                    color = NoxaTextPrimary,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = typed,
+                    onValueChange = { typed = it; error = null },
+                    label = { Text("Konfirmasi email") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                    colors = authFieldColors(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("delete_account_email_field")
+                )
+                error?.let { message ->
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        message,
+                        color = NoxaLime,
+                        fontSize = 11.sp,
+                        modifier = Modifier.testTag("delete_account_error")
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            val ready = typed.isNotBlank() && !busy
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(if (ready) NoxaLime else NoxaBorder)
+                    .clickable(enabled = ready) {
+                        busy = true
+                        onDelete(typed.trim()) { message ->
+                            busy = false
+                            error = message
+                        }
+                    }
+                    .padding(horizontal = 18.dp, vertical = 10.dp)
+                    .testTag("delete_account_confirm_btn")
+            ) {
+                Text(
+                    "Hapus Permanen",
+                    color = if (ready) NoxaBlack else NoxaTextTertiary,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 12.sp
+                )
+            }
+        },
+        dismissButton = {
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(20.dp))
+                    .border(1.dp, NoxaBorder, RoundedCornerShape(20.dp))
+                    .clickable { onDismiss() }
+                    .padding(horizontal = 18.dp, vertical = 10.dp)
+                    .testTag("delete_account_cancel_btn")
+            ) {
+                Text("Batal", color = NoxaTextSecondary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+            }
+        }
+    )
+}
 
 /**
  * Floating QRIS popup: scan to support NOXA's construction & development.

@@ -158,6 +158,11 @@ fun NoxaApp(
     val weeklyRecap by viewModel.weeklyRecap.collectAsStateWithLifecycle()
     val appSettings by viewModel.appSettings.collectAsStateWithLifecycle()
 
+    // Forced in-app update published by the developer account.
+    val updateInfo by viewModel.updateInfo.collectAsStateWithLifecycle()
+    val updatePhase by viewModel.updatePhase.collectAsStateWithLifecycle()
+    val updateError by viewModel.updateError.collectAsStateWithLifecycle()
+
     val lyricsState by viewModel.lyricsState.collectAsStateWithLifecycle()
     val isFullPlayerVisible by viewModel.isFullPlayerVisible.collectAsStateWithLifecycle()
     val videoUiState by viewModel.videoUiState.collectAsStateWithLifecycle()
@@ -514,6 +519,9 @@ fun NoxaApp(
                         },
                         onChangePassword = { current, fresh, onResult ->
                             viewModel.changePassword(current, fresh, onResult)
+                        },
+                        onDeleteAccount = { email, onResult ->
+                            viewModel.deleteAccount(email, onResult)
                         }
                     )
                 }
@@ -594,10 +602,26 @@ fun NoxaApp(
                         onCreateAccount = { email, username, password, role, onResult ->
                             viewModel.createAccountAsDev(email, username, password, role, onResult)
                         },
-                        onChangeRole = { uid, role -> viewModel.changeAccountRole(uid, role) }
+                        onChangeRole = { uid, role -> viewModel.changeAccountRole(uid, role) },
+                        currentVersionCode = com.example.BuildConfig.VERSION_CODE.toLong(),
+                        currentVersionName = com.example.BuildConfig.VERSION_NAME,
+                        onPushUpdate = { url, name, code, note, onResult ->
+                            viewModel.pushUpdate(url, name, code, note, onResult)
+                        }
                     )
                 }
             }
+        }
+
+        // Forced in-app update — sits above every screen (nav, player
+        // sheet, dialogs) until the user is on the published version.
+        updateInfo?.let { info ->
+            com.example.ui.components.MandatoryUpdateDialog(
+                info = info,
+                phase = updatePhase,
+                error = updateError,
+                onUpdate = { viewModel.downloadUpdate() }
+            )
         }
 
         // Full Screen Player Overlay Sheet

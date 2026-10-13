@@ -531,7 +531,7 @@ fun HomeScreen(
                             }
                         }
                         Text(
-                            text = "Rak khusus pilihan Sky",
+                            text = "Lagu khusus pilihan Sky",
                             color = NoxaTextSecondary,
                             fontSize = 12.sp
                         )

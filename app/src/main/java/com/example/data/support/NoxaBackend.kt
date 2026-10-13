@@ -270,49 +270,79 @@ class NoxaBackend {
 
     // -------------------------------------------------------- account updates
 
-    /** Renames an account everywhere (registry + its support thread). */
-    suspend fun updateUsername(uid: String, newUsername: String): Boolean {
+    /** Renames an account everywhere (registry + its support thread).
+     *  Returns `null` on success or a user-facing reason on refusal — the
+     *  7-day cooldown lives here so it holds across every device. */
+    suspend fun updateUsername(uid: String, newUsername: String): String? {
+        val now = System.currentTimeMillis()
+        var refusal: String? = null
         val changed = mutate { state ->
             val account = state.accounts.values.firstOrNull { it.uid == uid } ?: return@mutate false
             if (state.accounts.values.any { it !== account && it.username.equals(newUsername, ignoreCase = true) }) {
+                refusal = "Username \"$newUsername\" sudah dipakai. Pilih yang lain."
                 return@mutate false
             }
-            state.accounts[account.email] = RemoteAccountInternal(
-                uid = account.uid,
-                email = account.email,
+            val wait = USERNAME_COOLDOWN_MS - (now - account.lastUsernameChangeAt)
+            if (account.lastUsernameChangeAt > 0L && wait > 0L) {
+                refusal = cooldownMessage("username", wait)
+                return@mutate false
+            }
+            state.accounts[account.email] = account.copy(
                 username = newUsername,
-                saltHex = account.saltHex,
-                hashHex = account.hashHex,
-                role = account.role,
-                createdAt = account.createdAt
+                lastUsernameChangeAt = now
             )
             state.threads[uid]?.let { thread ->
                 state.threads[uid] = thread.copy(username = newUsername)
             }
             true
         }
-        return changed == true
+        return if (changed == true) null else refusal ?: "Ganti username gagal. Coba lagi."
     }
 
-    /** Changes an account's password (hash only — the plaintext never travels back). */
-    suspend fun updatePassword(uid: String, newPassword: String): Boolean {
+    /**
+     * Changes the account's password (hash only — the plaintext never travels
+     * back). Returns `null` on success or a user-facing reason; the 14-day
+     * cooldown holds across every device.
+     */
+    suspend fun updatePassword(uid: String, newPassword: String): String? {
         val salt = randomSalt()
         val hashHex = toHex(pbkdf2(newPassword.toByteArray(Charsets.UTF_8), salt))
+        val now = System.currentTimeMillis()
+        var refusal: String? = null
         val changed = mutate { state ->
             val account = state.accounts.values.firstOrNull { it.uid == uid } ?: return@mutate false
-            state.accounts[account.email] = RemoteAccountInternal(
-                uid = account.uid,
-                email = account.email,
-                username = account.username,
+            val wait = PASSWORD_COOLDOWN_MS - (now - account.lastPasswordChangeAt)
+            if (account.lastPasswordChangeAt > 0L && wait > 0L) {
+                refusal = cooldownMessage("password", wait)
+                return@mutate false
+            }
+            state.accounts[account.email] = account.copy(
                 saltHex = toHex(salt),
                 hashHex = hashHex,
-                role = account.role,
-                createdAt = account.createdAt
+                lastPasswordChangeAt = now
             )
             true
         }
-        return changed == true
+        return if (changed == true) null else refusal ?: "Ganti password gagal. Coba lagi."
     }
+
+    /** Permanently removes an account and its support thread. */
+    suspend fun deleteAccount(email: String): Boolean {
+        val cleanEmail = email.trim().lowercase(Locale.ROOT)
+        val removed = mutate { state ->
+            val account = state.accounts.remove(cleanEmail) ?: return@mutate false
+            state.threads.remove(account.uid)
+            true
+        }
+        return removed == true
+    }
+
+    /** Publishes a new in-app update; every client below it must update. */
+    suspend fun publishUpdate(info: UpdateInfo): Boolean =
+        mutate { state ->
+            state.update = info
+            true
+        } == true
 
     /** Changes an account's role (used by the dev console). */
     suspend fun updateRole(uid: String, role: AccountRole): Boolean {
@@ -443,14 +473,27 @@ class NoxaBackend {
 
     // ------------------------------------------------------------- internals
 
-    class RemoteAccountInternal(
+    data class RemoteAccountInternal(
         val uid: String,
         val email: String,
         val username: String,
         val saltHex: String,
         val hashHex: String,
         val role: AccountRole,
-        val createdAt: Long
+        val createdAt: Long,
+        /** Last username change (ms) — drives the 7-day cooldown. */
+        val lastUsernameChangeAt: Long = 0L,
+        /** Last password change (ms) — drives the 14-day cooldown. */
+        val lastPasswordChangeAt: Long = 0L
+    )
+
+    /** One published in-app update (developer push). */
+    data class UpdateInfo(
+        val versionCode: Long,
+        val versionName: String,
+        val url: String,
+        val note: String,
+        val at: Long
     )
 
     /** Full backend document, mirrored 1:1 onto the Telegraph page. */
@@ -458,6 +501,9 @@ class NoxaBackend {
         var seq: Long = 0L
         val accounts = LinkedHashMap<String, RemoteAccountInternal>()
         val threads = LinkedHashMap<String, SupportThread>()
+
+        /** Latest pushed update, or null when nothing was ever published. */
+        var update: UpdateInfo? = null
     }
 
     private fun parseState(json: JSONObject): BackendState {
@@ -475,7 +521,9 @@ class NoxaBackend {
                 saltHex = obj.optString("saltHex"),
                 hashHex = obj.optString("hashHex"),
                 role = AccountRole.from(obj.optString("role")),
-                createdAt = obj.optLong("createdAt")
+                createdAt = obj.optLong("createdAt"),
+                lastUsernameChangeAt = obj.optLong("lastUsernameChangeAt"),
+                lastPasswordChangeAt = obj.optLong("lastPasswordChangeAt")
             )
         }
         val threads = json.optJSONObject("threads") ?: JSONObject()
@@ -503,6 +551,16 @@ class NoxaBackend {
                 resolved = obj.optBoolean("resolved")
             )
         }
+        state.update = json.optJSONObject("update")?.let { u ->
+            val url = u.optString("url")
+            if (url.isBlank()) null else UpdateInfo(
+                versionCode = u.optLong("versionCode"),
+                versionName = u.optString("versionName"),
+                url = url,
+                note = u.optString("note"),
+                at = u.optLong("at")
+            )
+        }
         return state
     }
 
@@ -518,6 +576,8 @@ class NoxaBackend {
                     .put("hashHex", account.hashHex)
                     .put("role", account.role.name)
                     .put("createdAt", account.createdAt)
+                    .put("lastUsernameChangeAt", account.lastUsernameChangeAt)
+                    .put("lastPasswordChangeAt", account.lastPasswordChangeAt)
             )
         }
         val threads = JSONObject()
@@ -547,6 +607,19 @@ class NoxaBackend {
             .put("seq", state.seq)
             .put("accounts", accounts)
             .put("threads", threads)
+            .also { root ->
+                state.update?.let { u ->
+                    root.put(
+                        "update",
+                        JSONObject()
+                            .put("versionCode", u.versionCode)
+                            .put("versionName", u.versionName)
+                            .put("url", u.url)
+                            .put("note", u.note)
+                            .put("at", u.at)
+                    )
+                }
+            }
     }
 
     /** Keeps the document inside Telegraph's page-size limit. */
@@ -670,6 +743,20 @@ class NoxaBackend {
     companion object {
         private const val TAG = "NoxaBackend"
         private const val API_BASE = "https://api.telegra.ph"
+
+        /** Username may change once every 7 days; password once every 14. */
+        const val USERNAME_COOLDOWN_MS = 7L * 24 * 60 * 60 * 1000
+        const val PASSWORD_COOLDOWN_MS = 14L * 24 * 60 * 60 * 1000
+
+        /** Human Indonesian cooldown message with a rounded-up day count. */
+        fun cooldownMessage(kind: String, waitMs: Long): String {
+            val days = (waitMs / (24 * 60 * 60 * 1000L)) + 1
+            return if (kind == "username") {
+                "Ganti username hanya bisa 1x dalam 7 hari. Bisa lagi dalam ~$days hari."
+            } else {
+                "Ganti password hanya bisa 1x dalam 14 hari. Bisa lagi dalam ~$days hari."
+            }
+        }
 
         /** The one state document shared by every install. */
         private const val PAGE_PATH = "NOXA-Backend-Core-10-13"

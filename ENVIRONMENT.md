@@ -367,6 +367,45 @@ pengguna sebelum pemutaran pertama.
   pengembangan NOXA.
 * **Versi** — `versionName` **1.14.1** / `versionCode` 13.
 
+### v1.15 — push update in-app, akun developer Google, hapus akun, cooldown
+
+* **Push Update in-app (fitur baru)** — akun developer (NOXA Admin) punya
+  tab **Push Update**: isi link APK (file langsung `.apk` atau link
+  MediaFire — di-resolve otomatis ke host filenya), version name/code, dan
+  catatan, lalu **Share Update ke Semua User**. Setiap user dengan version
+  code lebih rendah langsung menerima **popup update wajib** (tidak bisa
+  ditutup), mengunduh APK **langsung dari aplikasi** (DownloadManager +
+  notifikasi), dan begitu selesai **panel instalasi Android resmi terbuka
+  otomatis** — user tidak perlu mencari file hasil unduhan. Entry update
+  disimpan di registry backend (`update`: versionCode/versionName/url/note).
+* **Akun developer auto-detect** — login dengan Google
+  `sekay77771@gmail.com` otomatis mendapat role `DEVELOPER` (juga di jalur
+  Firebase email), jadi inbox laporan user langsung terbuka dari NOXA
+  Admin tanpa perlu login email developer.
+* **Sign out ada konfirmasi** — tombol Sign Out kini membuka popup
+  Yes/No ("Yakin ingin keluar?").
+* **Hapus akun** — menu **Hapus Akun** di Pengaturan Akun: ketik ulang
+  email untuk konfirmasi, lalu akun dihapus permanen dari registry
+  (termasuk thread chat support), Firebase (bila sesi dari sana), dan
+  mirror lokal; sesi langsung berakhir.
+* **Cooldown akun** — ganti username maksimal **1x tiap 7 hari**, ganti
+  password maksimal **1x tiap 14 hari**. Aturan disimpan di registry
+  (berlaku lintas perangkat) + mirror lokal (jaga-jaga offline); pesan
+  sisa hari ditampilkan jujur.
+* **5 lagu pin kembali lengkap** — "Laskar Pelangi" (Nidji) ternyata
+  sudah tidak ada di katalog Deezer (delisted), sehingga rak pin hanya
+  menampilkan 3–4 lagu. Kini pin yang gagal di Deezer otomatis dicari di
+  sumber YouTube, jadi kelima pin selalu tampil. Quote Kangen diperbarui
+  menjadi: *"ada lagu yang hanya berdurasi beberapa menit, tapi bisa
+  membawa kita kembali ke masa yang sudah tidak mungkin dapat diulang."*
+  dan subtitle rak menjadi **"Lagu khusus pilihan Sky"**.
+* **Keyboard chat diperbaiki** — composer chat Support/AI sempat melayang
+  di tengah layar dengan jarak setinggi keyboard saat keyboard terbuka
+  (beberapa OEM mengerjakan `adjustResize` DAN inset Compose sekaligus →
+  layout menyusut dua kali). Manifest kini mengandalkan inset edge-to-edge
+  saja.
+* **Versi** — `versionName` **1.15.0** / `versionCode` 14.
+
 ### Berbagi lagu: link NOXA & kartu canvas (v1.10)
 
 Sebelumnya membagikan lagu mengirim link Deezer (`deezer.com/track/…`). Sejak

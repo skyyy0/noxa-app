@@ -57,6 +57,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -99,7 +100,8 @@ sealed interface DevUiState {
 
 private enum class DevTab(val label: String) {
     THREADS("Laporan Pengguna"),
-    ACCOUNTS("Daftar Akun")
+    ACCOUNTS("Daftar Akun"),
+    UPDATE("Push Update")
 }
 
 /**
@@ -121,6 +123,11 @@ fun DevPanelScreen(
     onReply: (threadUid: String, text: String) -> Unit,
     onCreateAccount: (email: String, username: String, password: String, role: AccountRole, (String?) -> Unit) -> Unit,
     onChangeRole: (uid: String, role: AccountRole) -> Unit,
+    /** Running build, shown in the Push Update form as the baseline. */
+    currentVersionCode: Long,
+    currentVersionName: String,
+    /** Publishes a new forced update (null result = success). */
+    onPushUpdate: (url: String, versionName: String, versionCode: Long, note: String, (String?) -> Unit) -> Unit,
     modifier: Modifier = Modifier
 ) {
     var tab by remember { mutableStateOf(DevTab.THREADS) }
@@ -227,6 +234,12 @@ fun DevPanelScreen(
                                 accounts = s.accounts,
                                 onCreateClick = { showCreateForm = true },
                                 onChangeRole = onChangeRole
+                            )
+
+                            DevTab.UPDATE -> UpdatePushSection(
+                                currentVersionCode = currentVersionCode,
+                                currentVersionName = currentVersionName,
+                                onPush = onPushUpdate
                             )
                         }
                     }
@@ -336,6 +349,137 @@ private fun DevTabRow(current: DevTab, onSelect: (DevTab) -> Unit, modifier: Mod
                     fontWeight = FontWeight.Bold
                 )
             }
+        }
+    }
+}
+
+// ------------------------------------------------------------ push update
+
+/**
+ * Developer-only update publisher: an APK link (direct `.apk` or MediaFire)
+ * becomes a forced in-app update for every user on an older version.
+ */
+@Composable
+private fun UpdatePushSection(
+    currentVersionCode: Long,
+    currentVersionName: String,
+    onPush: (url: String, versionName: String, versionCode: Long, note: String, (String?) -> Unit) -> Unit
+) {
+    var url by remember { mutableStateOf("") }
+    var versionName by remember { mutableStateOf("") }
+    var versionCode by remember { mutableStateOf((currentVersionCode + 1).toString()) }
+    var note by remember { mutableStateOf("") }
+    var result by remember { mutableStateOf<String?>(null) }
+    var success by remember { mutableStateOf(false) }
+    var busy by remember { mutableStateOf(false) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp)
+    ) {
+        Text(
+            "Push Update ke Semua User",
+            color = NoxaTextPrimary,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold
+        )
+        Spacer(modifier = Modifier.height(6.dp))
+        Text(
+            "Versi berjalan: $currentVersionName ($currentVersionCode). Semua user dengan " +
+                "version code di bawah yang kamu isi akan menerima popup update wajib, " +
+                "mengunduh langsung dari aplikasi, lalu panel instalasi Android terbuka otomatis.",
+            color = NoxaTextSecondary,
+            fontSize = 12.sp,
+            lineHeight = 17.sp
+        )
+        Spacer(modifier = Modifier.height(14.dp))
+
+        OutlinedTextField(
+            value = url,
+            onValueChange = { url = it; result = null; success = false },
+            label = { Text("Link APK (direct .apk / MediaFire)") },
+            singleLine = true,
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("push_update_url"),
+            colors = devFieldColors()
+        )
+        Spacer(modifier = Modifier.height(10.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            OutlinedTextField(
+                value = versionName,
+                onValueChange = { versionName = it; result = null; success = false },
+                label = { Text("Versi, mis. 1.15.1") },
+                singleLine = true,
+                modifier = Modifier
+                    .weight(1f)
+                    .testTag("push_update_version_name"),
+                colors = devFieldColors()
+            )
+            OutlinedTextField(
+                value = versionCode,
+                onValueChange = { versionCode = it.filter(Char::isDigit); result = null; success = false },
+                label = { Text("Version code") },
+                singleLine = true,
+                modifier = Modifier
+                    .weight(1f)
+                    .testTag("push_update_version_code"),
+                colors = devFieldColors()
+            )
+        }
+        Spacer(modifier = Modifier.height(10.dp))
+        OutlinedTextField(
+            value = note,
+            onValueChange = { note = it; result = null; success = false },
+            label = { Text("Catatan update (opsional)") },
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("push_update_note"),
+            colors = devFieldColors()
+        )
+
+        result?.let { message ->
+            Spacer(modifier = Modifier.height(10.dp))
+            Text(
+                message,
+                color = if (success) NoxaTextPrimary else NoxaError,
+                fontSize = 12.sp,
+                modifier = Modifier.testTag("push_update_result")
+            )
+        }
+
+        Spacer(modifier = Modifier.height(14.dp))
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(20.dp))
+                .background(if (busy) NoxaSurfaceSecondary else NoxaPurple)
+                .clickable(enabled = !busy) {
+                    busy = true
+                    success = false
+                    result = null
+                    onPush(url, versionName, versionCode.toLongOrNull() ?: 0L, note) { error ->
+                        busy = false
+                        if (error == null) {
+                            success = true
+                            result = "Update dipublikasikan! User dengan versi di bawah " +
+                                "${versionCode.toLongOrNull() ?: 0L} akan diminta update."
+                        } else {
+                            result = error
+                        }
+                    }
+                }
+                .padding(vertical = 13.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                if (busy) "Mempublikasikan…" else "Share Update ke Semua User",
+                color = Color.White,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold
+            )
         }
     }
 }
