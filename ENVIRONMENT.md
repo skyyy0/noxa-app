@@ -312,6 +312,36 @@ pengguna sebelum pemutaran pertama.
   tidak terjangkau"), bukan menyalahkan password.
 * **Versi** — `versionName` **1.13.4** / `versionCode` 11.
 
+### v1.14 — halaman Get Started: Google · Email · Phone (OTP)
+
+* **Satu pintu masuk "Get Started"** — kartu tamu di Home dan kartu login
+  di Profile kini hanya satu tombol **Get Started** (bukan lagi tombol
+  Google + form email langsung di sana). Sekali klik membuka halaman hub
+  berisi pilihan metode: **Continue with Google**, **Continue with Email**,
+  dan **Continue with Phone**. Form email (masuk/daftar, NOXA Bot, bar
+  kekuatan password) pindah ke halaman itu, lengkap dengan opsi "Maybe
+  later — continue as guest".
+* **Masuk nomor telepon (OTP SMS) — baru** — verifikasi nomor lewat
+  Firebase Phone Auth: input E.164 (`+62812…`), kode6 digit dikirim via
+  SMS, layar verifikasi + tombol ganti nomor; di perangkat yang mendukung
+  verifikasi instan, login bisa terjadi tanpa mengetik kode. Pesan error
+  diterjemahkan jujur (nomor salah, kode salah/kedaluwarsa, kuota, provider
+  nonaktif, butuh penagihan Blaze, region SMS). **Syarat kirim SMS** di
+  konsol Firebase: plan Blaze aktif dan kebijakan region SMS mengizinkan
+  Indonesia. Provider Email/Password, Phone, dan Google semuanya sudah
+  aktif di proyek.
+* **Email/Password tanpa OTP** — riset Firebase: login email memakai
+  email + password biasa; kode OTP tidak terlibat. Verifikasi *email*
+  (tautan konfirmasi) hanya opsional dan terpisah — NOXA tidak memakainya.
+  OTP khusus jalur telepon.
+* **Fix verifikasi token Google** — JWKS Google
+  (`www.googleapis.com/oauth2/v3/certs`) ternyata mengeluarkan kunci RSA
+  telanjang **tanpa rantai `x5c`**, sehingga jalur parse lama selalu kosong
+  dan verifikasi token jatuh ke Firebase. Kini `n`/`e` (modulus/exponent
+  base64url) diparse langsung jadi `RSAPublicKeySpec`; `x5c` tetap jadi
+  cadangan.
+* **Versi** — `versionName` **1.14.0** / `versionCode` 12.
+
 ### Berbagi lagu: link NOXA & kartu canvas (v1.10)
 
 Sebelumnya membagikan lagu mengirim link Deezer (`deezer.com/track/…`). Sejak

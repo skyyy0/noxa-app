@@ -66,6 +66,7 @@ import com.example.ui.screens.AlbumScreen
 import com.example.ui.screens.ArtistScreen
 import com.example.ui.screens.DevPanelScreen
 import com.example.ui.screens.EqualizerScreen
+import com.example.ui.screens.GetStartedScreen
 import com.example.ui.screens.HomeScreen
 import com.example.ui.screens.LibraryScreen
 import com.example.ui.screens.PlaylistDetailScreen
@@ -122,6 +123,9 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector)
 
     /** NOXA Admin console — developer role only. */
     object DevPanel : Screen("dev_panel", "Admin", Icons.Default.Person)
+
+    /** Sign-in hub: Google / Email / Phone (OTP). */
+    object GetStarted : Screen("get_started", "Get Started", Icons.Default.Person)
 }
 
 @Composable
@@ -317,6 +321,7 @@ fun NoxaApp(
                         onResume = { viewModel.resumeLastSession() },
                         onDismissResume = { viewModel.dismissResume() },
                         onSignInWithGoogle = { activity -> viewModel.signInWithGoogle(activity) },
+                        onOpenGetStarted = { navController.navigate(Screen.GetStarted.route) },
                         onRetry = { viewModel.loadHome() },
                         onOpenArtist = openArtistProfile
                     )
@@ -503,11 +508,40 @@ fun NoxaApp(
                         onOpenDevPanel = {
                             navController.navigate(Screen.DevPanel.route)
                         },
+                        onOpenGetStarted = { navController.navigate(Screen.GetStarted.route) },
                         onChangeUsername = { name, onResult ->
                             viewModel.changeUsername(name, onResult)
                         },
                         onChangePassword = { current, fresh, onResult ->
                             viewModel.changePassword(current, fresh, onResult)
+                        }
+                    )
+                }
+
+                composable(Screen.GetStarted.route) {
+                    GetStartedScreen(
+                        currentUser = currentUser,
+                        isSigningIn = isSigningIn,
+                        onBack = { navController.popBackStack() },
+                        onSignInWithGoogle = { activity, onError ->
+                            viewModel.signInWithGoogle(activity, onError = onError)
+                        },
+                        onSignInWithEmail = { email, password, onError ->
+                            viewModel.signInWithEmail(email, password, onError = onError)
+                        },
+                        onRegisterWithEmail = { email, password, username, onError ->
+                            viewModel.registerWithEmail(
+                                email,
+                                password,
+                                username,
+                                onError = onError
+                            )
+                        },
+                        onSendPhoneOtp = { activity, phone, onCodeSent, onError ->
+                            viewModel.sendPhoneOtp(activity, phone, onCodeSent, onError)
+                        },
+                        onVerifyPhoneOtp = { verificationId, code, onError ->
+                            viewModel.verifyPhoneOtp(verificationId, code, onError)
                         }
                     )
                 }

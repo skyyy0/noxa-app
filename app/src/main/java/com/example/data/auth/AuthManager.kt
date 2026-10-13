@@ -13,13 +13,18 @@ import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential.Companion.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.FirebaseAuthException
 import com.google.firebase.auth.GoogleAuthProvider
+import com.google.firebase.auth.PhoneAuthCredential
+import com.google.firebase.auth.PhoneAuthOptions
+import com.google.firebase.auth.PhoneAuthProvider
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
+import java.util.concurrent.TimeUnit
 
 /**
  * Sign-in for NOXA.
@@ -231,6 +236,140 @@ class AuthManager(private val context: Context) {
             } finally {
                 _isSigningIn.value = false
             }
+        }
+    }
+
+    // ------------------------------------------------------- phone sign-in
+
+    /**
+     * Sends an SMS one-time code to [phoneNumber] (E.164, e.g. `+62812…`).
+     *
+     * Uses Firebase phone auth — the only keyless-registry-independent method
+     * here, since SMS OTP has no public keyless equivalent. Two console steps
+     * are required for real delivery: the Blaze plan (phone auth is billed per
+     * SMS) and Indonesia allowed in the SMS region policy. On eligible
+     * devices Firebase verifies instantly and [onSuccess] fires without the
+     * user ever typing the code.
+     */
+    fun sendPhoneOtp(
+        activity: Activity,
+        phoneNumber: String,
+        scope: CoroutineScope,
+        onCodeSent: (verificationId: String) -> Unit,
+        onSuccess: (NoxaUser) -> Unit = {},
+        onError: (String) -> Unit
+    ) {
+        val firebaseAuth = auth
+        if (firebaseAuth == null) {
+            onError("Masuk dengan nomor telepon belum tersedia pada build ini.")
+            return
+        }
+        val e164 = phoneNumber.trim()
+        if (!e164.startsWith("+") || e164.length < 8) {
+            onError("Nomor telepon tidak valid. Awali dengan + dan kode negara, contoh +62812xxxxxxx.")
+            return
+        }
+
+        _isSigningIn.value = true
+        val callbacks = object : PhoneAuthProvider.OnVerificationStateChangedCallbacks() {
+            override fun onVerificationCompleted(credential: PhoneAuthCredential) {
+                // Auto/instant verification on this device — sign in without
+                // waiting for the user to type the SMS code.
+                scope.launch {
+                    signInWithPhoneCredential(firebaseAuth, credential, onSuccess, onError)
+                }
+            }
+
+            override fun onVerificationFailed(e: com.google.firebase.FirebaseException) {
+                _isSigningIn.value = false
+                Log.w("AuthManager", "Phone verification failed: ${e.message}")
+                onError(humanizePhoneError(e))
+            }
+
+            override fun onCodeSent(verificationId: String, token: PhoneAuthProvider.ForceResendingToken) {
+                _isSigningIn.value = false
+                onCodeSent(verificationId)
+            }
+        }
+        val options = PhoneAuthOptions.newBuilder(firebaseAuth)
+            .setPhoneNumber(e164)
+            .setTimeout(60L, TimeUnit.SECONDS)
+            .setActivity(activity)
+            .setCallbacks(callbacks)
+            .build()
+        PhoneAuthProvider.verifyPhoneNumber(options)
+    }
+
+    /** Verifies the six-digit SMS code the user received. */
+    fun verifyPhoneOtp(
+        verificationId: String,
+        code: String,
+        scope: CoroutineScope,
+        onSuccess: (NoxaUser) -> Unit = {},
+        onError: (String) -> Unit
+    ) {
+        val firebaseAuth = auth
+        if (firebaseAuth == null) {
+            onError("Masuk dengan nomor telepon belum tersedia pada build ini.")
+            return
+        }
+        val trimmed = code.trim()
+        if (trimmed.length < 4) {
+            onError("Kode OTP tidak valid.")
+            return
+        }
+        _isSigningIn.value = true
+        scope.launch {
+            val credential = PhoneAuthProvider.getCredential(verificationId, trimmed)
+            signInWithPhoneCredential(firebaseAuth, credential, onSuccess, onError)
+        }
+    }
+
+    /** Firebase hand-off shared by the instant and manual phone paths. */
+    private suspend fun signInWithPhoneCredential(
+        firebaseAuth: FirebaseAuth,
+        credential: PhoneAuthCredential,
+        onSuccess: (NoxaUser) -> Unit,
+        onError: (String) -> Unit
+    ) {
+        try {
+            val result = firebaseAuth.signInWithCredential(credential).await()
+            val user = result.user
+            if (user != null) {
+                val noxaUser = toNoxaUser(user)
+                storeRemoteSession(noxaUser)
+                _currentUser.value = noxaUser
+                _isGuestMode.value = false
+                onSuccess(noxaUser)
+            } else {
+                onError("Masuk dengan nomor telepon gagal. Coba lagi.")
+            }
+        } catch (e: Exception) {
+            Log.e("AuthManager", "Phone sign-in failed", e)
+            onError(humanizePhoneError(e))
+        } finally {
+            _isSigningIn.value = false
+        }
+    }
+
+    /** Maps phone-auth failures to honest Indonesian messages. */
+    private fun humanizePhoneError(e: Exception): String {
+        val code = (e as? FirebaseAuthException)?.errorCode.orEmpty().lowercase()
+        val msg = e.message.orEmpty().lowercase()
+        return when {
+            "invalid-phone-number" in code || "missing-phone-number" in code ->
+                "Nomor telepon tidak valid. Awali dengan + dan kode negara, contoh +62812xxxxxxx."
+            "invalid-verification-code" in code || "code-expired" in code ->
+                "Kode OTP salah atau kedaluwarsa. Periksa SMS lalu coba lagi."
+            "quota-exceeded" in code || "too-many-requests" in code ->
+                "Terlalu banyak permintaan kode OTP. Coba lagi beberapa menit lagi."
+            "operation-not-allowed" in code || "provider is disabled" in msg ->
+                "Masuk nomor telepon belum diaktifkan di proyek Firebase."
+            "billing" in msg ->
+                "Layanan SMS OTP butuh penagihan (Blaze) aktif di proyek Firebase."
+            "region" in msg ->
+                "Wilayah SMS belum diizinkan — aktifkan Indonesia di pengaturan SMS region Firebase."
+            else -> humanizeAuthError(e)
         }
     }
 

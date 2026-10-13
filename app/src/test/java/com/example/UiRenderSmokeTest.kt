@@ -11,6 +11,7 @@ import com.example.media.PlaybackProgress
 import com.example.ui.components.FullPlayerSheet
 import com.example.ui.components.MiniPlayer
 import com.example.ui.components.SongListItem
+import com.example.ui.screens.GetStartedScreen
 import com.example.ui.screens.HomeScreen
 import com.example.ui.viewmodel.LyricsUiState
 import com.example.ui.viewmodel.VideoUiState
@@ -166,6 +167,23 @@ class UiRenderSmokeTest {
                 onAddToQueue = {},
                 onAddToPlaylist = {},
                 onShare = {}
+            )
+        }
+        compose.waitForIdle()
+    }
+
+    @Test
+    fun getStartedScreenRendersAllSignInOptions() {
+        compose.setContent {
+            GetStartedScreen(
+                currentUser = null,
+                isSigningIn = false,
+                onBack = {},
+                onSignInWithGoogle = { _, _ -> },
+                onSignInWithEmail = { _, _, _ -> },
+                onRegisterWithEmail = { _, _, _, _ -> },
+                onSendPhoneOtp = { _, _, _, _ -> },
+                onVerifyPhoneOtp = { _, _, _ -> }
             )
         }
         compose.waitForIdle()

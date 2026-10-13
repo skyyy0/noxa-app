@@ -88,6 +88,8 @@ fun HomeScreen(
     onResume: () -> Unit,
     onDismissResume: () -> Unit,
     onSignInWithGoogle: (Activity) -> Unit,
+    /** Opens the "Get Started" sign-in hub (Google / Email / Phone OTP). */
+    onOpenGetStarted: () -> Unit = {},
     onRetry: () -> Unit,
     /** Plays the shuffled Mix Sky queue (pinned + favorites + recent). */
     onPlaySkyMix: () -> Unit = {},
@@ -290,7 +292,7 @@ fun HomeScreen(
                                     fontWeight = FontWeight.Bold
                                 )
                                 Text(
-                                    text = "Login Google disarankan untuk sinkronisasi",
+                                    text = "Sign in to sync your library everywhere",
                                     color = NoxaTextSecondary,
                                     fontSize = 11.sp,
                                     maxLines = 2
@@ -298,17 +300,18 @@ fun HomeScreen(
                             }
                         }
 
+                        // One entry point: the hub offers Google, Email and
+                        // Phone (OTP) instead of firing Google directly.
                         Button(
-                            onClick = {
-                                (context as? Activity)?.let { onSignInWithGoogle(it) }
-                            },
+                            onClick = onOpenGetStarted,
                             enabled = !isSigningIn,
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = NoxaLime,
                                 contentColor = NoxaBlack
                             ),
                             shape = RoundedCornerShape(16.dp),
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            modifier = Modifier.testTag("get_started_btn")
                         ) {
                             if (isSigningIn) {
                                 CircularProgressIndicator(
@@ -317,7 +320,7 @@ fun HomeScreen(
                                     strokeWidth = 2.dp
                                 )
                             } else {
-                                Text("Masuk", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                Text("Get Started", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                             }
                         }
                     }

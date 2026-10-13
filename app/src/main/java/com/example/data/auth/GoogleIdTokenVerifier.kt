@@ -7,8 +7,11 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
 import java.io.ByteArrayInputStream
+import java.math.BigInteger
+import java.security.KeyFactory
 import java.security.Signature
 import java.security.cert.CertificateFactory
+import java.security.spec.RSAPublicKeySpec
 import java.util.concurrent.TimeUnit
 
 /**
@@ -128,7 +131,13 @@ internal object GoogleIdTokenVerifier {
     private fun singleKeyOrNull(keys: Map<String, java.security.PublicKey>): java.security.PublicKey? =
         if (keys.size == 1) keys.values.first() else null
 
-    /** Downloads Google's current signing certificates (public, keyless). */
+    /**
+     * Downloads Google's current signing certificates (public, keyless).
+     *
+     * Google's JWKS hands out bare RSA keys (`kty`/`kid`/`n`/`e`) with **no**
+     * `x5c` certificate chain, so the modulus/exponent form is the primary
+     * parse path and `x5c` remains as a fallback.
+     */
     private fun fetchKeys(): Map<String, java.security.PublicKey> = try {
         val request = Request.Builder()
             .url(CERTS_URL)
@@ -139,21 +148,38 @@ internal object GoogleIdTokenVerifier {
         } ?: return emptyMap()
 
         val keysJson = JSONObject(body).optJSONArray("keys") ?: return emptyMap()
-        val factory = CertificateFactory.getInstance("X.509")
         val result = HashMap<String, java.security.PublicKey>()
         for (i in 0 until keysJson.length()) {
             val key = keysJson.optJSONObject(i) ?: continue
             if (!"RSA".equals(key.optString("kty"), ignoreCase = true)) continue
-            val certificate = key.optJSONArray("x5c")?.optString(0)
-                ?.takeIf { it.isNotBlank() }
-                ?: continue
-            val der = Base64.decode(certificate, Base64.DEFAULT)
-            val publicKey = factory.generateCertificate(ByteArrayInputStream(der)).publicKey
-            result[key.optString("kid")] = publicKey
+            publicKeyFrom(key)?.let { result[key.optString("kid")] = it }
         }
         result
     } catch (e: Exception) {
         emptyMap()
+    }
+
+    /** Parses one JWKS entry: `x5c` certificate when present, else `n`+`e`. */
+    private fun publicKeyFrom(key: JSONObject): java.security.PublicKey? {
+        key.optJSONArray("x5c")?.optString(0)?.takeIf { it.isNotBlank() }?.let { certificate ->
+            try {
+                val der = Base64.decode(certificate, Base64.DEFAULT)
+                return CertificateFactory.getInstance("X.509")
+                    .generateCertificate(ByteArrayInputStream(der))
+                    .publicKey
+            } catch (e: Exception) {
+                // Fall through to the raw modulus/exponent form.
+            }
+        }
+        val modulus = key.optString("n").takeIf { it.isNotBlank() } ?: return null
+        val exponent = key.optString("e").takeIf { it.isNotBlank() } ?: return null
+        return try {
+            val modulusInt = BigInteger(1, base64UrlDecode(modulus))
+            val exponentInt = BigInteger(1, base64UrlDecode(exponent))
+            KeyFactory.getInstance("RSA").generatePublic(RSAPublicKeySpec(modulusInt, exponentInt))
+        } catch (e: Exception) {
+            null
+        }
     }
 
     private fun base64UrlDecode(text: String): ByteArray =

@@ -98,6 +98,8 @@ fun ProfileScreen(
     onOpenAiChat: () -> Unit,
     onOpenSupportChat: () -> Unit,
     onOpenDevPanel: () -> Unit,
+    /** Opens the "Get Started" sign-in hub (Google / Email / Phone OTP). */
+    onOpenGetStarted: () -> Unit,
     /** null = sukses, String = pesan error. */
     onChangeUsername: (String, (String?) -> Unit) -> Unit,
     /** null = sukses, String = pesan error. */
@@ -109,17 +111,6 @@ fun ProfileScreen(
 
     var selectedQuality by remember { mutableStateOf("Hi-Res Lossless (24-bit/96kHz)") }
     var cacheCleared by remember { mutableStateOf(false) }
-
-    // Email / password auth state (the Google-free path).
-    var registerMode by remember { mutableStateOf(false) }
-    var authEmail by remember { mutableStateOf("") }
-    var authPassword by remember { mutableStateOf("") }
-    var authUsername by remember { mutableStateOf("") }
-    var authError by remember { mutableStateOf<String?>(null) }
-
-    // NOXA Bot eye-cover state: while the password field is focused and has
-    // content, the mascot covers its eyes ("I'm not looking!").
-    var passwordFocused by remember { mutableStateOf(false) }
 
     // Account settings dialogs.
     var showUsernameDialog by remember { mutableStateOf(false) }
@@ -228,181 +219,32 @@ fun ProfileScreen(
                         Text("Sign Out", color = NoxaTextSecondary, fontSize = 13.sp)
                     }
                 } else {
+                    // Every sign-in method (Google / Email / Phone OTP) lives
+                    // behind one CTA — the hub keeps this card clean now that
+                    // there are three ways in.
                     androidx.compose.material3.Button(
-                        onClick = {
-                            (context as? android.app.Activity)?.let { activity ->
-                                onSignInWithGoogle(activity) { authError = it }
-                            }
-                        },
+                        onClick = onOpenGetStarted,
                         enabled = !isSigningIn,
                         shape = RoundedCornerShape(20.dp),
                         colors = androidx.compose.material3.ButtonDefaults.buttonColors(
                             containerColor = NoxaLime,
                             contentColor = NoxaBlack
                         ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("get_started_btn")
+                    ) {
+                        Text("Get Started", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Google · Email · Phone (OTP)",
+                        color = NoxaTextTertiary,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                         modifier = Modifier.fillMaxWidth()
-                    ) {
-                        if (isSigningIn) {
-                            androidx.compose.material3.CircularProgressIndicator(
-                                modifier = Modifier.size(18.dp),
-                                color = NoxaBlack,
-                                strokeWidth = 2.dp
-                            )
-                        } else {
-                            Text("Sign in with Google", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(14.dp))
-
-                    // ---- Email / username path: accounts without Google. ----
-                    Text(
-                        text = if (registerMode) "Daftar akun NOXA" else "Masuk dengan email",
-                        color = NoxaTextPrimary,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    if (registerMode) {
-                        OutlinedTextField(
-                            value = authUsername,
-                            onValueChange = { authUsername = it; authError = null },
-                            label = { Text("Username unik") },
-                            singleLine = true,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("auth_username_field"),
-                            colors = authFieldColors()
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                    }
-
-                    OutlinedTextField(
-                        value = authEmail,
-                        onValueChange = { authEmail = it; authError = null },
-                        label = { Text("Email") },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("auth_email_field"),
-                        colors = authFieldColors()
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    if (registerMode) {
-                        // Password with the NOXA Bot mascot + strength meter.
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            com.example.ui.components.PasswordGuardRobot(
-                                covering = passwordFocused && authPassword.isNotEmpty()
-                            )
-                            Spacer(modifier = Modifier.width(10.dp))
-                            OutlinedTextField(
-                                value = authPassword,
-                                onValueChange = { authPassword = it; authError = null },
-                                label = { Text("Password") },
-                                singleLine = true,
-                                visualTransformation = PasswordVisualTransformation(),
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .onFocusChanged { passwordFocused = it.isFocused }
-                                    .testTag("auth_password_field"),
-                                colors = authFieldColors()
-                            )
-                        }
-                        if (authPassword.isNotEmpty()) {
-                            Spacer(modifier = Modifier.height(6.dp))
-                            com.example.ui.components.PasswordStrengthBar(
-                                password = authPassword,
-                                modifier = Modifier.padding(start = 64.dp)
-                            )
-                        }
-                    } else {
-                        OutlinedTextField(
-                            value = authPassword,
-                            onValueChange = { authPassword = it; authError = null },
-                            label = { Text("Password") },
-                            singleLine = true,
-                            visualTransformation = PasswordVisualTransformation(),
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("auth_password_field"),
-                            colors = authFieldColors()
-                        )
-                    }
-
-                    authError?.let { message ->
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Text(
-                            text = message,
-                            color = NoxaTextPrimary.copy(alpha = 0.85f),
-                            fontSize = 12.sp,
-                            modifier = Modifier.testTag("auth_error_text")
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    androidx.compose.material3.Button(
-                        onClick = {
-                            val onError: (String) -> Unit = { authError = it }
-                            if (registerMode) {
-                                onRegisterWithEmail(
-                                    authEmail.trim(),
-                                    authPassword,
-                                    authUsername.trim(),
-                                    onError
-                                )
-                            } else {
-                                onSignInWithEmail(authEmail.trim(), authPassword, onError)
-                            }
-                        },
-                        enabled = !isSigningIn && authEmail.isNotBlank() && authPassword.isNotBlank() &&
-                            (!registerMode || authUsername.isNotBlank()),
-                        shape = RoundedCornerShape(20.dp),
-                        colors = androidx.compose.material3.ButtonDefaults.buttonColors(
-                            containerColor = NoxaLime,
-                            contentColor = NoxaBlack
-                        ),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("auth_submit_btn")
-                    ) {
-                        if (isSigningIn) {
-                            androidx.compose.material3.CircularProgressIndicator(
-                                modifier = Modifier.size(18.dp),
-                                color = NoxaBlack,
-                                strokeWidth = 2.dp
-                            )
-                        } else {
-                            Text(
-                                text = if (registerMode) "Daftar" else "Masuk",
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 13.sp
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = if (registerMode) {
-                            "Sudah punya akun? Masuk"
-                        } else {
-                            "Belum punya akun? Daftar"
-                        },
-                        color = NoxaLime,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
-                            .clickable {
-                                registerMode = !registerMode
-                                authError = null
-                            }
-                            .padding(horizontal = 4.dp, vertical = 2.dp)
-                            .testTag("auth_mode_toggle")
                     )
                 }
             }

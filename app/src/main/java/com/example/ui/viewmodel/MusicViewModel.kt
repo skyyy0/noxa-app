@@ -552,6 +552,36 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         authManager.registerWithEmail(email, password, username, viewModelScope, onSuccess, onError)
     }
 
+    /** Sends an SMS one-time code (OTP) to [phoneNumber] (E.164). */
+    fun sendPhoneOtp(
+        activity: Activity,
+        phoneNumber: String,
+        onCodeSent: (String) -> Unit,
+        onError: (String) -> Unit
+    ) {
+        authManager.sendPhoneOtp(
+            activity = activity,
+            phoneNumber = phoneNumber,
+            scope = viewModelScope,
+            onCodeSent = onCodeSent,
+            onError = onError
+        )
+    }
+
+    /** Verifies the SMS code the user received. */
+    fun verifyPhoneOtp(
+        verificationId: String,
+        code: String,
+        onError: (String) -> Unit
+    ) {
+        authManager.verifyPhoneOtp(
+            verificationId = verificationId,
+            code = code,
+            scope = viewModelScope,
+            onError = onError
+        )
+    }
+
     fun continueAsGuest() {
         authManager.continueAsGuest()
     }
