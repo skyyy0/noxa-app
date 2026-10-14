@@ -1,6 +1,10 @@
 package com.example.ui.components
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.view.SurfaceView
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
@@ -35,6 +39,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.NightsStay
@@ -61,10 +66,12 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -74,6 +81,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -83,6 +91,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
 import androidx.media3.common.Player
 import coil.compose.AsyncImage
 import com.example.data.model.MusicSource
@@ -141,6 +150,62 @@ fun FullPlayerSheet(
     var showQueueSheet by remember { mutableStateOf(false) }
     var showLyricsSheet by remember { mutableStateOf(false) }
     var showSleepTimerDialog by remember { mutableStateOf(false) }
+
+    // ------------------------------------------------ spectrum visualizer
+    // One icon in the top bar arms it; the style chips only surface while
+    // it is on (iOS-ish: controls appear on demand, never clutter the bar).
+    val context = LocalContext.current
+    var spectrumOn by rememberSaveable { mutableStateOf(false) }
+    var spectrumStyle by rememberSaveable { mutableStateOf(SpectrumStyle.BARS) }
+    var spectrumNotice by remember { mutableStateOf<String?>(null) }
+    val spectrumLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            spectrumNotice = null
+            spectrumOn = true
+        } else {
+            spectrumOn = false
+            spectrumNotice =
+                "Izin mikrofon dipakai Android untuk spektrum audio — NOXA tidak pernah " +
+                "mereka apapun. Tanpa izin, visualizer dimatikan."
+        }
+    }
+
+    fun toggleSpectrum() {
+        if (spectrumOn) {
+            spectrumOn = false
+            com.example.media.SpectrumCapture.stop()
+            return
+        }
+        val granted = ContextCompat.checkSelfPermission(
+            context, Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
+        if (granted) {
+            spectrumOn = true
+        } else {
+            spectrumLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
+    // Bind/unbind capture to the player's audio session with the sheet.
+    LaunchedEffect(spectrumOn, visible) {
+        if (spectrumOn && visible) {
+            val sessionId = com.example.NoxaApplication.instance.player.exoPlayer.audioSessionId
+            if (sessionId <= 0) {
+                spectrumOn = false
+                spectrumNotice = "Putar lagu dulu — spektrum butuh audio yang sedang berjalan."
+            } else if (!com.example.media.SpectrumCapture.start(sessionId)) {
+                spectrumOn = false
+                spectrumNotice = "Spektrum tidak tersedia di perangkat ini."
+            }
+        } else {
+            com.example.media.SpectrumCapture.stop()
+        }
+    }
+    DisposableEffect(Unit) {
+        onDispose { com.example.media.SpectrumCapture.stop() }
+    }
 
     // Foto vs Video MV: the video view exists while the stream is resolving
     // (spinner) or ready (surface).
@@ -227,6 +292,17 @@ fun FullPlayerSheet(
                     }
 
                     Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(
+                            onClick = { toggleSpectrum() },
+                            modifier = Modifier.testTag("full_player_spectrum_btn")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.GraphicEq,
+                                contentDescription = "Visualizer spektrum",
+                                tint = if (spectrumOn) NoxaLime else NoxaTextPrimary,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
                         IconButton(
                             onClick = onShare,
                             modifier = Modifier.testTag("full_player_share_btn")
@@ -391,7 +467,64 @@ fun FullPlayerSheet(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(20.dp))
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Spectrum strip — appears only when armed, with its style
+                // chips inline. A one-line hint replaces it when capture is
+                // unavailable (permission missing / no signal yet).
+                AnimatedVisibility(visible = spectrumOn) {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        SpectrumVisualizer(
+                            style = spectrumStyle,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.Center
+                        ) {
+                            SpectrumStyle.entries.forEach { entry ->
+                                val selected = entry == spectrumStyle
+                                Box(
+                                    modifier = Modifier
+                                        .padding(horizontal = 4.dp)
+                                        .clip(RoundedCornerShape(14.dp))
+                                        .background(
+                                            if (selected) NoxaLime.copy(alpha = 0.16f)
+                                            else NoxaSurfaceSecondary
+                                        )
+                                        .border(
+                                            1.dp,
+                                            if (selected) NoxaLime.copy(alpha = 0.55f)
+                                            else NoxaBorder,
+                                            RoundedCornerShape(14.dp)
+                                        )
+                                        .clickable { spectrumStyle = entry }
+                                        .padding(horizontal = 12.dp, vertical = 5.dp)
+                                ) {
+                                    Text(
+                                        entry.label,
+                                        color = if (selected) NoxaLime else NoxaTextTertiary,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                spectrumNotice?.let { notice ->
+                    Text(
+                        text = notice,
+                        color = NoxaTextTertiary,
+                        fontSize = 11.sp,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp)
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                }
 
                 // Progress. Only this section reads the fast position flow.
                 PlayerProgressSection(

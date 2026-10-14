@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.Person
@@ -34,6 +35,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -121,6 +123,9 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector)
     /** NOXA Support chat (lapor bug & keluhan). */
     object SupportChat : Screen("support_chat", "Support", Icons.Default.Person)
 
+    /** Dengar Bareng — shared listening room. */
+    object Room : Screen("room", "Dengar Bareng", Icons.Default.Group)
+
     /** NOXA Admin console — developer role only. */
     object DevPanel : Screen("dev_panel", "Admin", Icons.Default.Person)
 
@@ -158,8 +163,9 @@ fun NoxaApp(
     val weeklyRecap by viewModel.weeklyRecap.collectAsStateWithLifecycle()
     val appSettings by viewModel.appSettings.collectAsStateWithLifecycle()
 
-    // Forced in-app update published by the developer account.
+    // In-app update published by the developer account (wajib / opsional).
     val updateInfo by viewModel.updateInfo.collectAsStateWithLifecycle()
+    val updateDialogVisible by viewModel.updateDialogVisible.collectAsStateWithLifecycle()
     val updatePhase by viewModel.updatePhase.collectAsStateWithLifecycle()
     val updateError by viewModel.updateError.collectAsStateWithLifecycle()
 
@@ -513,6 +519,9 @@ fun NoxaApp(
                         onOpenDevPanel = {
                             navController.navigate(Screen.DevPanel.route)
                         },
+                        onOpenRoom = {
+                            navController.navigate(Screen.Room.route)
+                        },
                         onOpenGetStarted = { navController.navigate(Screen.GetStarted.route) },
                         onChangeUsername = { name, onResult ->
                             viewModel.changeUsername(name, onResult)
@@ -522,7 +531,9 @@ fun NoxaApp(
                         },
                         onDeleteAccount = { email, onResult ->
                             viewModel.deleteAccount(email, onResult)
-                        }
+                        },
+                        availableUpdate = updateInfo,
+                        onOpenUpdate = { viewModel.openUpdateFromSettings() }
                     )
                 }
 
@@ -579,6 +590,39 @@ fun NoxaApp(
                     )
                 }
 
+                composable(Screen.Room.route) {
+                    val roomState by viewModel.roomState.collectAsStateWithLifecycle()
+                    val roomProgress by viewModel.playbackProgress.collectAsStateWithLifecycle()
+                    val roomSongId = roomState.let { s ->
+                        (s as? com.example.ui.screens.RoomUiState.InRoom)?.songId.orEmpty()
+                    }
+                    val sameSong = playerState.currentSong?.id == roomSongId && roomSongId.isNotEmpty()
+                    DisposableEffect(Unit) {
+                        onDispose { viewModel.leaveRoom() }
+                    }
+                    com.example.ui.screens.RoomScreen(
+                        state = roomState,
+                        onBack = { navController.popBackStack() },
+                        onJoin = { code -> viewModel.joinRoom(code) },
+                        onCreate = { viewModel.createRoom() },
+                        onLeave = {
+                            viewModel.leaveRoom()
+                            navController.popBackStack()
+                        },
+                        onTogglePlayPause = { viewModel.togglePlayPause() },
+                        onSeekTo = { pos -> viewModel.seekTo(pos) },
+                        onPrevious = { viewModel.previous() },
+                        onNext = { viewModel.next() },
+                        localPositionMs = if (sameSong) roomProgress.positionMs else 0L,
+                        localDurationMs = if (sameSong) {
+                            roomProgress.durationMs.takeIf { it > 0 }
+                                ?: playerState.currentSong?.durationMs ?: 0L
+                        } else {
+                            0L
+                        }
+                    )
+                }
+
                 composable(Screen.SupportChat.route) {
                     val supportState by viewModel.supportState.collectAsStateWithLifecycle()
                     LaunchedEffect(Unit) { viewModel.openSupportChat() }
@@ -605,22 +649,29 @@ fun NoxaApp(
                         onChangeRole = { uid, role -> viewModel.changeAccountRole(uid, role) },
                         currentVersionCode = com.example.BuildConfig.VERSION_CODE.toLong(),
                         currentVersionName = com.example.BuildConfig.VERSION_NAME,
-                        onPushUpdate = { url, name, code, note, onResult ->
-                            viewModel.pushUpdate(url, name, code, note, onResult)
+                        onPushUpdate = { url, name, code, note, mandatory, onResult ->
+                            viewModel.pushUpdate(url, name, code, note, mandatory, onResult)
                         }
                     )
                 }
             }
         }
 
-        // Forced in-app update — sits above every screen (nav, player
-        // sheet, dialogs) until the user is on the published version.
-        updateInfo?.let { info ->
-            com.example.ui.components.MandatoryUpdateDialog(
-                info = info,
+        // In-app update — sits above every screen (nav, player sheet,
+        // dialogs) until the user is on the published version. The developer
+        // account never sees it: publishing an update must never lock the
+        // publisher out of the very console she pushes it from.
+        val pendingUpdate = updateInfo
+        if (updateDialogVisible && pendingUpdate != null &&
+            currentUser?.role != com.example.data.support.AccountRole.DEVELOPER
+        ) {
+            com.example.ui.components.UpdateDialog(
+                info = pendingUpdate,
                 phase = updatePhase,
                 error = updateError,
-                onUpdate = { viewModel.downloadUpdate() }
+                mandatory = pendingUpdate.mandatory,
+                onUpdate = { viewModel.downloadUpdate() },
+                onDismiss = { viewModel.dismissOptionalUpdate() }
             )
         }
 

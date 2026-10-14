@@ -28,6 +28,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.MusicNote
@@ -97,6 +98,8 @@ fun ProfileScreen(
     onSignOut: () -> Unit,
     onNavigateToAboutSky: () -> Unit,
     onOpenAiChat: () -> Unit,
+    /** Dengar Bareng — shared listening room. */
+    onOpenRoom: () -> Unit,
     onOpenSupportChat: () -> Unit,
     onOpenDevPanel: () -> Unit,
     /** Opens the "Get Started" sign-in hub (Google / Email / Phone OTP). */
@@ -107,6 +110,10 @@ fun ProfileScreen(
     onChangePassword: (String, String, (String?) -> Unit) -> Unit,
     /** null = sukses, String = pesan error. */
     onDeleteAccount: (String, (String?) -> Unit) -> Unit,
+    /** Latest published update newer than this build (null = up to date). */
+    availableUpdate: com.example.data.support.NoxaBackend.UpdateInfo? = null,
+    /** Reopens the update popup from Pengaturan → Pembaruan. */
+    onOpenUpdate: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -192,12 +199,32 @@ fun ProfileScreen(
                             fontSize = 17.sp,
                             fontWeight = FontWeight.Bold
                         )
-                        Text(
-                            text = currentUser?.email ?: "Mode Tamu (Login Disarankan)",
-                            color = if (currentUser != null) NoxaLime else NoxaTextSecondary,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = currentUser?.email ?: "Mode Tamu (Login Disarankan)",
+                                color = if (currentUser != null) NoxaLime else NoxaTextSecondary,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 1,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false)
+                            )
+                            // Developer: the purple seal sits right of the
+                            // email so the identity never reads as plain text.
+                            if (currentUser?.role ==
+                                com.example.data.support.AccountRole.DEVELOPER
+                            ) {
+                                Spacer(modifier = Modifier.width(6.dp))
+                                com.example.ui.components.VerifiedBadgePurple(size = 15.dp)
+                                Spacer(modifier = Modifier.width(5.dp))
+                                Text(
+                                    text = "Developer",
+                                    color = NoxaPurple,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Black
+                                )
+                            }
+                        }
                         // Unique Firestore username (registered accounts only):
                         // only shown when it is handle-shaped, so Google names
                         // with spaces do not look odd here.
@@ -482,6 +509,60 @@ fun ProfileScreen(
                     )
                     Text(
                         text = "Minta putar lagu, bikin playlist, atau curhat — asisten musik kamu",
+                        color = NoxaTextSecondary,
+                        fontSize = 12.sp
+                    )
+                }
+                Icon(
+                    imageVector = Icons.Default.ChevronRight,
+                    contentDescription = null,
+                    tint = NoxaLime,
+                    modifier = Modifier.size(24.dp)
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // DENGAR BARENG — shared listening room (iOS-style entry card).
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .clickable { onOpenRoom() }
+                .testTag("room_nav_card"),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = NoxaSurfaceElevated),
+            border = androidx.compose.foundation.BorderStroke(1.dp, NoxaBorder)
+        ) {
+            Row(
+                modifier = Modifier.padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(46.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(NoxaLime.copy(alpha = 0.15f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Group,
+                        contentDescription = "Dengar Bareng",
+                        tint = NoxaLime,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.width(14.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Dengar Bareng",
+                        color = NoxaTextPrimary,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "Bikin room, bagikan kode — lagu & posisi sinkron bareng teman",
                         color = NoxaTextSecondary,
                         fontSize = 12.sp
                     )
@@ -841,6 +922,74 @@ fun ProfileScreen(
                     onCheckedChange = onSetAutoResumeOnOpen,
                     tag = "setting_auto_resume"
                 )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        // PEMBARUAN — cara user menyalakan update opsional yang tadi dipilih
+        // "Nanti Saja" (update wajib tetap memblokir sampai terpasang).
+        Text(
+            text = "Pembaruan",
+            color = NoxaTextPrimary,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
+        )
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = NoxaSurfaceElevated),
+            border = androidx.compose.foundation.BorderStroke(1.dp, NoxaBorder)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "NOXA ${com.example.BuildConfig.VERSION_NAME}",
+                        color = NoxaTextPrimary,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = if (availableUpdate != null) {
+                            "Versi ${availableUpdate.versionName} sudah tersedia" +
+                                if (availableUpdate.mandatory) " (wajib)" else " (opsional)"
+                        } else {
+                            "Kamu sudah memakai versi terbaru."
+                        },
+                        color = if (availableUpdate != null) NoxaLime else NoxaTextSecondary,
+                        fontSize = 12.sp,
+                        modifier = Modifier.testTag("update_status_text")
+                    )
+                }
+                if (availableUpdate != null) {
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(NoxaLime)
+                            .clickable { onOpenUpdate() }
+                            .padding(horizontal = 18.dp, vertical = 9.dp)
+                            .testTag("settings_update_btn")
+                    ) {
+                        Text(
+                            text = "Update",
+                            color = NoxaBlack,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
             }
         }
 

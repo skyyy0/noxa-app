@@ -89,6 +89,41 @@ class PinnedTracksTest {
         assertNull(PinnedTracks.find(song("Kangen (Live)", "NOAH")))
         assertNull(PinnedTracks.find(song("Kangenen", "Dewa 19")))
     }
+
+    @Test
+    fun deezerEllipsisTitlesStillMatchThePin() {
+        // Deezer serves Sheila On 7's pick as "Dan…" — the ellipsis used to
+        // make every matcher fail, so the shelf only showed 4 of 5 pins.
+        assertNotNull(PinnedTracks.find(song("Dan...", "Sheila On 7")))
+        assertNotNull(PinnedTracks.find(song("Dan…", "Sheila On 7")))
+        val dan = PinnedTracks.ALL.first { it.title == "Dan" }
+        assertTrue(PinnedTracks.matches(dan, "Dan...", "Sheila On 7"))
+        assertFalse(PinnedTracks.matches(dan, "Dan...", "NOAH"))
+    }
+
+    @Test
+    fun relaxedMatchingAcceptsRealYoutubeHitsButRejectsNoise() {
+        val laskar = PinnedTracks.ALL.first { it.title == "Laskar Pelangi" }
+        val dan = PinnedTracks.ALL.first { it.title == "Dan" }
+
+        // The actual top hit: artist inside the title, uploader = label channel.
+        assertTrue(
+            PinnedTracks.matchesRelaxed(
+                laskar, "NIDJI - Laskar Pelangi (Official Music Video)", "Musica Studios"
+            )
+        )
+        assertTrue(PinnedTracks.matchesRelaxed(laskar, "Laskar Pelangi", "Nidji"))
+        // Wrong artist (no Nidji anywhere) stays out.
+        assertFalse(PinnedTracks.matchesRelaxed(laskar, "Laskar Pelangi", "Farel Prayoga"))
+
+        // Short pins are case-sensitive so Indonesian "dan" never matches.
+        assertTrue(
+            PinnedTracks.matchesRelaxed(dan, "Sheila On 7 - Dan... (Official Audio)", "Random Upload")
+        )
+        assertFalse(
+            PinnedTracks.matchesRelaxed(dan, "Kita dan Cinta - Sheila On 7", "Random Upload")
+        )
+    }
 }
 
 /** Username rules used by email/password registration. */

@@ -54,6 +54,34 @@ class AuthManager(private val context: Context) {
     /** Keyless shared registry (accounts, roles, support chat). */
     private val backend = com.example.data.support.NoxaBackend()
 
+    /**
+     * Fire-and-forget scope for pushing a completed sign-in's identity into
+     * the shared registry. Google, phone and Firebase sign-ins never go
+     * through `backend.register`, so without this those users were invisible
+     * in the dev console's "Daftar Akun" count — only email+password
+     * registrations showed up. Sign-in never waits on it; an offline
+     * registry simply skips the write (the next sign-in retries).
+     */
+    private val registrySyncScope = CoroutineScope(
+        kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO
+    )
+
+    private fun syncToRegistry(user: NoxaUser) {
+        val email = user.email?.trim()?.lowercase(java.util.Locale.ROOT) ?: return
+        registrySyncScope.launch {
+            try {
+                backend.upsertAccount(
+                    uid = user.uid,
+                    email = email,
+                    username = user.displayName ?: email.substringBefore('@'),
+                    role = user.role
+                )
+            } catch (e: Exception) {
+                Log.w("AuthManager", "Registry sync skipped: ${e.message}")
+            }
+        }
+    }
+
     private val remotePrefs =
         context.getSharedPreferences("noxa_remote_session", Context.MODE_PRIVATE)
 
@@ -209,6 +237,7 @@ class AuthManager(private val context: Context) {
                         storeRemoteSession(user)
                         _currentUser.value = user
                         _isGuestMode.value = false
+                        syncToRegistry(user)
                         onSuccess(user)
                         return@launch
                     }
@@ -222,13 +251,14 @@ class AuthManager(private val context: Context) {
                         val authResult = firebaseAuth.signInWithCredential(authCredential).await()
                         val user = authResult.user
                         if (user != null) {
-                            _currentUser.value =
-                                toNoxaUser(user).copy(role = roleForEmail(user.email))
-                            _isGuestMode.value = false
-                            onSuccess(_currentUser.value!!)
-                        } else {
-                            onError("Masuk dengan Google gagal. Coba lagi.")
-                        }
+                                val noxaUser = toNoxaUser(user).copy(role = roleForEmail(user.email))
+                                _currentUser.value = noxaUser
+                                _isGuestMode.value = false
+                                syncToRegistry(noxaUser)
+                                onSuccess(noxaUser)
+                            } else {
+                                onError("Masuk dengan Google gagal. Coba lagi.")
+                            }
                     } else {
                         onError("Verifikasi akun Google gagal. Periksa koneksi internet lalu coba lagi.")
                     }
@@ -343,11 +373,12 @@ class AuthManager(private val context: Context) {
             val result = firebaseAuth.signInWithCredential(credential).await()
             val user = result.user
             if (user != null) {
-                val noxaUser = toNoxaUser(user).copy(role = roleForEmail(user.email))
-                storeRemoteSession(noxaUser)
-                _currentUser.value = noxaUser
-                _isGuestMode.value = false
-                onSuccess(noxaUser)
+            val noxaUser = toNoxaUser(user).copy(role = roleForEmail(user.email))
+            storeRemoteSession(noxaUser)
+            _currentUser.value = noxaUser
+            _isGuestMode.value = false
+            syncToRegistry(noxaUser)
+            onSuccess(noxaUser)
             } else {
                 onError("Masuk dengan nomor telepon gagal. Coba lagi.")
             }
@@ -464,6 +495,7 @@ class AuthManager(private val context: Context) {
                                 storeRemoteSession(user)
                                 _currentUser.value = user
                                 _isGuestMode.value = false
+                                syncToRegistry(user)
                                 onSuccess(user)
                                 return@launch
                             }
@@ -479,10 +511,12 @@ class AuthManager(private val context: Context) {
                             uid = account.uid,
                             displayName = account.username,
                             email = account.email,
-                            photoUrl = null
+                            photoUrl = null,
+                            role = roleForEmail(account.email)
                         )
                         _currentUser.value = user
                         _isGuestMode.value = false
+                        syncToRegistry(user)
                         onSuccess(user)
                         return@launch
                     }
@@ -607,14 +641,19 @@ class AuthManager(private val context: Context) {
             is LocalAccountStore.CreateResult.Created -> {
                 val account = result.account
                 localStore.storeSessionUid(account.uid)
-                _currentUser.value = NoxaUser(
+                val user = NoxaUser(
                     uid = account.uid,
                     displayName = account.username,
                     email = account.email,
-                    photoUrl = null
+                    photoUrl = null,
+                    role = roleForEmail(account.email)
                 )
+                _currentUser.value = user
                 _isGuestMode.value = false
-                onSuccess(_currentUser.value!!)
+                // Offline-created accounts still join the shared registry as
+                // soon as the network is back — the dev console counts them.
+                syncToRegistry(user)
+                onSuccess(user)
             }
         }
     }
@@ -672,6 +711,7 @@ class AuthManager(private val context: Context) {
         storeRemoteSession(user)
         _currentUser.value = user
         _isGuestMode.value = false
+        syncToRegistry(user)
         return true
     }
 

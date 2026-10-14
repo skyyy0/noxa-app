@@ -71,11 +71,52 @@ object PinnedTracks {
      * "Key \"deezer:…\" was already used".
      */
     fun matches(pin: PinnedTrack, title: String, artist: String): Boolean {
-        val t = title.trim()
-        val titleMatches = t.equals(pin.title, ignoreCase = true) ||
+        val t = normalizedTitle(title)
+        return titleFitsPin(t, pin) && pin.artist.equals(artist.trim(), ignoreCase = true)
+    }
+
+    /**
+     * Relaxed match for **user-generated sources** (YouTube), used only when
+     * the catalogue cannot serve a pin:
+     *
+     *  * the video title carries the artist inside it ("NIDJI - Laskar
+     *    Pelangi") because the uploader is the label's channel ("Musica
+     *    Studios"), not the artist — so the artist may appear in the title;
+     *  * the pin title may sit anywhere in the title, as long as it is a
+     *    whole word (so "Dan" never matches "dan" mid-word).
+     *
+     * Catalogue matching ([matches]) stays strict — a badge must never leak
+     * onto a wrong track just because a word overlaps.
+     */
+    fun matchesRelaxed(pin: PinnedTrack, title: String, artist: String): Boolean {
+        val a = artist.trim()
+        val t = normalizedTitle(title)
+        val artistHit = pin.artist.equals(a, ignoreCase = true) ||
+            a.contains(pin.artist, ignoreCase = true) ||
+            t.contains(pin.artist, ignoreCase = true)
+        if (!artistHit) return false
+        if (titleFitsPin(t, pin)) return true
+        // Short pins are case-sensitive here: "Dan" must never match the
+        // Indonesian word "dan" (="and") inside an unrelated title, while
+        // long pins like "Laskar Pelangi" keep the forgiving case fold.
+        val options = if (pin.title.length <= 3) emptySet() else setOf(RegexOption.IGNORE_CASE)
+        return Regex(
+            "(?<![A-Za-z0-9])${Regex.escape(pin.title)}(?![A-Za-z0-9])",
+            options
+        ).containsMatchIn(t)
+    }
+
+    /**
+     * Deezer serves Sheila On 7's pick as "Dan…" (Ellipsis in the catalogue),
+     * so trailing dots/ellipsis/exclamations are not part of the title.
+     */
+    private fun normalizedTitle(title: String): String =
+        title.trim().trimEnd('.', '…', '!', '?', ' ', '-').trim()
+
+    /** The pinned title leads the (normalised) result title. */
+    private fun titleFitsPin(t: String, pin: PinnedTrack): Boolean =
+        t.equals(pin.title, ignoreCase = true) ||
             t.startsWith("${pin.title} ", ignoreCase = true) ||
             t.startsWith("${pin.title}(", ignoreCase = true) ||
             t.startsWith("${pin.title} -", ignoreCase = true)
-        return titleMatches && pin.artist.equals(artist.trim(), ignoreCase = true)
-    }
 }

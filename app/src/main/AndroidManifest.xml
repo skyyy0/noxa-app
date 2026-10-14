@@ -9,6 +9,14 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <!--
+        Visualizer spektrum di pemutar penuh: Android memperlakukan
+        audiofx.Visualizer sebagai "audio monitoring" sehingga izin mikrofit
+        wajib ada meski NOXA tidak pernah merekam apapun. Izin hanya diminta
+        saat user menyalakan visualizer; tanpa izin, fitur mati dengan pesan
+        jujur dan aplikasi tetap berjalan normal.
+    -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <application
         android:name=".NoxaApplication"
@@ -103,6 +111,24 @@
             <intent-filter>
                 <action android:name="android.intent.action.MEDIA_BUTTON" />
             </intent-filter>
+        </receiver>
+
+        <!--
+            Home-screen "Now Playing" widget. exported=false is safe here: the
+            system itself may always deliver broadcasts to a same-UID/system-only
+            receiver (APPWIDGET_UPDATE comes from the system), while third-party
+            apps cannot spoof the widget's play/pause/next actions.
+        -->
+        <receiver
+            android:name=".widget.NoxaWidgetProvider"
+            android:exported="false"
+            android:label="@string/widget_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/noxa_widget_info" />
         </receiver>
     </application>
 

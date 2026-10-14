@@ -3,13 +3,16 @@ package com.example.ui.components
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
@@ -33,25 +36,33 @@ import com.example.ui.theme.NoxaTextTertiary
 import com.example.ui.viewmodel.MusicViewModel
 
 /**
- * The forced in-app update popup.
+ * The in-app update popup.
  *
- * Shown whenever the developer published a version newer than the running
- * build: it cannot be dismissed, downloads the APK in-app, and then opens
- * the official Android installer — the user never has to hunt for a file.
+ * Two modes, chosen by the developer when pushing the update:
+ *
+ *  * **Mandatory** (`mandatory = true`) — cannot be dismissed: the only way
+ *    out is updating. Reserved for changes that really need it.
+ *  * **Optional** (`mandatory = false`) — carries a "Nanti Saja" escape, and
+ *    the copy points at Settings → Pembaruan so the user can update later.
+ *    Small patches get pushed this way so they never block the app.
+ *
+ * The DEVELOPER account never sees this dialog at all (gated in NoxaApp).
  */
 @Composable
-fun MandatoryUpdateDialog(
+fun UpdateDialog(
     info: NoxaBackend.UpdateInfo,
     phase: MusicViewModel.UpdatePhase,
     error: String?,
-    onUpdate: () -> Unit
+    mandatory: Boolean,
+    onUpdate: () -> Unit,
+    onDismiss: () -> Unit
 ) {
     androidx.compose.material3.AlertDialog(
-        onDismissRequest = { /* forced — no way out but updating */ },
+        onDismissRequest = { if (!mandatory) onDismiss() },
         containerColor = NoxaSurfaceElevated,
         title = {
             Text(
-                "Update Tersedia",
+                if (mandatory) "Update Wajib Tersedia" else "Update Tersedia",
                 color = NoxaTextPrimary,
                 fontWeight = FontWeight.Black,
                 fontSize = 20.sp
@@ -79,8 +90,14 @@ fun MandatoryUpdateDialog(
                     Spacer(modifier = Modifier.height(10.dp))
                 }
                 Text(
-                    text = "Versi kamu (${com.example.BuildConfig.VERSION_NAME}) sudah usang. " +
-                        "Update diperlukan supaya semua fitur & perbaikan terbaru ikut terpasang.",
+                    text = if (mandatory) {
+                        "Versi kamu (${com.example.BuildConfig.VERSION_NAME}) sudah usang. " +
+                            "Update diperlukan supaya semua fitur & perbaikan terbaru ikut terpasang."
+                    } else {
+                        "Versi baru ${info.versionName} sudah keluar (kamu di " +
+                            "${com.example.BuildConfig.VERSION_NAME}). Update opsional — " +
+                            "bisa dilakukan kapan saja lewat Pengaturan."
+                    },
                     color = NoxaTextTertiary,
                     fontSize = 11.sp,
                     textAlign = TextAlign.Center
@@ -132,29 +149,47 @@ fun MandatoryUpdateDialog(
             }
         },
         confirmButton = {
-            val label = when (phase) {
-                MusicViewModel.UpdatePhase.Resolving,
-                MusicViewModel.UpdatePhase.Downloading -> "Mengunduh…"
-
-                MusicViewModel.UpdatePhase.Failed -> "Coba Lagi"
-                else -> "Update Sekarang"
-            }
-            val enabled = phase != MusicViewModel.UpdatePhase.Resolving &&
-                phase != MusicViewModel.UpdatePhase.Downloading
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(if (enabled) NoxaLime else NoxaBorder)
-                    .clickable(enabled = enabled) { onUpdate() }
-                    .padding(horizontal = 20.dp, vertical = 10.dp)
-                    .testTag("update_now_btn")
+            Row(
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = label,
-                    color = if (enabled) NoxaBlack else NoxaTextTertiary,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 13.sp
-                )
+                if (!mandatory && phase != MusicViewModel.UpdatePhase.Downloading) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(20.dp))
+                            .border(1.dp, NoxaBorder, RoundedCornerShape(20.dp))
+                            .clickable { onDismiss() }
+                            .padding(horizontal = 16.dp, vertical = 10.dp)
+                            .testTag("update_later_btn")
+                    ) {
+                        Text("Nanti Saja", color = NoxaTextSecondary, fontSize = 13.sp)
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                }
+                val label = when (phase) {
+                    MusicViewModel.UpdatePhase.Resolving,
+                    MusicViewModel.UpdatePhase.Downloading -> "Mengunduh…"
+
+                    MusicViewModel.UpdatePhase.Failed -> "Coba Lagi"
+                    else -> "Update Sekarang"
+                }
+                val enabled = phase != MusicViewModel.UpdatePhase.Resolving &&
+                    phase != MusicViewModel.UpdatePhase.Downloading
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(if (enabled) NoxaLime else NoxaBorder)
+                        .clickable(enabled = enabled) { onUpdate() }
+                        .padding(horizontal = 20.dp, vertical = 10.dp)
+                        .testTag("update_now_btn")
+                ) {
+                    Text(
+                        text = label,
+                        color = if (enabled) NoxaBlack else NoxaTextTertiary,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp
+                    )
+                }
             }
         }
     )

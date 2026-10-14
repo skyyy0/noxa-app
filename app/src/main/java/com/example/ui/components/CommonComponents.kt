@@ -406,9 +406,11 @@ fun SongListItem(
 }
 
 /**
- * The **NOXA Support verified badge** — a purple, hand-drawn seal with a soft
- * glow, deliberately different from every blue artist tick and from the lime
- * brand accents. Only NOXA Support / staff accounts wear it.
+ * The **NOXA verified badge** — a purple rosette (scalloped seal, the same
+ * silhouette language as platform verification badges) with a crisp white
+ * tick. Replaces the earlier plain disc + loud pulsing halo, which read as a
+ * blurry blob at 15 dp. The glow now breathes gently instead of blinking.
+ * Worn by NOXA Support and developer identities.
  */
 @Composable
 fun VerifiedBadgePurple(
@@ -417,22 +419,22 @@ fun VerifiedBadgePurple(
 ) {
     val infinite = rememberInfiniteTransition(label = "badge_glow")
     val glow by infinite.animateFloat(
-        initialValue = 0.55f,
-        targetValue = 1f,
+        initialValue = 0.30f,
+        targetValue = 0.55f,
         animationSpec = infiniteRepeatable(
-            animation = tween(1400),
+            animation = tween(2200),
             repeatMode = RepeatMode.Reverse
         ),
         label = "badge_glow_alpha"
     )
     Box(modifier = modifier.size(size), contentAlignment = Alignment.Center) {
-        // Halo behind the seal.
+        // Soft, slow-breathing halo — present but never flashy.
         Box(
             modifier = Modifier
-                .size(size * 1.45f)
+                .size(size * 1.5f)
                 .background(
                     Brush.radialGradient(
-                        listOf(NoxaPurple.copy(alpha = 0.55f * glow), Color.Transparent)
+                        listOf(NoxaPurple.copy(alpha = glow), Color.Transparent)
                     ),
                     CircleShape
                 )
@@ -440,31 +442,54 @@ fun VerifiedBadgePurple(
         Canvas(modifier = Modifier.size(size)) {
             val r = this.size.minDimension / 2f
             val center = this.size / 2f
-            // Rounded seal body with a gradient from bright to deep purple.
-            drawCircle(
+
+            // Scalloped rosette: 12 gentle bumps around the base circle.
+            val scallops = 12
+            val base = r * 0.94f
+            val bulge = r * 0.10f
+            val path = Path()
+            for (i in 0 until scallops) {
+                val a0 = (2.0 * Math.PI * i / scallops)
+                val a1 = (2.0 * Math.PI * (i + 1) / scallops)
+                val p0x = center.width + (Math.cos(a0) * base).toFloat()
+                val p0y = center.height + (Math.sin(a0) * base).toFloat()
+                val p1x = center.width + (Math.cos(a1) * base).toFloat()
+                val p1y = center.height + (Math.sin(a1) * base).toFloat()
+                val am = (a0 + a1) / 2.0
+                val cpx = center.width + (Math.cos(am) * (base + bulge * 2f)).toFloat()
+                val cpy = center.height + (Math.sin(am) * (base + bulge * 2f)).toFloat()
+                if (i == 0) path.moveTo(p0x, p0y) else path.lineTo(p0x, p0y)
+                path.quadraticBezierTo(cpx, cpy, p1x, p1y)
+            }
+            path.close()
+
+            // Diagonal gradient fill — bright purple top-left to deep purple.
+            drawPath(
+                path,
                 brush = Brush.linearGradient(
-                    listOf(NoxaPurple, NoxaPurpleDeep)
-                ),
-                radius = r
+                    listOf(NoxaPurple, NoxaPurpleDeep),
+                    start = androidx.compose.ui.geometry.Offset(0f, 0f),
+                    end = androidx.compose.ui.geometry.Offset(this.size.width, this.size.height)
+                )
             )
-            // Inner rim for a jewel-like finish.
+            // Hairline inner ring for a finished, jewel-like edge.
             drawCircle(
-                color = Color.White.copy(alpha = 0.35f),
-                radius = r * 0.86f,
-                style = Stroke(width = r * 0.10f)
+                color = Color.White.copy(alpha = 0.22f),
+                radius = base * 0.78f,
+                style = Stroke(width = r * 0.055f)
             )
-            // White check mark.
+            // Crisp white tick, optically centred.
             val s = this.size.width
             val check = Path().apply {
-                moveTo(s * 0.30f, s * 0.52f)
-                lineTo(s * 0.44f, s * 0.66f)
-                lineTo(s * 0.72f, s * 0.36f)
+                moveTo(s * 0.31f, s * 0.52f)
+                lineTo(s * 0.44f, s * 0.65f)
+                lineTo(s * 0.70f, s * 0.37f)
             }
             drawPath(
                 check,
                 color = Color.White,
                 style = Stroke(
-                    width = s * 0.11f,
+                    width = s * 0.115f,
                     cap = StrokeCap.Round,
                     join = StrokeJoin.Round
                 )

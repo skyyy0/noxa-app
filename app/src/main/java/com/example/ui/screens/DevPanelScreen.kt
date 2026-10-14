@@ -47,6 +47,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -83,6 +84,7 @@ import com.example.ui.theme.NoxaTextTertiary
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.launch
 
 /** State of the NOXA Admin console. */
 sealed interface DevUiState {
@@ -126,8 +128,8 @@ fun DevPanelScreen(
     /** Running build, shown in the Push Update form as the baseline. */
     currentVersionCode: Long,
     currentVersionName: String,
-    /** Publishes a new forced update (null result = success). */
-    onPushUpdate: (url: String, versionName: String, versionCode: Long, note: String, (String?) -> Unit) -> Unit,
+    /** Publishes a new update (null result = success); mandatory picks the popup style. */
+    onPushUpdate: (url: String, versionName: String, versionCode: Long, note: String, mandatory: Boolean, (String?) -> Unit) -> Unit,
     modifier: Modifier = Modifier
 ) {
     var tab by remember { mutableStateOf(DevTab.THREADS) }
@@ -357,21 +359,30 @@ private fun DevTabRow(current: DevTab, onSelect: (DevTab) -> Unit, modifier: Mod
 
 /**
  * Developer-only update publisher: an APK link (direct `.apk` or MediaFire)
- * becomes a forced in-app update for every user on an older version.
+ * becomes an in-app update for every user on an older version.
+ *
+ * Two ways to fill the link — paste it, or pull the APK straight from the
+ * project's latest GitHub Release (the CI attaches the built APK there, so
+ * one tap fills URL + version). And Sky's rollout dial: **Wajib** shows the
+ * undismissable popup, **Opsional** gives users a "Nanti Saja" escape plus
+ * an update entry in Settings.
  */
 @Composable
 private fun UpdatePushSection(
     currentVersionCode: Long,
     currentVersionName: String,
-    onPush: (url: String, versionName: String, versionCode: Long, note: String, (String?) -> Unit) -> Unit
+    onPush: (url: String, versionName: String, versionCode: Long, note: String, mandatory: Boolean, (String?) -> Unit) -> Unit
 ) {
     var url by remember { mutableStateOf("") }
     var versionName by remember { mutableStateOf("") }
     var versionCode by remember { mutableStateOf((currentVersionCode + 1).toString()) }
     var note by remember { mutableStateOf("") }
+    var mandatory by remember { mutableStateOf(true) }
     var result by remember { mutableStateOf<String?>(null) }
     var success by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
+    var fetchingRelease by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
     Column(
         modifier = Modifier
@@ -388,8 +399,9 @@ private fun UpdatePushSection(
         Spacer(modifier = Modifier.height(6.dp))
         Text(
             "Versi berjalan: $currentVersionName ($currentVersionCode). Semua user dengan " +
-                "version code di bawah yang kamu isi akan menerima popup update wajib, " +
-                "mengunduh langsung dari aplikasi, lalu panel instalasi Android terbuka otomatis.",
+                "version code di bawah yang kamu isi ditawari update — tampilannya tergantung " +
+                "pilihan tipe: Wajib (popup tanpa keluar) atau Opsional (Nanti Saja + " +
+                "Pengaturan). Unduhan jalan di aplikasi, panel instalasi Android terbuka otomatis.",
             color = NoxaTextSecondary,
             fontSize = 12.sp,
             lineHeight = 17.sp
@@ -406,6 +418,47 @@ private fun UpdatePushSection(
                 .testTag("push_update_url"),
             colors = devFieldColors()
         )
+        Spacer(modifier = Modifier.height(8.dp))
+        // One-tap fill from the CI-built release — no link juggling.
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(14.dp))
+                .background(if (fetchingRelease) NoxaSurfaceSecondary else NoxaSurfaceElevated)
+                .border(1.dp, NoxaBorder, RoundedCornerShape(14.dp))
+                .clickable(enabled = !fetchingRelease && !busy) {
+                    fetchingRelease = true
+                    result = null
+                    success = false
+                    scope.launch {
+                        val release = runCatching {
+                            com.example.data.remote.UpdateRepository.fetchLatestRelease()
+                        }.getOrNull()
+                        fetchingRelease = false
+                        if (release == null) {
+                            result = "Release terbaru tidak bisa dibaca (belum ada rilis " +
+                                "atau GitHub terjangkau?). Isi link manual saja."
+                        } else {
+                            url = release.apkUrl
+                            if (versionName.isBlank()) versionName = release.versionName
+                            if (note.isBlank()) note = release.note
+                            result = "Diambil dari rilis ${release.tag} — periksa versi, " +
+                                "lalu Share."
+                            success = true
+                        }
+                    }
+                }
+                .padding(vertical = 11.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                if (fetchingRelease) "Membaca release terbaru…" else
+                    "⬇ Ambil APK dari GitHub Release terbaru",
+                color = NoxaLime,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
         Spacer(modifier = Modifier.height(10.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             OutlinedTextField(
@@ -439,6 +492,35 @@ private fun UpdatePushSection(
                 .testTag("push_update_note"),
             colors = devFieldColors()
         )
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Sky's rollout dial: wajib = no way out, opsional = Nanti Saja.
+        Text(
+            "Tipe update",
+            color = NoxaTextSecondary,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold
+        )
+        Spacer(modifier = Modifier.height(6.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            UpdateTypeChoice(
+                label = "Wajib",
+                description = "Popup tanpa tombol keluar — semua user harus update.",
+                selected = mandatory,
+                modifier = Modifier.weight(1f),
+                onClick = { mandatory = true; result = null; success = false }
+            )
+            UpdateTypeChoice(
+                label = "Opsional",
+                description = "Ada \"Nanti Saja\" + update lewat Pengaturan.",
+                selected = !mandatory,
+                modifier = Modifier.weight(1f),
+                onClick = { mandatory = false; result = null; success = false }
+            )
+        }
 
         result?.let { message ->
             Spacer(modifier = Modifier.height(10.dp))
@@ -460,12 +542,24 @@ private fun UpdatePushSection(
                     busy = true
                     success = false
                     result = null
-                    onPush(url, versionName, versionCode.toLongOrNull() ?: 0L, note) { error ->
+                    onPush(
+                        url,
+                        versionName,
+                        versionCode.toLongOrNull() ?: 0L,
+                        note,
+                        mandatory
+                    ) { error ->
                         busy = false
                         if (error == null) {
                             success = true
-                            result = "Update dipublikasikan! User dengan versi di bawah " +
-                                "${versionCode.toLongOrNull() ?: 0L} akan diminta update."
+                            result = if (mandatory) {
+                                "Update Wajib dipublikasikan! User dengan versi di bawah " +
+                                    "${versionCode.toLongOrNull() ?: 0L} akan dipaksa update."
+                            } else {
+                                "Update Opsional dipublikasikan! User dengan versi di bawah " +
+                                    "${versionCode.toLongOrNull() ?: 0L} ditawari update " +
+                                    "(bisa \"Nanti Saja\", nanti dari Pengaturan)."
+                            }
                         } else {
                             result = error
                         }
@@ -481,6 +575,51 @@ private fun UpdatePushSection(
                 fontWeight = FontWeight.Bold
             )
         }
+    }
+}
+
+/** One choice in the Wajib / Opsional segmented control. */
+@Composable
+private fun UpdateTypeChoice(
+    label: String,
+    description: String,
+    selected: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(14.dp))
+            .background(if (selected) NoxaPurple.copy(alpha = 0.18f) else NoxaSurfaceElevated)
+            .border(
+                1.dp,
+                if (selected) NoxaPurple else NoxaBorder,
+                RoundedCornerShape(14.dp)
+            )
+            .clickable { onClick() }
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (selected) {
+                Icon(Icons.Default.Check, contentDescription = null, tint = NoxaPurple, modifier = Modifier.size(14.dp))
+                Spacer(modifier = Modifier.width(5.dp))
+            }
+            Text(
+                label,
+                color = if (selected) NoxaPurple else NoxaTextSecondary,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Black
+            )
+        }
+        Spacer(modifier = Modifier.height(3.dp))
+        Text(
+            description,
+            color = NoxaTextTertiary,
+            fontSize = 10.sp,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            lineHeight = 13.sp
+        )
     }
 }
 

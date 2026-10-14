@@ -24,7 +24,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -44,6 +44,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -246,7 +247,8 @@ private fun SupportChatHeader(onBack: () -> Unit) {
                 fontSize = 11.sp
             )
         }
-        VerifiedBadgePurple(size = 20.dp)
+        // Badge lives inside SupportIdentityRow only — the old second badge
+        // on the right edge duplicated it.
         Spacer(modifier = Modifier.width(10.dp))
     }
     Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(NoxaBorder))
@@ -256,10 +258,27 @@ private fun SupportChatHeader(onBack: () -> Unit) {
 private fun ReadyChatBody(state: SupportUiState.Ready, onSend: (String) -> Unit) {
     val thread = state.thread
     val listState = rememberLazyListState()
-    var draft by remember { mutableStateOf("") }
+    // saveable: survives rotation / process recreation instead of wiping a
+    // half-typed complaint.
+    var draft by rememberSaveable { mutableStateOf("") }
+    // Text handed to a send that has not resolved yet — restored on failure
+    // so a dropped connection never costs the user their typing.
+    var pendingSend by rememberSaveable { mutableStateOf<String?>(null) }
 
     // Sky's rule — locked while the previous user message is unanswered.
     val canSend = thread?.canUserSend ?: true
+
+    // Resolve the in-flight send: keep the draft on failure, drop it on ack.
+    // Keyed on the whole state object — every emission is a new instance, so
+    // a repeat failure with an identical message still triggers resolution.
+    LaunchedEffect(state) {
+        if (!state.sending && pendingSend != null) {
+            if (state.error != null) {
+                if (draft.isBlank()) draft = pendingSend.orEmpty()
+            }
+            pendingSend = null
+        }
+    }
 
     LaunchedEffect(thread?.messages?.size) {
         val count = thread?.messages?.size ?: 0
@@ -281,7 +300,13 @@ private fun ReadyChatBody(state: SupportUiState.Ready, onSend: (String) -> Unit)
                     WelcomeSupportCard()
                 }
             }
-            items(thread?.messages.orEmpty(), key = { "${it.at}-${it.from}" }) { message ->
+            // Positional key: "${at}-${from}" can collide when two messages
+            // land in the same millisecond, which crashed LazyColumn with
+            // "Key was already used".
+            itemsIndexed(
+                thread?.messages.orEmpty(),
+                key = { index, _ -> "msg-$index" }
+            ) { _, message ->
                 SupportBubble(message = message, isSupport = message.from == "support")
             }
             if (state.sending) {
@@ -317,6 +342,7 @@ private fun ReadyChatBody(state: SupportUiState.Ready, onSend: (String) -> Unit)
             onSend = {
                 val text = draft.trim()
                 if (text.isNotEmpty()) {
+                    pendingSend = text
                     draft = ""
                     onSend(text)
                 }

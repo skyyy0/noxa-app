@@ -406,6 +406,33 @@ pengguna sebelum pemutaran pertama.
   saja.
 * **Versi** — `versionName` **1.15.0** / `versionCode` 14.
 
+### v1.15.5 — widget Now Playing, visualizer spektrum, Dengar Bareng, efek ketik
+
+* **Widget layar utama "Now Playing" (baru)** — widget launcher berisi artwork,
+  judul, artis, dan tombol **play/pause + next**. Widget tidak punya state
+  sendiri: ia membaca facade pemutar bersama (`player.uiState`) yang sama dengan
+  mini player, jadi tidak pernah beda tampilan dengan notifikasi. Artwork diambil
+  lewat Coil di background (di-cache, 256px supaya aman batas Binder), ketuk
+  bagian lain membuka NOXA, dan setelah proses dibunuh sistem widget tetap
+  menampilkan lagu terakhir dari sesi tersimpan tanpa autoplay. Broadcast kontrol
+  pakai `exported="false"` — sistem tetap bisa mengirim update widget,
+  aplikasi lain tidak bisa menyadap tombolnya.
+* **Visualizer spektrum di pemutar penuh (baru)** — baris FFT live di atas
+  artwork, dua gaya (bars/wave) ikut tema lime NOXA. Sumbernya
+  `audiofx.Visualizer` pada sesi audio yang sama dengan equalizer; karena Android
+  memperlakukannya sebagai audio monitoring, izin mikrofon hanya diminta saat
+  user menyalakan visualizer — tanpa izin / sesi mati / perangkat tanpa effect,
+  tampilan jujur menampilkan garis datar, bukan palsu atau crash.
+* **Dengar Bareng (room, baru)** — kartu entry di Home/Profil dan tab navigasi:
+  buat room dengan kode, teman masuk pakai kode, lalu **lagu & posisi pemutaran
+  sinkron** antar anggota. State room lewat backend registry (`rooms`):
+  publish/read/join/leave + pruning otomatis; kode di-normalisasi agar aman
+  diketik ulang. Layar room punya status Joining/Failed/InRoom yang jujur.
+* **Balasan AI mengetik sendiri (typewriter)** — balasan terbaru di chat NOXA AI
+  terungkap karakter demi karakter dengan caret lime berkedip; transcript lama
+  langsung tampil penuh (dan tidak mengetik ulang saat di-scroll).
+* **Versi** — `versionName` **1.15.5** / `versionCode` 15.
+
 ### Berbagi lagu: link NOXA & kartu canvas (v1.10)
 
 Sebelumnya membagikan lagu mengirim link Deezer (`deezer.com/track/…`). Sejak

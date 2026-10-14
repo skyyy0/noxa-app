@@ -135,10 +135,15 @@ class NoxaApplication : Application(), ImageLoaderFactory {
     }
 
     override fun newImageLoader(): ImageLoader {
+        // 2 GB devices get a leaner image pipeline: a smaller memory cache
+        // and RGB_565 artwork (covers have no alpha — this halves bitmap
+        // memory, the single largest consumer during scroll on low-RAM
+        // phones) while normal devices keep full quality.
+        val lowRam = isLowRamDevice
         return ImageLoader.Builder(this)
             .memoryCache {
                 MemoryCache.Builder(this)
-                    .maxSizePercent(0.25)
+                    .maxSizePercent(if (lowRam) 0.12 else 0.25)
                     .build()
             }
             .diskCache {
@@ -158,9 +163,26 @@ class NoxaApplication : Application(), ImageLoaderFactory {
             .respectCacheHeaders(false)
             .diskCachePolicy(CachePolicy.ENABLED)
             .memoryCachePolicy(CachePolicy.ENABLED)
+            .apply {
+                if (lowRam) bitmapConfig(android.graphics.Bitmap.Config.RGB_565)
+            }
             .crossfade(true)
-            .crossfade(200)
+            .crossfade(if (lowRam) 120 else 200)
             .build()
+    }
+
+    /**
+     * True on low-RAM devices (the 2 GB class Android flags itself). Used to
+     * trim artwork caches, audio warming and animations instead of guessing
+     * from the total heap — the OS knows better than we do.
+     */
+    val isLowRamDevice: Boolean by lazy {
+        try {
+            @Suppress("DEPRECATION")
+            (getSystemService(ACTIVITY_SERVICE) as android.app.ActivityManager).isLowRamDevice
+        } catch (e: Exception) {
+            false
+        }
     }
 
     companion object {

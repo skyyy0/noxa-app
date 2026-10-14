@@ -42,9 +42,13 @@ import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 private const val TAG = "MusicViewModel"
+
+/** SharedPreferences key: the versionCode an optional update was skipped on. */
+private const val KEY_SKIPPED_UPDATE = "skipped_update_version"
 
 /** How many preview tracks in a queue get warmed for full audio ahead of time. */
 private const val PREVIEW_WARM_LIMIT = 3
@@ -57,6 +61,10 @@ private const val AUTOPLAY_APPEND_LIMIT = 5
 
 private const val WEEK_MS = 7L * 24 * 60 * 60 * 1000
 private const val PLAY_RECORD_RETENTION_MS = 30L * 24 * 60 * 60 * 1000
+
+/** Dengar Bareng: how often the room is polled, and position heartbeat. */
+private const val ROOM_POLL_MS = 2_000L
+private const val ROOM_HEARTBEAT_MS = 10_000L
 
 /** The mini weekly recap shown on the profile screen. */
 data class WeeklyRecap(
@@ -325,11 +333,26 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             resumeLastSession()
         }
         loadHome()
+        // Dengar Bareng: mirror local playback into an open room (null-safe
+        // until joinRoom sets roomCode).
+        startRoomMirroring()
         // In-app update check: quiet and delayed so it never competes with
         // the first home load; a newer published version forces a dialog.
         safeScope.launch {
             delay(5_000)
             checkForUpdate()
+        }
+        // The developer never sees the forced-update popup: Sky publishes
+        // updates from this very account, and a modal with no dismissal would
+        // lock her out of the console that pushes them. Covers the late
+        // sign-in case too — the role only becomes known after the silent
+        // auto sign-in finishes.
+        viewModelScope.launch {
+            authManager.currentUser.collect { user ->
+                if (user?.role == com.example.data.support.AccountRole.DEVELOPER) {
+                    _updateInfo.value = null
+                }
+            }
         }
         observeCurrentSong()
         observeAutoplaySimilar()
@@ -542,10 +565,18 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         val missing = com.example.data.model.PinnedTracks.ALL.filter { it.title !in present }
         if (missing.isEmpty()) return
         val extras = missing.mapNotNull { pin ->
-            runCatching {
+            val candidates = runCatching {
                 youtubeRepository.search("${pin.artist} ${pin.title}")
             }.getOrDefault(emptyList())
-                .firstOrNull { com.example.data.model.PinnedTracks.matches(pin, it.title, it.artist) }
+                .filter {
+                    com.example.data.model.PinnedTracks.matchesRelaxed(pin, it.title, it.artist)
+                }
+            // Prefer the video whose title leads with the pin, so a cover or
+            // a lyric video mentioning the words can't win over the real one.
+            candidates.minByOrNull { song ->
+                val at = song.title.indexOf(pin.title, ignoreCase = true)
+                if (at < 0) Int.MAX_VALUE else at
+            }
         }
         if (extras.isEmpty()) return
         _pinnedSongs.value = (existing + extras).sortedBy { song ->
@@ -832,7 +863,10 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             if (usagePolicyStore.isYouTubePolicyAccepted) {
                 queue
                     .filter { it.source == MusicSource.DEEZER && it.isPreview }
-                    .take(PREVIEW_WARM_LIMIT)
+                    // Low-RAM phones warm fewer upcoming tracks: each warm
+                    // is a YouTube resolve + buffered stream, the priciest
+                    // background work the player does.
+                    .take(if (app.isLowRamDevice) 1 else PREVIEW_WARM_LIMIT)
                     .forEach { queued ->
                         runCatching { youtubeRepository.findFullAudio(queued) }
                             .getOrNull()
@@ -884,6 +918,11 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     fun seekTo(positionMs: Long) {
         player.seekTo(positionMs)
         if (_videoUiState.value is VideoUiState.Ready) mvPlayer.seekTo(positionMs)
+        // Push the seek to the room right away (the heartbeat would lag 10s).
+        safeScope.launch {
+            kotlinx.coroutines.delay(350)
+            publishRoomSnapshot()
+        }
     }
 
     fun next() {
@@ -1200,14 +1239,53 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     private val _updateError = MutableStateFlow<String?>(null)
     val updateError: StateFlow<String?> = _updateError.asStateFlow()
 
-    /** Quiet check on every app open: a newer published version forces the dialog. */
+    /** Whether the update popup is on screen (Settings can reopen it). */
+    private val _updateDialogVisible = MutableStateFlow(false)
+    val updateDialogVisible: StateFlow<Boolean> = _updateDialogVisible.asStateFlow()
+
+    private fun updatePrefs(): android.content.SharedPreferences =
+        getApplication<Application>().getSharedPreferences("noxa_update", 0)
+
+    /**
+     * Quiet check on every app open: a newer published version offers the
+     * dialog. Mandatory updates always show; optional ones show once per
+     * version — "Nanti Saja" sticks until the developer pushes another
+     * version or the user opens Pengaturan → Pembaruan. Skipped entirely for
+     * the DEVELOPER role — see the collector in [init] for the sign-in race.
+     */
     fun checkForUpdate() {
+        if (authManager.currentUser.value?.role ==
+            com.example.data.support.AccountRole.DEVELOPER
+        ) return
         safeScope.launch {
             val info = runCatching { backend.readState()?.update }.getOrNull() ?: return@launch
             if (info.versionCode > com.example.BuildConfig.VERSION_CODE) {
                 _updateInfo.value = info
+                val skipped = updatePrefs().getLong(KEY_SKIPPED_UPDATE, -1L)
+                if (info.mandatory || skipped != info.versionCode) {
+                    _updatePhase.value = UpdatePhase.Idle
+                    _updateError.value = null
+                    _updateDialogVisible.value = true
+                }
             }
         }
+    }
+
+    /** "Nanti Saja" on an optional update: hide and remember the choice. */
+    fun dismissOptionalUpdate() {
+        val info = _updateInfo.value ?: return
+        _updateDialogVisible.value = false
+        runCatching {
+            updatePrefs().edit().putLong(KEY_SKIPPED_UPDATE, info.versionCode).apply()
+        }
+    }
+
+    /** Reopens the popup from Pengaturan → Pembaruan. */
+    fun openUpdateFromSettings() {
+        if (_updateInfo.value == null) return
+        _updatePhase.value = UpdatePhase.Idle
+        _updateError.value = null
+        _updateDialogVisible.value = true
     }
 
     /**
@@ -1222,13 +1300,30 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         safeScope.launch {
             _updatePhase.value = UpdatePhase.Resolving
             _updateError.value = null
+            // Off the main thread: Android throws NetworkOnMainThreadException
+            // for the MediaFire page fetch, which surfaced as the false
+            // "Link update tidak bisa diakses" error on top of the UA issue.
             val direct = runCatching {
-                com.example.data.remote.UpdateRepository.resolveDirectApkUrl(info.url)
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    com.example.data.remote.UpdateRepository.resolveDirectApkUrl(info.url)
+                }
             }.getOrNull()
             if (direct == null) {
+                // Never dead-end: hand the link to the browser so the user
+                // can still download and open the APK by hand.
+                runCatching {
+                    val app = getApplication<Application>()
+                    app.startActivity(
+                        android.content.Intent(
+                            android.content.Intent.ACTION_VIEW,
+                            android.net.Uri.parse(info.url)
+                        ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                    )
+                }
                 _updatePhase.value = UpdatePhase.Failed
                 _updateError.value =
-                    "Link update tidak bisa diakses. Coba lagi nanti atau lapor ke Support."
+                    "Link dibuka di browser — unduh file APK-nya lalu buka file itu " +
+                    "untuk instal. Atau coba lagi nanti."
                 return@launch
             }
             val app = getApplication<Application>()
@@ -1308,12 +1403,17 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** Developer-only: publish an APK link as a forced update for every user. */
+    /**
+     * Developer-only: publish an APK link as an update for every user.
+     * `mandatory = false` gives users a "Nanti Saja" escape and a Settings
+     * entry instead of the undismissable popup.
+     */
     fun pushUpdate(
         url: String,
         versionName: String,
         versionCode: Long,
         note: String,
+        mandatory: Boolean,
         onResult: (String?) -> Unit
     ) {
         safeScope.launch {
@@ -1336,7 +1436,8 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                         versionName = versionName.trim().ifBlank { "v$versionCode" },
                         url = cleanUrl,
                         note = note.trim(),
-                        at = System.currentTimeMillis()
+                        at = System.currentTimeMillis(),
+                        mandatory = mandatory
                     )
                 )
             }.getOrDefault(false)
@@ -1354,6 +1455,238 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
+    // ------------------------------------------- dengar bareng (rooms)
+
+    private val _roomState =
+        MutableStateFlow<com.example.ui.screens.RoomUiState>(com.example.ui.screens.RoomUiState.Idle)
+    val roomState: StateFlow<com.example.ui.screens.RoomUiState> = _roomState.asStateFlow()
+
+    /** The joined room code, or null. Drives every room hook below. */
+    @Volatile
+    private var roomCode: String? = null
+
+    /** `updatedAt` of the last remote state applied — heartbeat filter. */
+    @Volatile
+    private var lastRemoteAt = 0L
+
+    /** True while a remote change is being applied — blocks echo-publish. */
+    @Volatile
+    private var applyingRemote = false
+
+    private var roomJob: kotlinx.coroutines.Job? = null
+
+    /** Enters a room (creating it when the code is new) as the signed-in user. */
+    fun joinRoom(code: String) {
+        val normalized = code.trim().uppercase(java.util.Locale.ROOT)
+        if (normalized.isBlank()) {
+            _roomState.value = com.example.ui.screens.RoomUiState.Failed(
+                normalized, "Isi kode room dulu."
+            )
+            return
+        }
+        val user = authManager.currentUser.value
+        if (user == null) {
+            _roomState.value = com.example.ui.screens.RoomUiState.Failed(
+                normalized, "Masuk ke akun dulu — room terikat ke akun kamu."
+            )
+            return
+        }
+        safeScope.launch {
+            _roomState.value = com.example.ui.screens.RoomUiState.Joining(normalized)
+            val room = runCatching {
+                backend.joinRoom(normalized, user.uid, user.displayName ?: user.email ?: "user")
+            }.getOrNull()
+            if (room == null) {
+                _roomState.value = com.example.ui.screens.RoomUiState.Failed(
+                    normalized, "Server tidak terjangkau. Periksa koneksi lalu coba lagi."
+                )
+                return@launch
+            }
+            roomCode = normalized
+            lastRemoteAt = room.updatedAt
+            _roomState.value = room.toUiState(normalized, user.uid)
+            // Adopt whatever the room is playing right now (a new joiner
+            // follows — they don't hijack the room with their silence).
+            if (room.songId.isNotBlank()) applyRemoteRoom(room, force = true)
+            startRoomLoop()
+        }
+    }
+
+    /** Creates a room: a fresh 6-character code, then joins it. */
+    fun createRoom() {
+        val alphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789" // no 0/O/1/I confusion
+        val code = (1..6).map { alphabet.random() }.joinToString("")
+        joinRoom(code)
+    }
+
+    /** Leaves the room (the roster drops the last member's room entirely). */
+    fun leaveRoom() {
+        val code = roomCode ?: run {
+            _roomState.value = com.example.ui.screens.RoomUiState.Idle
+            return
+        }
+        roomJob?.cancel()
+        roomJob = null
+        roomCode = null
+        applyingRemote = false
+        _roomState.value = com.example.ui.screens.RoomUiState.Idle
+        val user = authManager.currentUser.value
+        if (user != null) {
+            safeScope.launch { runCatching { backend.leaveRoom(code, user.uid) } }
+        }
+    }
+
+    /** Poll loop: refresh members, apply remote song/playing/position. */
+    private fun startRoomLoop() {
+        roomJob?.cancel()
+        roomJob = safeScope.launch {
+            while (isActive) {
+                kotlinx.coroutines.delay(ROOM_POLL_MS)
+                val code = roomCode ?: break
+                val user = authManager.currentUser.value ?: break
+                val room = runCatching { backend.readRoom(code) }.getOrNull() ?: continue
+                applyRemoteRoom(room, force = false)
+                val current = _roomState.value
+                if (current is com.example.ui.screens.RoomUiState.InRoom) {
+                    // Full refresh: song/playing/members may have all moved
+                    // when a peer took over — the header must follow.
+                    _roomState.value = room.toUiState(code, user.uid)
+                        .copy(positionMs = estimatedRoomPosition(room))
+                }
+            }
+        }
+    }
+
+    /** Where the room's position *should* be right now. */
+    private fun estimatedRoomPosition(
+        room: com.example.data.support.NoxaBackend.RoomState
+    ): Long {
+        val elapsed = if (room.playing) System.currentTimeMillis() - room.updatedAt else 0L
+        return (room.positionMs + elapsed).coerceAtLeast(0L)
+    }
+
+    /**
+     * Applies remote room state to the local player. Skips when nothing
+     * changed ([force] overrides for join-time adoption), never echoes back
+     * (the mirror is gated by [applyingRemote]).
+     */
+    private suspend fun applyRemoteRoom(
+        room: com.example.data.support.NoxaBackend.RoomState,
+        force: Boolean
+    ) {
+        if (!force && room.updatedAt <= lastRemoteAt) return
+        lastRemoteAt = room.updatedAt
+        if (room.songId.isBlank()) return
+        val currentId = playerState.value.currentSong?.id
+        applyingRemote = true
+        try {
+            if (room.songId != currentId) {
+                val song = runCatching { resolveSongId(room.songId) }.getOrNull() ?: return
+                playSong(song)
+                // The player auto-plays; match the room's actual state.
+                kotlinx.coroutines.delay(500)
+                if (!room.playing && playerState.value.isPlaying) player.togglePlayPause()
+            } else {
+                val playing = playerState.value.isPlaying
+                if (room.playing != playing) player.togglePlayPause()
+                val target = estimatedRoomPosition(room)
+                val pos = playbackProgress.value.positionMs
+                if (kotlin.math.abs(pos - target) > 3_000L) player.seekTo(target)
+            }
+            // Brief grace so the collector sees our own state settle before
+            // the echo gate re-opens.
+            kotlinx.coroutines.delay(700)
+        } finally {
+            applyingRemote = false
+        }
+    }
+
+    private suspend fun resolveSongId(songId: String): Song? =
+        if (songId.startsWith("youtube:")) {
+            youtubeRepository.songByVideoId(songId.removePrefix("youtube:"))
+        } else {
+            repository.songFromDeepLink(songId)
+        }
+
+    /**
+     * Local → room mirror. Deduped on (song, playing) so the collector
+     * only publishes real changes; seeks and the 10s position heartbeat
+     * call [mirrorNow] directly.
+     */
+    private fun publishRoomSnapshot() {
+        val code = roomCode ?: return
+        if (applyingRemote) return
+        val user = authManager.currentUser.value ?: return
+        val song = playerState.value.currentSong ?: return
+        val playing = playerState.value.isPlaying
+        val positionMs = playbackProgress.value.positionMs
+        safeScope.launch {
+            runCatching {
+                backend.publishRoom(
+                    code = code,
+                    uid = user.uid,
+                    name = user.displayName ?: user.email ?: "user"
+                ) { room ->
+                    room.copy(
+                        songId = song.id,
+                        songTitle = song.title,
+                        songArtist = song.artist,
+                        songArtwork = song.artworkUrl,
+                        playing = playing,
+                        positionMs = positionMs
+                    )
+                }
+            }.getOrNull()?.let { published -> lastRemoteAt = published.updatedAt }
+        }
+    }
+
+    /** Mirrors playback into the room whenever the local player changes. */
+    private fun startRoomMirroring() {
+        safeScope.launch {
+            var lastKey: String? = null
+            playerState.collect { st ->
+                if (roomCode == null) {
+                    lastKey = null
+                    return@collect
+                }
+                val key = "${st.currentSong?.id}|${st.isPlaying}"
+                if (applyingRemote || key == lastKey) return@collect
+                lastKey = key
+                publishRoomSnapshot()
+            }
+        }
+        // Position heartbeat: keeps every member's timeline converging.
+        safeScope.launch {
+            while (isActive) {
+                kotlinx.coroutines.delay(ROOM_HEARTBEAT_MS)
+                if (roomCode != null && !applyingRemote && playerState.value.isPlaying) {
+                    publishRoomSnapshot()
+                }
+            }
+        }
+    }
+
+    private fun com.example.data.support.NoxaBackend.RoomState.toUiState(
+        code: String,
+        selfUid: String
+    ): com.example.ui.screens.RoomUiState.InRoom =
+        com.example.ui.screens.RoomUiState.InRoom(
+            code = code,
+            songId = songId,
+            songTitle = songTitle,
+            songArtist = songArtist,
+            songArtwork = songArtwork,
+            playing = playing,
+            positionMs = positionMs,
+            members = members.map { member ->
+                com.example.ui.screens.RoomMemberUi(
+                    uid = member.uid,
+                    name = member.name,
+                    isSelf = member.uid == selfUid
+                )
+            }
+        )
+
     private val _supportState =
         MutableStateFlow<com.example.ui.screens.SupportUiState>(com.example.ui.screens.SupportUiState.Loading)
     val supportState: StateFlow<com.example.ui.screens.SupportUiState> =
@@ -1363,16 +1696,33 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         MutableStateFlow<com.example.ui.screens.DevUiState>(com.example.ui.screens.DevUiState.Loading)
     val devState: StateFlow<com.example.ui.screens.DevUiState> = _devState.asStateFlow()
 
-    /** Loads the user's support thread (or explains why chat is unavailable). */
+    /**
+     * Loads the user's support thread (or explains why chat is unavailable).
+     * A refresh never drops an open chat back to a spinner — that would wipe
+     * the composer draft and reset scroll mid-conversation.
+     */
     fun openSupportChat() {
         safeScope.launch {
-            _supportState.value = com.example.ui.screens.SupportUiState.Loading
+            if (_supportState.value !is com.example.ui.screens.SupportUiState.Ready) {
+                _supportState.value = com.example.ui.screens.SupportUiState.Loading
+            }
             _supportState.value = loadSupportState()
         }
     }
 
     fun refreshSupportChat() {
-        safeScope.launch { _supportState.value = loadSupportState() }
+        safeScope.launch {
+            val previous = _supportState.value
+            val fresh = loadSupportState()
+            _supportState.value = if (fresh is com.example.ui.screens.SupportUiState.Offline &&
+                previous is com.example.ui.screens.SupportUiState.Ready
+            ) {
+                // Keep the conversation on screen with an inline error.
+                previous.copy(error = "Gagal muat ulang. Periksa koneksi lalu coba lagi.")
+            } else {
+                fresh
+            }
+        }
     }
 
     private suspend fun loadSupportState(): com.example.ui.screens.SupportUiState {
@@ -1403,8 +1753,23 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                     crashTrace = crash
                 )
             }.getOrDefault(false)
-            _supportState.value = when (val fresh = loadSupportState()) {
-                is com.example.ui.screens.SupportUiState.Ready -> fresh.copy(
+            val fresh = loadSupportState()
+            _supportState.value = when {
+                // A load blip must never replace an open conversation — the
+                // composer draft and scroll would be lost.
+                fresh !is com.example.ui.screens.SupportUiState.Ready &&
+                    ready !is com.example.ui.screens.SupportUiState.Loading -> {
+                    ready.copy(
+                        sending = false,
+                        error = if (ok) {
+                            "Terkirim ke server, namun gagal sinkron. Ketuk muat ulang nanti."
+                        } else {
+                            "Pesan gagal dikirim. Periksa koneksi lalu coba lagi."
+                        }
+                    )
+                }
+
+                fresh is com.example.ui.screens.SupportUiState.Ready -> fresh.copy(
                     error = if (ok) null else "Pesan gagal dikirim. Periksa koneksi lalu coba lagi."
                 )
 

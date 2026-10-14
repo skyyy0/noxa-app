@@ -241,25 +241,43 @@ class NoxaBackend {
         val salt = randomSalt()
         var conflict: String? = null
         val login = mutate { state ->
-            if (state.accounts.containsKey(cleanEmail)) {
+            val existing = state.accounts[cleanEmail]
+            if (existing != null && existing.hashHex.isNotBlank()) {
                 conflict = "Email sudah terdaftar. Gunakan Masuk."
                 return@mutate null
             }
-            if (state.accounts.values.any { it.username.equals(username, ignoreCase = true) }) {
+            // Username uniqueness, ignoring the very account being claimed
+            // (a passwordless stub carries its own name).
+            if (state.accounts.values.any {
+                    it.email != cleanEmail && it.username.equals(username, ignoreCase = true)
+                }
+            ) {
                 conflict = "Username \"$username\" sudah dipakai. Pilih yang lain."
                 return@mutate null
             }
-            val account = RemoteAccountInternal(
-                uid = uid,
-                email = cleanEmail,
-                username = username,
-                saltHex = toHex(salt),
-                hashHex = toHex(pbkdf2(password.toByteArray(Charsets.UTF_8), salt)),
-                role = role,
-                createdAt = System.currentTimeMillis()
-            )
+            val account = if (existing != null) {
+                // Claiming a passwordless stub (created by [upsertAccount]
+                // from a Google/phone sign-in): keep uid, role, createdAt and
+                // the support thread, only add real credentials.
+                existing.copy(
+                    uid = uid,
+                    username = username,
+                    saltHex = toHex(salt),
+                    hashHex = toHex(pbkdf2(password.toByteArray(Charsets.UTF_8), salt))
+                )
+            } else {
+                RemoteAccountInternal(
+                    uid = uid,
+                    email = cleanEmail,
+                    username = username,
+                    saltHex = toHex(salt),
+                    hashHex = toHex(pbkdf2(password.toByteArray(Charsets.UTF_8), salt)),
+                    role = role,
+                    createdAt = System.currentTimeMillis()
+                )
+            }
             state.accounts[cleanEmail] = account
-            BackendLogin(uid, cleanEmail, username, role, account.createdAt)
+            BackendLogin(account.uid, cleanEmail, username, account.role, account.createdAt)
         }
         return when {
             login != null -> login to null
@@ -365,7 +383,71 @@ class NoxaBackend {
     /** True when the email is already registered remotely. */
     suspend fun isEmailTaken(email: String): Boolean? {
         val state = readState() ?: return null
-        return state.accounts.containsKey(email.trim().lowercase(Locale.ROOT))
+        val account = state.accounts[email.trim().lowercase(Locale.ROOT)] ?: return false
+        // Passwordless stubs (Google/phone sign-ins) can still be claimed
+        // by a later email+password registration.
+        return account.hashHex.isNotBlank()
+    }
+
+    /**
+     * Makes any signed-in account visible in the shared registry.
+     *
+     * Google, phone and Firebase sign-ins never go through [register], so
+     * those users used to be invisible in the dev console's "Daftar Akun"
+     * count — only email+password registrations showed up. Every sign-in
+     * path calls this with its identity; the account is created as a
+     * **passwordless stub** (empty hash, claimable later by a real
+     * registration) or refreshed in place.
+     *
+     * Role handling is conservative: an existing role is only ever upgraded
+     * (by enum rank — DEVELOPER first), never downgraded, so a seeded
+     * developer or staff account can't be demoted by a plain sign-in.
+     */
+    suspend fun upsertAccount(
+        uid: String,
+        email: String,
+        username: String,
+        role: AccountRole
+    ): BackendLogin? {
+        val cleanEmail = email.trim().lowercase(Locale.ROOT)
+        if (cleanEmail.isBlank()) return null
+        val cleanName = username.ifBlank { cleanEmail.substringBefore('@') }
+
+        fun toLogin(account: RemoteAccountInternal) =
+            BackendLogin(account.uid, account.email, account.username, account.role, account.createdAt)
+
+        // Cheap path: already fully visible and nothing to upgrade — no write.
+        val current = readState() ?: return null
+        val existing = current.accounts[cleanEmail]
+        if (existing != null && existing.uid.isNotBlank() &&
+            existing.username.isNotBlank() && role.ordinal >= existing.role.ordinal
+        ) {
+            return toLogin(existing)
+        }
+
+        return mutate { state ->
+            val found = state.accounts[cleanEmail]
+            val account = if (found == null) {
+                RemoteAccountInternal(
+                    uid = uid,
+                    email = cleanEmail,
+                    username = cleanName,
+                    saltHex = "",
+                    hashHex = "",
+                    role = role,
+                    createdAt = System.currentTimeMillis()
+                ).also { state.accounts[cleanEmail] = it }
+            } else {
+                val merged = found.copy(
+                    uid = found.uid.ifBlank { uid },
+                    username = if (found.username.isNotBlank()) found.username else cleanName,
+                    role = if (role.ordinal < found.role.ordinal) role else found.role
+                )
+                state.accounts[cleanEmail] = merged
+                merged
+            }
+            toLogin(account)
+        }
     }
 
     /** All registered accounts, newest first (dev console). */
@@ -377,6 +459,116 @@ class NoxaBackend {
     /** All support threads, most recently active first (dev console). */
     suspend fun listThreads(): List<SupportThread>? =
         readState()?.threads?.values?.sortedByDescending { it.lastUserAt.coerceAtLeast(it.lastSupportAt) }
+
+    // ------------------------------------------------- rooms (dengar bareng)
+
+    private fun normalizeRoomCode(code: String): String =
+        code.trim().uppercase(Locale.ROOT)
+
+    /** Members seen in the last 10 minutes stay on the roster. */
+    private fun List<RoomMember>.fresh(now: Long): List<RoomMember> =
+        filter { now - it.lastSeen < 10 * 60 * 1000L }
+
+    /** Reads one listening room, or null when it does not exist / offline. */
+    suspend fun readRoom(code: String): RoomState? {
+        val normalized = normalizeRoomCode(code)
+        val room = readState()?.rooms?.get(normalized) ?: return null
+        return room.copy(members = room.members.fresh(System.currentTimeMillis()))
+    }
+
+    /**
+     * Joins [code], creating the room on first join, and refreshes this
+     * member's presence. Returns the room, or null when the backend is
+     * unreachable (the caller reports that honestly).
+     */
+    suspend fun joinRoom(code: String, uid: String, name: String): RoomState? {
+        val normalized = normalizeRoomCode(code)
+        if (normalized.isBlank()) return null
+        return mutate { state ->
+            val now = System.currentTimeMillis()
+            val room = state.rooms[normalized]
+                ?: RoomState(code = normalized, updatedAt = now)
+            val member = RoomMember(
+                uid = uid,
+                name = name.trim().ifBlank { "NOXA User" },
+                lastSeen = now
+            )
+            val joined = room.copy(
+                members = (room.members.filterNot { it.uid == uid } + member)
+                    .fresh(now)
+            )
+            state.rooms[normalized] = joined
+            pruneRooms(state)
+            joined
+        }
+    }
+
+    /** Drops this member; the room dies with its last member. */
+    suspend fun leaveRoom(code: String, uid: String) {
+        val normalized = normalizeRoomCode(code)
+        mutate { state ->
+            val room = state.rooms[normalized] ?: return@mutate false
+            val members = room.members.filterNot { it.uid == uid }
+            if (members.isEmpty()) {
+                state.rooms.remove(normalized)
+            } else {
+                state.rooms[normalized] = room.copy(members = members)
+            }
+            true
+        }
+    }
+
+    /**
+     * Publishes a content change (new song / play-pause / seek). [content]
+     * receives the room with this member refreshed and returns the updated
+     * room; [updatedAt] is stamped here so followers can tell a real change
+     * from a heartbeat. Null = unreachable.
+     */
+    suspend fun publishRoom(
+        code: String,
+        uid: String,
+        name: String,
+        content: (RoomState) -> RoomState
+    ): RoomState? {
+        val normalized = normalizeRoomCode(code)
+        return mutate { state ->
+            val now = System.currentTimeMillis()
+            val room = state.rooms[normalized]
+                ?: RoomState(code = normalized, updatedAt = now)
+            val member = RoomMember(
+                uid = uid,
+                name = name.trim().ifBlank { "NOXA User" },
+                lastSeen = now
+            )
+            val withMember = room.copy(
+                members = (room.members.filterNot { it.uid == uid } + member)
+                    .fresh(now)
+            )
+            val updated = content(withMember).copy(updatedAt = now)
+            state.rooms[normalized] = updated
+            pruneRooms(state)
+            updated
+        }
+    }
+
+    /**
+     * Keeps dormant rooms (and their members) out of the shared document.
+     * A room lives while any member was seen recently — presence, not age,
+     * is what keeps it alive (an idle room whose members all left dies here).
+     */
+    private fun pruneRooms(state: BackendState) {
+        val now = System.currentTimeMillis()
+        state.rooms.entries.retainAll { (_, room) ->
+            room.members.any { now - it.lastSeen < 60 * 60 * 1000L }
+        }
+        state.rooms.keys.forEach { code ->
+            val room = state.rooms[code] ?: return@forEach
+            val fresh = room.members.fresh(now)
+            if (fresh.size != room.members.size) {
+                state.rooms[code] = room.copy(members = fresh)
+            }
+        }
+    }
 
     // -------------------------------------------------------- support: user
 
@@ -487,13 +679,47 @@ class NoxaBackend {
         val lastPasswordChangeAt: Long = 0L
     )
 
-    /** One published in-app update (developer push). */
+    /**
+     * One published in-app update (developer push).
+     *
+     * `mandatory` is Sky's rollout dial: `false` shows a soft dialog with a
+     * "Nanti Saja" escape and an update entry in Settings (good for small
+     * patches), `true` shows the undismissable popup (good for big changes).
+     * Older documents without the field parse as `true` — the historical
+     * behaviour was forced.
+     */
     data class UpdateInfo(
         val versionCode: Long,
         val versionName: String,
         val url: String,
         val note: String,
-        val at: Long
+        val at: Long,
+        val mandatory: Boolean = true
+    )
+
+    /** One member of a listening room; [lastSeen] keeps the roster honest. */
+    data class RoomMember(
+        val uid: String,
+        val name: String,
+        val lastSeen: Long
+    )
+
+    /**
+     * A live "Dengar Bareng" room: everyone hears the same song at roughly
+     * the same position. Last-writer-wins by [updatedAt] — whoever acts
+     * (song, play/pause, seek) publishes; every other member follows.
+     */
+    data class RoomState(
+        val code: String,
+        val songId: String = "",
+        val songTitle: String = "",
+        val songArtist: String = "",
+        val songArtwork: String = "",
+        val playing: Boolean = false,
+        val positionMs: Long = 0L,
+        /** Bumped ONLY by content changes — never by heartbeats. */
+        val updatedAt: Long = 0L,
+        val members: List<RoomMember> = emptyList()
     )
 
     /** Full backend document, mirrored 1:1 onto the Telegraph page. */
@@ -504,6 +730,9 @@ class NoxaBackend {
 
         /** Latest pushed update, or null when nothing was ever published. */
         var update: UpdateInfo? = null
+
+        /** Live listening rooms keyed by room code. */
+        val rooms = LinkedHashMap<String, RoomState>()
     }
 
     private fun parseState(json: JSONObject): BackendState {
@@ -551,6 +780,33 @@ class NoxaBackend {
                 resolved = obj.optBoolean("resolved")
             )
         }
+        val rooms = json.optJSONObject("rooms") ?: JSONObject()
+        for (code in rooms.keys()) {
+            val obj = rooms.optJSONObject(code) ?: continue
+            val rawMembers = obj.optJSONArray("members") ?: JSONArray()
+            val members = ArrayList<RoomMember>(rawMembers.length())
+            for (i in 0 until rawMembers.length()) {
+                val m = rawMembers.optJSONObject(i) ?: continue
+                members.add(
+                    RoomMember(
+                        uid = m.optString("uid"),
+                        name = m.optString("name"),
+                        lastSeen = m.optLong("lastSeen")
+                    )
+                )
+            }
+            state.rooms[code] = RoomState(
+                code = code,
+                songId = obj.optString("songId"),
+                songTitle = obj.optString("songTitle"),
+                songArtist = obj.optString("songArtist"),
+                songArtwork = obj.optString("songArtwork"),
+                playing = obj.optBoolean("playing"),
+                positionMs = obj.optLong("positionMs"),
+                updatedAt = obj.optLong("updatedAt"),
+                members = members
+            )
+        }
         state.update = json.optJSONObject("update")?.let { u ->
             val url = u.optString("url")
             if (url.isBlank()) null else UpdateInfo(
@@ -558,7 +814,9 @@ class NoxaBackend {
                 versionName = u.optString("versionName"),
                 url = url,
                 note = u.optString("note"),
-                at = u.optLong("at")
+                at = u.optLong("at"),
+                // Absent field = old document = the old forced behaviour.
+                mandatory = !u.has("mandatory") || u.optBoolean("mandatory")
             )
         }
         return state
@@ -617,7 +875,35 @@ class NoxaBackend {
                             .put("url", u.url)
                             .put("note", u.note)
                             .put("at", u.at)
+                            .put("mandatory", u.mandatory)
                     )
+                }
+                if (state.rooms.isNotEmpty()) {
+                    val rooms = JSONObject()
+                    state.rooms.forEach { (code, room) ->
+                        val members = JSONArray()
+                        room.members.forEach { m ->
+                            members.put(
+                                JSONObject()
+                                    .put("uid", m.uid)
+                                    .put("name", m.name)
+                                    .put("lastSeen", m.lastSeen)
+                            )
+                        }
+                        rooms.put(
+                            code,
+                            JSONObject()
+                                .put("songId", room.songId)
+                                .put("songTitle", room.songTitle)
+                                .put("songArtist", room.songArtist)
+                                .put("songArtwork", room.songArtwork)
+                                .put("playing", room.playing)
+                                .put("positionMs", room.positionMs)
+                                .put("updatedAt", room.updatedAt)
+                                .put("members", members)
+                        )
+                    }
+                    root.put("rooms", rooms)
                 }
             }
     }

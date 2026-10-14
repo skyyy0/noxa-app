@@ -1,11 +1,16 @@
 package com.example.ui.screens
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -54,6 +59,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -62,6 +68,7 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
@@ -164,10 +171,14 @@ fun AiChatScreen(
             }
             // Positional key: two identical AI replies used to share a key
             // ("hash-text") and crash the list with "Key was already used".
-            itemsIndexed(messages, key = { index, message -> "$index-${message.fromUser}" }) { _, message ->
+            itemsIndexed(messages, key = { index, message -> "$index-${message.fromUser}" }) { index, message ->
                 AiMessageRow(
                     message = message,
                     isPlaying = message.songId != null && message.songId == playingSongId,
+                    // Only the freshest reply types itself out; the rest of
+                    // the transcript renders instantly (and stays that way
+                    // when the item is scrolled off and back on).
+                    typewriter = !message.fromUser && index == messages.lastIndex,
                     onPlaySong = { onPlaySongMessage(message) }
                 )
             }
@@ -331,6 +342,7 @@ private fun AiWelcomeCard(onSuggestion: (String) -> Unit) {
 private fun AiMessageRow(
     message: AiChatMessage,
     isPlaying: Boolean,
+    typewriter: Boolean = false,
     onPlaySong: () -> Unit
 ) {
     if (message.fromUser) {
@@ -353,9 +365,35 @@ private fun AiMessageRow(
         return
     }
 
+    // Typewriter reveal: the reply is uncovered a few characters at a time
+    // with a blinking lime caret — the assistant feels like it is writing
+    // instead of pasting. rememberSaveable keeps it finished when the item
+    // scrolls off-screen and back.
+    val fullText = message.text
+    var revealedLength by rememberSaveable(message.text, typewriter) {
+        mutableStateOf(if (typewriter) 0 else fullText.length)
+    }
+    val typing = revealedLength < fullText.length
+    if (typing) {
+        LaunchedEffect(fullText) {
+            while (revealedLength < fullText.length) {
+                kotlinx.coroutines.delay(16L)
+                revealedLength = minOf(fullText.length, revealedLength + 2)
+            }
+        }
+    }
+    // One-shot orbit halo the first time an action-bearing reply appears.
+    val hasAction = message.songTitle != null
+
     Column {
         Row(verticalAlignment = Alignment.Bottom) {
-            AiAvatar(size = 28.dp)
+            Box(
+                modifier = Modifier.size(28.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                if (hasAction) ActionHalo()
+                AiAvatar(size = 28.dp)
+            }
             Spacer(modifier = Modifier.width(8.dp))
             Box(
                 modifier = Modifier
@@ -365,28 +403,76 @@ private fun AiMessageRow(
                     .border(1.dp, NoxaBorder, RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp))
                     .padding(horizontal = 14.dp, vertical = 10.dp)
             ) {
-                Text(
-                    message.text,
-                    color = NoxaTextPrimary,
-                    fontSize = 14.sp,
-                    lineHeight = 20.sp
-                )
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text(
+                        fullText.take(revealedLength),
+                        color = NoxaTextPrimary,
+                        fontSize = 14.sp,
+                        lineHeight = 20.sp
+                    )
+                    if (typing) {
+                        // Blinking caret while the answer is still writing.
+                        val caretAlpha by rememberInfiniteTransition(
+                            label = "ai_caret"
+                        ).animateFloat(
+                            initialValue = 0.15f,
+                            targetValue = 1f,
+                            animationSpec = infiniteRepeatable(
+                                tween(560), RepeatMode.Reverse
+                            ),
+                            label = "ai_caret_alpha"
+                        )
+                        Text(
+                            "\u258c",
+                            color = NoxaLime.copy(alpha = caretAlpha),
+                            fontSize = 14.sp,
+                            lineHeight = 20.sp
+                        )
+                    }
+                }
             }
         }
-        message.songTitle?.let { title ->
-            Spacer(modifier = Modifier.height(8.dp))
-            Row(modifier = Modifier.padding(start = 36.dp)) {
-                AiSongCard(
-                    title = title,
-                    artist = message.songArtist.orEmpty(),
-                    artwork = message.songArtwork,
-                    note = message.songNote,
-                    isPlaying = isPlaying,
-                    onPlay = onPlaySong
-                )
+        AnimatedVisibility(
+            visible = message.songTitle != null,
+            enter = fadeIn() + slideInVertically(initialOffsetY = { it / 2 })
+        ) {
+            Column {
+                message.songTitle?.let { title ->
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(modifier = Modifier.padding(start = 36.dp)) {
+                        AiSongCard(
+                            title = title,
+                            artist = message.songArtist.orEmpty(),
+                            artwork = message.songArtwork,
+                            note = message.songNote,
+                            isPlaying = isPlaying,
+                            onPlay = onPlaySong
+                        )
+                    }
+                }
             }
         }
     }
+}
+
+/**
+ * One-shot lime ring that expands and fades out of the avatar the first time
+ * a reply that *did something* (queued a song, built a mix) appears — the
+ * "wah" beat for AI actions. One ring, 900 ms, never loops.
+ */
+@Composable
+private fun ActionHalo() {
+    val progress = remember { Animatable(0f) }
+    LaunchedEffect(Unit) {
+        progress.animateTo(1f, tween(900, easing = FastOutSlowInEasing))
+    }
+    val p = progress.value
+    Box(
+        modifier = Modifier
+            .size(28.dp * (1f + 1.1f * p))
+            .graphicsLayer { alpha = (1f - p) * 0.8f }
+            .border(1.5.dp, NoxaLime, CircleShape)
+    )
 }
 
 /** The "Dipilih oleh NOXA AI" card — artwork, title, play control, note. */
