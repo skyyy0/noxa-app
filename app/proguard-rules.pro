@@ -38,6 +38,14 @@
 -dontwarn org.jsoup.**
 -dontwarn com.google.gson.**
 
+# NewPipeExtractor bundles Rhino (`org.mozilla:rhino` + rhino-engine) for its
+# optional script engine. Rhino's factory/converters reference desktop-Java
+# APIs that never exist on Android (`java.beans.*`, `javax.script.*`) and are
+# never invoked there — R8 correctly warns, and these classes are genuinely
+# absent by design, not accidentally missing from our dependency set.
+-dontwarn java.beans.**
+-dontwarn javax.script.**
+
 # --- Firebase (AI, Auth, Firestore, App Check) -------------------------
 # Official consumer rules ship with the SDKs; these only silence optional
 # pieces absent from our dependency set.
