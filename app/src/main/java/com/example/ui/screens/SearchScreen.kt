@@ -55,7 +55,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
-import com.example.data.model.MusicSource
 import com.example.data.model.Song
 import com.example.ui.components.SongListItem
 import com.example.ui.theme.NoxaBlack
@@ -72,14 +71,6 @@ data class BrowseGenre(
     val name: String,
     val color: Color
 )
-
-/** Source filter chips above the results. */
-private enum class SourceFilter(val label: String, val source: MusicSource?) {
-    ALL("Semua", null),
-    YOUTUBE("YouTube", MusicSource.YOUTUBE),
-    DEEZER("Deezer", MusicSource.DEEZER),
-    AUDIUS("Audius", MusicSource.AUDIUS)
-}
 
 @Composable
 fun SearchScreen(
@@ -183,46 +174,10 @@ fun SearchScreen(
 
         Spacer(modifier = Modifier.height(10.dp))
 
-        // Source filter — the merged list spans several providers.
-        var sourceFilter by remember { mutableStateOf(SourceFilter.ALL) }
-        val filteredResults = remember(searchResults, sourceFilter) {
-            sourceFilter.source?.let { source -> searchResults.filter { it.source == source } }
-                ?: searchResults
-        }
-
-        if (searchResults.isNotEmpty() && !isSearching) {
-            LazyRow(
-                modifier = Modifier.fillMaxWidth(),
-                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 2.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                items(SourceFilter.entries) { filter ->
-                    val isSelected = filter == sourceFilter
-                    Box(
-                        modifier = Modifier
-                            .clip(CircleShape)
-                            .background(if (isSelected) NoxaLime else NoxaSurfaceSecondary)
-                            .border(
-                                1.dp,
-                                if (isSelected) NoxaLime else NoxaBorder,
-                                CircleShape
-                            )
-                            .clickable { sourceFilter = filter }
-                            .padding(horizontal = 14.dp, vertical = 7.dp)
-                            .testTag("source_chip_${filter.label}")
-                    ) {
-                        Text(
-                            text = filter.label,
-                            color = if (isSelected) NoxaBlack else NoxaTextPrimary,
-                            fontSize = 12.sp,
-                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
-                        )
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(6.dp))
-        }
+        // Provider filter chips were removed on purpose: showing "YouTube",
+        // "Deezer" or "Audius" made NOXA look like a front for other music
+        // apps. The merged result list now stands on its own, provider-neutral.
+        val filteredResults = searchResults
 
         // Body: Results or Browse Genres
         if (isSearching) {
@@ -277,20 +232,6 @@ fun SearchScreen(
                         textAlign = TextAlign.Center
                     )
                 }
-            }
-        } else if (searchResults.isNotEmpty() && filteredResults.isEmpty()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(32.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = "Tidak ada hasil dari ${sourceFilter.label} untuk \"$searchQuery\"",
-                    color = NoxaTextTertiary,
-                    fontSize = 14.sp,
-                    textAlign = TextAlign.Center
-                )
             }
         } else if (filteredResults.isNotEmpty()) {
             LazyColumn(

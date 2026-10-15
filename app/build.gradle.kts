@@ -34,8 +34,8 @@ android {
     applicationId = "com.noxa.music"
     minSdk = 24
     targetSdk = 36
-    versionCode = 15
-    versionName = "1.15.5"
+    versionCode = 16
+    versionName = "1.15.6"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -82,15 +82,12 @@ android {
 
   buildTypes {
     release {
-      // R8 + resource shrinking (v1.16): smaller APK, far fewer classes to
-      // page in on 2 GB devices, no leftover debug/test markers in the dex —
-      // and `dependenciesInfo` above keeps dependency metadata out of the
-      // APK, so Play Protect sees a lean, standard-looking artifact.
+      // Konsisten dengan versi 1.15.0: tanpa minifikasi / resource
+      // shrinking. Konfigurasi resource (Google/Firebase) tetap utuh dan
+      // ukuran APK berada di kisaran 30–50 MB sesuai ekspektasi user.
       isCrunchPngs = true
-      isMinifyEnabled = true
-      isShrinkResources = true
-      proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-      // Signed when a release keystore is available, otherwise left unsigned.
+      isMinifyEnabled = false
+      isShrinkResources = false
       signingConfigs.findByName("release")?.let { signingConfig = it }
     }
     debug {

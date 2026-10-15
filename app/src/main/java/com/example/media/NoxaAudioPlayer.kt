@@ -113,6 +113,29 @@ class NoxaAudioPlayer(private val context: Context) {
     private var sleepTimer: CountDownTimer? = null
     private var lastSessionSaveMs = 0L
 
+    /**
+     * Invoked when ExoPlayer advances to a new track **on its own** (a song
+     * ended, or repeat/shuffle moved the queue) — i.e. not through the manual
+     * skip button, which already resolves full audio first. The view model uses
+     * this to hold the transition when the newly-current item is still a raw
+     * 30 s Deezer preview, so the full track is fetched before it is heard.
+     */
+    var onAutoTransition: ((Song) -> Unit)? = null
+
+    /**
+     * Invoked when playback dies with a **network-ish** error (connection
+     * dropped, HTTP 4xx/5xx, timeout) and the stream URL itself may be the
+     * problem — instance URLs live only a few hours, so a song that has been
+     * queued for a while can fail with an expired link. The view model
+     * re-resolves the audio and returns a fresh [Song], or null when nothing
+     * better exists; the player then falls back to retrying the same stream.
+     */
+    var onStreamExpired: (suspend (Song) -> Song?)? = null
+
+    /** Retries left for the current failure burst; reset on track change. */
+    private var streamRetryCount = 0
+    private var retryJob: Job? = null
+
     init {
         setupPlayerListener()
         equalizerManager.init(exoPlayer.audioSessionId)
@@ -142,6 +165,11 @@ class NoxaAudioPlayer(private val context: Context) {
                 }
                 syncQueueFromPlayer()
                 persistSession(force = true)
+                // A new track starts a fresh burst of error retries.
+                streamRetryCount = 0
+                if (song != null && reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) {
+                    onAutoTransition?.invoke(song)
+                }
             }
 
             override fun onTimelineChanged(timeline: androidx.media3.common.Timeline, reason: Int) {
@@ -174,6 +202,8 @@ class NoxaAudioPlayer(private val context: Context) {
 
             override fun onPlayerError(error: PlaybackException) {
                 Log.e("NoxaAudioPlayer", "Playback error: ${error.message}", error)
+                if (retryCurrentStream(error)) return
+                streamRetryCount = 0
                 _uiState.update {
                     it.copy(
                         isBuffering = false,
@@ -183,6 +213,76 @@ class NoxaAudioPlayer(private val context: Context) {
                 }
             }
         })
+    }
+
+    /**
+     * Silent self-healing for transient network failures: instead of dropping
+     * the user on an error the moment a stream hiccups, the player (1) asks
+     * the view model for a freshly resolved URL — the usual fix for an expired
+     * instance link — and (2) re-prepares the same stream when no fresh URL
+     * exists. Up to [MAX_STREAM_RETRIES] attempts per failure burst, with a
+     * short backoff; only when all of them fail is the error surfaced.
+     *
+     * Returns true when the error was handled (a retry is under way).
+     */
+    private fun retryCurrentStream(error: PlaybackException): Boolean {
+        val song = _uiState.value.currentSong ?: return false
+        val isNetworkError = when (error.errorCode) {
+            PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
+            PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
+            PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
+            PlaybackException.ERROR_CODE_IO_UNSPECIFIED -> true
+
+            else -> false
+        }
+        if (!isNetworkError || streamRetryCount >= MAX_STREAM_RETRIES) return false
+        streamRetryCount++
+        val resumeMs = _progress.value.positionMs.coerceAtLeast(0L)
+        _uiState.update { it.copy(isBuffering = true, errorMessage = null) }
+        retryJob?.cancel()
+        retryJob = scope.launch {
+            delay(STREAM_RETRY_DELAY_MS * streamRetryCount)
+            // A fresh URL first: an expired link fails identically on every
+            // retry, so re-preparing alone would just burn the attempts.
+            val refreshed = runCatching { onStreamExpired?.invoke(song) }.getOrNull()
+            if (refreshed != null && isPlayable(refreshed.streamUrl)) {
+                replaceCurrentStreamKeepPosition(refreshed, resumeMs)
+            } else {
+                val index = exoPlayer.currentMediaItemIndex
+                if (index >= 0) exoPlayer.seekTo(index, resumeMs)
+                exoPlayer.prepare()
+                exoPlayer.play()
+            }
+        }
+        return true
+    }
+
+    /**
+     * Replaces the current item's stream with a freshly resolved URL while
+     * keeping the playback position — the mid-song twin of
+     * [swapCurrentStreamAndRestart], used when a live stream expires and the
+     * song should continue where it stopped, not from the top.
+     */
+    private fun replaceCurrentStreamKeepPosition(song: Song, resumeMs: Long) {
+        val index = exoPlayer.currentMediaItemIndex
+        if (index < 0 || index >= exoPlayer.mediaItemCount) {
+            exoPlayer.prepare()
+            exoPlayer.play()
+            return
+        }
+        songsById[song.id] = song
+        exoPlayer.replaceMediaItem(index, song.toMediaItem())
+        exoPlayer.seekTo(index, resumeMs)
+        _uiState.update {
+            it.copy(
+                currentSong = song,
+                durationMs = if (song.durationMs > 0) song.durationMs else it.durationMs,
+                errorMessage = null
+            )
+        }
+        _progress.update { it.copy(positionMs = resumeMs) }
+        exoPlayer.prepare()
+        exoPlayer.play()
     }
 
     /** Mirrors ExoPlayer's timeline back into [PlayerUiState.queue]. */
@@ -327,6 +427,56 @@ class NoxaAudioPlayer(private val context: Context) {
         songsById[song.id] = song
         exoPlayer.replaceMediaItem(index, song.toMediaItem())
         syncQueueFromPlayer()
+    }
+
+    /**
+     * Immediately pauses and surfaces the resolving state. Used when an
+     * auto-advanced track is still a raw 30 s preview: pausing here stops the
+     * short clip from leaking a few seconds of audio while the full stream is
+     * fetched, so the song effectively waits for its full audio.
+     */
+    fun pauseForResolve() {
+        exoPlayer.pause()
+        _uiState.update { it.copy(isBuffering = true, errorMessage = null) }
+    }
+
+    /** Resumes playback after a [pauseForResolve] hold (honest-preview fallback). */
+    fun resumeAfterHold() {
+        _uiState.update { it.copy(isBuffering = false) }
+        exoPlayer.play()
+    }
+
+    /**
+     * Replaces the **current** media item's stream with a freshly resolved
+     * full-audio URL and restarts it from the top. Companion to
+     * [pauseForResolve]: ExoPlayer auto-advanced onto a queued preview before
+     * its full audio was ready, and without this swap the 30 s clip would play
+     * as if it were the song.
+     */
+    fun swapCurrentStreamAndRestart(song: Song) {
+        if (!isPlayable(song.streamUrl)) {
+            resumeAfterHold()
+            return
+        }
+        val index = exoPlayer.currentMediaItemIndex
+        if (index < 0 || index >= exoPlayer.mediaItemCount) {
+            resumeAfterHold()
+            return
+        }
+        songsById[song.id] = song
+        exoPlayer.replaceMediaItem(index, song.toMediaItem())
+        exoPlayer.seekTo(index, 0L)
+        _uiState.update {
+            it.copy(
+                currentSong = song,
+                durationMs = if (song.durationMs > 0) song.durationMs else it.durationMs,
+                isBuffering = false,
+                errorMessage = null
+            )
+        }
+        _progress.update { it.copy(positionMs = 0L) }
+        exoPlayer.prepare()
+        exoPlayer.play()
     }
 
     /** Jumps straight to a queue position. */
@@ -558,5 +708,9 @@ class NoxaAudioPlayer(private val context: Context) {
     private companion object {
         const val POSITION_TICK_MS = 500L
         const val SESSION_SAVE_INTERVAL_MS = 10_000L
+
+        /** Silent network-error retries per failure burst, per track. */
+        const val MAX_STREAM_RETRIES = 2
+        const val STREAM_RETRY_DELAY_MS = 1_500L
     }
 }

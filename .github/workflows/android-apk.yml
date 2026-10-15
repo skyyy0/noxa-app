@@ -53,6 +53,10 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
+          # Cache ~/.gradle (caches + wrapper) keyed on the Gradle files, so
+          # dependency downloads and the build cache are reused across runs and
+          # each push builds noticeably faster than the last.
+          cache: gradle
 
       # `packages` must be overridden: the action's default list still contains the
       # retired legacy `tools` package, which no longer exists in the SDK repository

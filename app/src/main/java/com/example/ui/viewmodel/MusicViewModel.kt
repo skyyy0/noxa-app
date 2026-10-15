@@ -356,6 +356,13 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         }
         observeCurrentSong()
         observeAutoplaySimilar()
+        // Full-audio guarantee when ExoPlayer advances on its own (a song ends):
+        // hold the transition until the next track's full stream is resolved.
+        player.onAutoTransition = { song -> handleAutoAdvance(song) }
+        // A stream that dies mid-song (expired instance URL, network blip) is
+        // re-resolved silently and playback continues in place — the user
+        // never sees an error for a hiccup the app can fix itself.
+        player.onStreamExpired = { song -> refreshExpiredStream(song) }
         observeWeeklyRecap()
         // Restore the NOXA AI transcript so the assistant keeps continuity.
         _aiMessages.value = aiRepository.loadHistory()
@@ -441,6 +448,9 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
      * are genuinely playable, not dead preview links.
      */
     private var autoplayAppendedFor: String? = null
+
+    /** Guards against holding the same auto-advanced track twice. */
+    private var lastHeldForResolveId: String? = null
 
     private fun observeAutoplaySimilar() {
         safeScope.launch {
@@ -579,9 +589,13 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         if (extras.isEmpty()) return
+        // Order by the pin list — relaxed-aware, so a YouTube-served pick
+        // (strictly unmatched) still lands in its shelf position instead of
+        // sorting to the front with index -1.
         _pinnedSongs.value = (existing + extras).sortedBy { song ->
-            com.example.data.model.PinnedTracks.ALL.indexOfFirst {
-                com.example.data.model.PinnedTracks.matches(it, song.title, song.artist)
+            com.example.data.model.PinnedTracks.ALL.indexOfFirst { pin ->
+                com.example.data.model.PinnedTracks.matches(pin, song.title, song.artist) ||
+                    com.example.data.model.PinnedTracks.matchesRelaxed(pin, song.title, song.artist)
             }
         }
     }
@@ -815,7 +829,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
 
                 needsYoutubeResolve -> player.showError(
                     "Audio \"${song.title}\" tidak bisa diambil sekarang. " +
-                        "Instance YouTube publik sedang sibuk atau tidak tersedia — coba lagi nanti."
+                        "Sumber sedang sibuk atau tidak tersedia — coba lagi nanti."
                 )
 
                 // No confident match: play the honest 30s preview (the badge says so).
@@ -839,6 +853,34 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             usagePolicyStore.isYouTubePolicyAccepted
         ) {
             runCatching { youtubeRepository.findFullAudio(song) }.getOrNull()?.let { return it }
+        }
+        return null
+    }
+
+    /**
+     * Fresh audio for a stream that failed mid-playback. The ladder mirrors
+     * [resolvePlaybackSource] but forces a cache-evicting re-resolve for the
+     * YouTube-backed sources, since the cached URL is exactly the one that
+     * just died. Returns null when nothing better exists — the player then
+     * retries the original URL before giving up.
+     */
+    private suspend fun refreshExpiredStream(song: Song): Song? {
+        streamResolver.resolve(song)?.let { return it }
+        when (song.source) {
+            MusicSource.YOUTUBE ->
+                runCatching { youtubeRepository.refreshAudio(song) }.getOrNull()?.let { return it }
+
+            MusicSource.DEEZER -> {
+                // Full-length Deezer tracks carry their audio on a matched
+                // YouTube video; a raw preview re-runs the matcher instead.
+                if (song.isPreview && usagePolicyStore.isYouTubePolicyAccepted) {
+                    runCatching { youtubeRepository.findFullAudio(song) }.getOrNull()?.let { return it }
+                } else {
+                    runCatching { youtubeRepository.refreshAudio(song) }.getOrNull()?.let { return it }
+                }
+            }
+
+            MusicSource.AUDIUS -> Unit
         }
         return null
     }
@@ -966,6 +1008,47 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 player.clearError()
             }
             plainSkip()
+        }
+    }
+
+    /**
+     * Full-audio guarantee for the **auto** transition — the case where a song
+     * finishes and ExoPlayer advances the queue by itself. (The manual skip
+     * button already resolves first via [skipTo]; this covers the native path.)
+     *
+     * A long album queue is only warmed a few tracks ahead, so once playback
+     * moves past that window the next queued Deezer item is still its raw 30 s
+     * preview — previously that preview simply played as if it were the song.
+     * Now the transition is held: the short clip is paused before it can be
+     * heard, the full stream is resolved, and only then does the track restart
+     * from the top. When no better stream exists, the honest preview resumes.
+     * A rolling warm keeps the next few tracks ready so this hold is rare.
+     */
+    private fun handleAutoAdvance(song: Song) {
+        val policyAccepted = usagePolicyStore.isYouTubePolicyAccepted
+        val needsFullAudio = when {
+            song.source == MusicSource.DEEZER && song.isPreview -> policyAccepted
+            song.source == MusicSource.YOUTUBE && song.streamUrl.isBlank() -> true
+            else -> false
+        }
+        if (!needsFullAudio) {
+            // Already full (warmed earlier) or needs no resolve: just keep the
+            // warm window rolling ahead of playback.
+            warmQueueStreams(player.uiState.value.queue)
+            return
+        }
+        if (song.id == lastHeldForResolveId) return
+        lastHeldForResolveId = song.id
+        player.pauseForResolve()
+        safeScope.launch {
+            val resolved = resolvePlaybackSource(song)
+            if (resolved != null) {
+                player.swapCurrentStreamAndRestart(resolved)
+            } else {
+                // Nothing better than the 30 s clip: resume it honestly.
+                player.resumeAfterHold()
+            }
+            warmQueueStreams(player.uiState.value.queue)
         }
     }
 

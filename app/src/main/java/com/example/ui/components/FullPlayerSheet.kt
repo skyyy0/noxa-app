@@ -1113,13 +1113,11 @@ private fun PinnedQuoteBlock(song: Song) {
 
 @Composable
 private fun AudioQualityBadge(song: Song) {
-    val label = when {
-        song.source == MusicSource.YOUTUBE -> "YOUTUBE • FULL"
-        // Deezer previews resolve to full-length audio at play time; the
-        // badge names the source, not a (now obsolete) 30 second limitation.
-        song.isPreview -> "DEEZER"
-        else -> "FULL TRACK"
-    }
+    // Audio always resolves to full length at play time (YouTube matcher +
+    // on-device extractor). The badge is kept neutral — no provider names —
+    // so NOXA reads as a standalone music app rather than a front for other
+    // services.
+    val label = "FULL"
     Box(
         modifier = Modifier
             .clip(RoundedCornerShape(4.dp))

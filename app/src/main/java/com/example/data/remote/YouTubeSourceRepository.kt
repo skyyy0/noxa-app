@@ -246,6 +246,28 @@ class YouTubeSourceRepository {
     }
 
     /**
+     * Re-resolves audio for a song whose stream **died mid-playback** (an
+     * instance URL lives only a few hours, and a queued song can easily outlive
+     * it). Unlike [resolveAudio], the cached entry for the video is evicted
+     * first — otherwise the cache would hand back the very URL that just
+     * failed. Returns the refreshed copy, or null when no source could serve a
+     * new URL (the caller then retries the old stream as a last resort).
+     */
+    suspend fun refreshAudio(song: Song): Song? = withContext(Dispatchers.IO) {
+        val videoId = song.matchedVideoId
+            .ifBlank { song.remoteId.ifBlank { song.id.removePrefix(ID_PREFIX) } }
+        if (videoId.isBlank()) return@withContext null
+        synchronized(cacheLock) {
+            streamCache.remove(videoId)
+            streamCache.keys.filter { it.startsWith("$videoId@") }.toList()
+                .forEach { streamCache.remove(it) }
+        }
+        val streams = streamsFor(videoId) ?: return@withContext null
+        val audioUrl = streams.audioUrl ?: return@withContext null
+        song.copy(streamUrl = audioUrl, isPreview = false)
+    }
+
+    /**
      * Resolves a playable audio URL for a YouTube song. Returns a copy of
      * [song] pointing at the resolved stream, or `null` when no instance could
      * provide one (the caller shows an honest error).

@@ -44,10 +44,20 @@ object PinnedTracks {
         )
     )
 
-    /** The pinned entry for this song, or null when it is not pinned. */
-    fun find(song: Song): PinnedTrack? = ALL.firstOrNull { pin ->
-        matches(pin, song.title, song.artist)
-    }
+    /**
+     * The pinned entry for this song, or null when it is not pinned.
+     *
+     * Strict catalogue matching first, then the relaxed rule as a fallback:
+     * the pin shelf itself may serve a pick from a user-generated source (the
+     * delisted "Laskar Pelangi" is resolved from YouTube, where the artist
+     * sits inside the title and the uploader is the label's channel). A track
+     * that earned its place on the shelf must still get Sky's quote and the
+     * star in the player — so the lookup the UI uses is exactly as forgiving
+     * as the shelf's own resolver, while still requiring the artist's name.
+     */
+    fun find(song: Song): PinnedTrack? =
+        ALL.firstOrNull { pin -> matches(pin, song.title, song.artist) }
+            ?: ALL.firstOrNull { pin -> matchesRelaxed(pin, song.title, song.artist) }
 
     fun isPinned(song: Song): Boolean = find(song) != null
 

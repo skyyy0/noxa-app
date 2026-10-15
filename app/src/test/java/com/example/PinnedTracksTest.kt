@@ -102,6 +102,21 @@ class PinnedTracksTest {
     }
 
     @Test
+    fun findAlsoRecognisesPinsServedFromYoutube() {
+        // "Laskar Pelangi" is delisted in the catalogue and resolved from
+        // YouTube for the shelf: artist sits inside the title, the uploader is
+        // the label channel. The quote/star lookup must still find the pin —
+        // this was exactly the card that used to render quote-less.
+        val pin = PinnedTracks.find(
+            song("NIDJI - Laskar Pelangi (Official Music Video)", "Musica Studios")
+        )
+        assertNotNull(pin)
+        assertTrue(pin!!.quote.contains("diperjuangkan"))
+        // …while a cover by an unrelated artist stays unpinned even relaxed.
+        assertNull(PinnedTracks.find(song("Laskar Pelangi", "Farel Prayoga")))
+    }
+
+    @Test
     fun relaxedMatchingAcceptsRealYoutubeHitsButRejectsNoise() {
         val laskar = PinnedTracks.ALL.first { it.title == "Laskar Pelangi" }
         val dan = PinnedTracks.ALL.first { it.title == "Dan" }

@@ -485,6 +485,41 @@ service cloud.firestore {
 > diklaim. Tanpa `google-services.json`, email/password juga tidak tersedia
 > (build tetap jalan sebagai mode tamu).
 
+### v1.15.6 — next lagu tunggu audio utuh, tanpa nama provider, APK lebih besar
+
+* **Next lagu menunggu audio utuh (fix utama)** — saat lagu selesai dan pemutar
+  berpindah otomatis ke lagu berikutnya, trek Deezer yang belum sempat dihangatkan
+  dulu diputar sebagai klip 30 detik. Kini transisi ditahan: klip singkat dijeda
+  sebelum terdengar, audio utuh diambil dulu, baru lagu diputar dari awal. Bila
+  memang tidak ada audio utuh, preview jujur dilanjutkan. Pemanasan antrian kini
+  bergulir (rolling) sehingga penahanan jarang terjadi.
+* **Pemutar pulih sendiri saat jaringan goyang** — bila stream terputus di
+  tengah lagu (URL instance kedaluwarsa, koneksi putus seketika, HTTP error),
+  pemutar diam-diam mengambil URL baru dan melanjutkan dari posisi terakhir —
+  sampai dua kali percobaan per kegagalan. Error hanya tampil bila semua
+  percobaan gagal, jadi pemutaran terasa mulus tanpa campur tangan user.
+* **Quote pin "Laskar Pelangi" kembali tampil** — lagu pin yang diambil dari
+  YouTube (karena sudah tidak ada di katalog) kini tetap mendapat kata-kata
+  Sky dan bintang pin di kartu maupun pemutar penuh; urutan rak pin juga
+  kembali sesuai daftar.
+* **Tanpa nama provider di UI** — badge pemutar tak lagi menulis "YouTube" / 
+  "Deezer" (kini cuma `FULL`), chip filter sumber di Search dihapus, dan pesan
+  error tidak lagi menyebut nama layanan — NOXA berdiri sendiri sebagai aplikasi
+  musik, bukan tampak seperti depanan layanan lain.
+* **APK 30–50 MB** — minifikasi & resource-shrinking R8 dimatikan lagi seperti
+  versi 1.15.0, sehingga ukuran APK kembali besar dan tidak lagi terkesan "cuma
+  6 MB". Konfigurasi resource (Google/Firebase) tetap utuh.
+* **Build CI lebih cepat** — GitHub Actions kini menyimpan cache Gradle
+  (`~/.gradle`) antar-run, jadi build berikutnya memakai ulang dependensi & build
+  cache dan selesai jauh lebih cepat.
+
+> Catatan jujur untuk **login Google**: "belum dikonfigurasi" muncul ketika APK
+> release tidak membawa `google-services.json` (resource `default_web_client_id`
+> hilang). Ini bukan regresi kode — sejak awal APK dari GitHub Actions hanya
+> memuat file itu bila secret `GOOGLE_SERVICES_JSON_BASE64` diisi (lihat
+> [Mendapatkan file APK](#mendapatkan-file-apk)). Isi secret itu agar login
+> Google ikut ter-baking ke APK yang didistribusikan.
+
 ## Variabel `.env` (semuanya opsional)
 
 | Variabel | Wajib | Keterangan |
