@@ -42,11 +42,10 @@ class PinnedTracksTest {
 
     @Test
     fun everyPinnedPickIsListedWithItsQuote() {
-        assertEquals(5, PinnedTracks.ALL.size)
+        assertEquals(4, PinnedTracks.ALL.size)
         assertNotNull(PinnedTracks.find(song("Pupus", "Dewa 19")))
         assertNotNull(PinnedTracks.find(song("Dan", "Sheila On 7")))
         assertNotNull(PinnedTracks.find(song("Terlalu Manis", "Slank")))
-        assertNotNull(PinnedTracks.find(song("Laskar Pelangi", "Nidji")))
         // Each pin carries a non-blank quote of its own.
         PinnedTracks.ALL.forEach { pin ->
             assertTrue(pin.quote.isNotBlank())
@@ -84,7 +83,6 @@ class PinnedTracksTest {
         assertNotNull(pin)
         assertTrue(pin!!.quote.contains("kenangan"))
         assertNotNull(PinnedTracks.find(song("Dan (Akustik)", "sheila on 7")))
-        assertNotNull(PinnedTracks.find(song("Laskar Pelangi - 2019", "Nidji")))
         // …but wrong artists and typos stay unpinned.
         assertNull(PinnedTracks.find(song("Kangen (Live)", "NOAH")))
         assertNull(PinnedTracks.find(song("Kangenen", "Dewa 19")))
@@ -103,33 +101,33 @@ class PinnedTracksTest {
 
     @Test
     fun findAlsoRecognisesPinsServedFromYoutube() {
-        // "Laskar Pelangi" is delisted in the catalogue and resolved from
-        // YouTube for the shelf: artist sits inside the title, the uploader is
-        // the label channel. The quote/star lookup must still find the pin —
-        // this was exactly the card that used to render quote-less.
+        // A pin that had to be resolved from YouTube: artist sits inside the
+        // title, uploader = the label channel. The quote/star lookup must
+        // still find the pin — this was exactly the card that used to render
+        // quote-less.
         val pin = PinnedTracks.find(
-            song("NIDJI - Laskar Pelangi (Official Music Video)", "Musica Studios")
+            song("SLANK - Terlalu Manis (Official Music Video)", "Slank Records")
         )
         assertNotNull(pin)
-        assertTrue(pin!!.quote.contains("diperjuangkan"))
+        assertTrue(pin!!.quote.contains("kenangan"))
         // …while a cover by an unrelated artist stays unpinned even relaxed.
-        assertNull(PinnedTracks.find(song("Laskar Pelangi", "Farel Prayoga")))
+        assertNull(PinnedTracks.find(song("Terlalu Manis", "Farel Prayoga")))
     }
 
     @Test
     fun relaxedMatchingAcceptsRealYoutubeHitsButRejectsNoise() {
-        val laskar = PinnedTracks.ALL.first { it.title == "Laskar Pelangi" }
+        val manis = PinnedTracks.ALL.first { it.title == "Terlalu Manis" }
         val dan = PinnedTracks.ALL.first { it.title == "Dan" }
 
         // The actual top hit: artist inside the title, uploader = label channel.
         assertTrue(
             PinnedTracks.matchesRelaxed(
-                laskar, "NIDJI - Laskar Pelangi (Official Music Video)", "Musica Studios"
+                manis, "SLANK - Terlalu Manis (Official Music Video)", "Slank Records"
             )
         )
-        assertTrue(PinnedTracks.matchesRelaxed(laskar, "Laskar Pelangi", "Nidji"))
-        // Wrong artist (no Nidji anywhere) stays out.
-        assertFalse(PinnedTracks.matchesRelaxed(laskar, "Laskar Pelangi", "Farel Prayoga"))
+        assertTrue(PinnedTracks.matchesRelaxed(manis, "Terlalu Manis", "Slank"))
+        // Wrong artist (no Slank anywhere) stays out.
+        assertFalse(PinnedTracks.matchesRelaxed(manis, "Terlalu Manis", "Farel Prayoga"))
 
         // Short pins are case-sensitive so Indonesian "dan" never matches.
         assertTrue(

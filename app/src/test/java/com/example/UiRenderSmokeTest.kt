@@ -156,7 +156,7 @@ class UiRenderSmokeTest {
     @Test
     fun songListItemRendersWithLongPressSupport() {
         compose.setContent {
-            val s = remember { song("deezer:9", "Laskar Pelangi", "Nidji") }
+            val s = remember { song("deezer:9", "Sepia", "Sheila On 7") }
             SongListItem(
                 song = s,
                 isPlaying = false,

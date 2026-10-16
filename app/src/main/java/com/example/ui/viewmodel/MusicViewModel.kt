@@ -9,6 +9,8 @@ import androidx.lifecycle.viewModelScope
 import com.example.NoxaApplication
 import com.example.data.local.AppSettings
 import com.example.data.local.FavoriteSongEntity
+import com.example.data.local.HeatmapStats
+import com.example.data.local.ListeningHeatmap
 import com.example.data.local.PlayRecordEntity
 import com.example.data.local.PlaylistEntity
 import com.example.data.local.PlaylistSongEntity
@@ -56,11 +58,28 @@ private const val PREVIEW_WARM_LIMIT = 3
 /** Autoplay-similar: trigger window before the end of the queue's last song. */
 private const val AUTOPLAY_NEAR_END_MS = 15_000L
 
+/** Wrapped mini: how many top artists / songs the card lists. */
+private const val WRAPPED_ARTIST_LIMIT = 3
+private const val WRAPPED_SONG_LIMIT = 1
+
 /** How many similar tracks get appended when autoplay kicks in. */
 private const val AUTOPLAY_APPEND_LIMIT = 5
 
 private const val WEEK_MS = 7L * 24 * 60 * 60 * 1000
-private const val PLAY_RECORD_RETENTION_MS = 30L * 24 * 60 * 60 * 1000
+
+/**
+ * Play records now back the 365-day heatmap, so a year of plays is kept
+ * (aggregates are computed in SQLite — raw rows never pile up in memory).
+ */
+private const val PLAY_RECORD_RETENTION_MS = 365L * 24 * 60 * 60 * 1000
+
+/** Home taste engine: how many artists/ids feed stats & recommendations. */
+private const val TASTE_ARTIST_LIMIT = 4
+private const val QUICK_GRID_LIMIT = 8
+private const val FORYOU_ARTIST_LIMIT = 2
+private const val FORYOU_RELATED_LIMIT = 4
+private const val FORYOU_RELATED_ARTISTS = 2
+private const val FORYOU_SONG_LIMIT = 12
 
 /** Dengar Bareng: how often the room is polled, and position heartbeat. */
 private const val ROOM_POLL_MS = 2_000L
@@ -75,6 +94,44 @@ data class WeeklyRecap(
 ) {
     companion object {
         val EMPTY = WeeklyRecap()
+    }
+}
+
+/** One artist counted from the user's own listening history. */
+data class TopArtistTaste(val name: String, val plays: Int)
+
+/**
+ * Profile's **Peta Panas Dengar** + **NOXA Wrapped Mini**: one year of
+ * listening, aggregated on-device from Room's `play_records`.
+ * `stats == null` means not enough data to draw yet.
+ */
+data class YearListeningUi(
+    val stats: HeatmapStats? = null,
+    val topArtists: List<TopArtistTaste> = emptyList(),
+    val topSongTitle: String = "",
+    val topSongPlays: Int = 0,
+    val distinctArtists: Int = 0,
+    /** Busiest hour of day (0–23), or -1 when unknown. */
+    val busiestHour: Int = -1
+) {
+    companion object {
+        val EMPTY = YearListeningUi()
+    }
+}
+
+/**
+ * The home screen's "statistik kamu" card: what the user actually played in
+ * the last seven days, derived from Room's `play_records`. Purely on-device —
+ * this data never leaves the phone.
+ */
+data class ListeningStats(
+    val playsWeek: Int = 0,
+    val topArtists: List<TopArtistTaste> = emptyList(),
+    /** Most-played song ids, best first (joined to history for artwork). */
+    val topSongIds: List<String> = emptyList()
+) {
+    companion object {
+        val EMPTY = ListeningStats()
     }
 }
 
@@ -285,6 +342,26 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     private val _weeklyRecap = MutableStateFlow(WeeklyRecap.EMPTY)
     val weeklyRecap: StateFlow<WeeklyRecap> = _weeklyRecap.asStateFlow()
 
+    /** Year-long heatmap + mini-wrapped for the profile screen. */
+    private val _yearListening = MutableStateFlow(YearListeningUi.EMPTY)
+    val yearListening: StateFlow<YearListeningUi> = _yearListening.asStateFlow()
+
+    // Home "statistik kamu" card + the taste-derived "Buat kamu" shelf.
+    private val _listeningStats = MutableStateFlow(ListeningStats.EMPTY)
+    val listeningStats: StateFlow<ListeningStats> = _listeningStats.asStateFlow()
+
+    private val _quickPlaySongs = MutableStateFlow<List<Song>>(emptyList())
+    val quickPlaySongs: StateFlow<List<Song>> = _quickPlaySongs.asStateFlow()
+
+    private val _forYouSongs = MutableStateFlow<List<Song>>(emptyList())
+    val forYouSongs: StateFlow<List<Song>> = _forYouSongs.asStateFlow()
+
+    private val _forYouLabel = MutableStateFlow("")
+    val forYouLabel: StateFlow<String> = _forYouLabel.asStateFlow()
+
+    /** The taste signature the shelf was last built from (network guard). */
+    private var lastTasteKey: List<String> = emptyList()
+
     val playlistSummaries: StateFlow<List<PlaylistSummary>> =
         dao.getPlaylistSummaries()
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -342,18 +419,6 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             delay(5_000)
             checkForUpdate()
         }
-        // The developer never sees the forced-update popup: Sky publishes
-        // updates from this very account, and a modal with no dismissal would
-        // lock her out of the console that pushes them. Covers the late
-        // sign-in case too — the role only becomes known after the silent
-        // auto sign-in finishes.
-        viewModelScope.launch {
-            authManager.currentUser.collect { user ->
-                if (user?.role == com.example.data.support.AccountRole.DEVELOPER) {
-                    _updateInfo.value = null
-                }
-            }
-        }
         observeCurrentSong()
         observeAutoplaySimilar()
         // Full-audio guarantee when ExoPlayer advances on its own (a song ends):
@@ -364,6 +429,8 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         // never sees an error for a hiccup the app can fix itself.
         player.onStreamExpired = { song -> refreshExpiredStream(song) }
         observeWeeklyRecap()
+        observeListeningTaste()
+        observeYearListening()
         // Restore the NOXA AI transcript so the assistant keeps continuity.
         _aiMessages.value = aiRepository.loadHistory()
     }
@@ -440,6 +507,121 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 }
         }
+    }
+
+    /**
+     * **Peta Panas Dengar + Wrapped Mini**: aggregates a year of plays in
+     * SQLite (day, artist, song, hour) and anchors the heatmap on "today" at
+     * every emission. Purely on-device — none of this leaves the phone.
+     */
+    private fun observeYearListening() {
+        safeScope.launch {
+            val since = System.currentTimeMillis() - PLAY_RECORD_RETENTION_MS
+            combine(
+                dao.observePlaysPerDay(since),
+                dao.observeTopArtists(since, WRAPPED_ARTIST_LIMIT),
+                dao.observeTopTitles(since, WRAPPED_SONG_LIMIT),
+                dao.observePlaysPerHour(since),
+                dao.observeDistinctArtistCount(since)
+            ) { days, artists, titles, hours, distinct ->
+                val stats = ListeningHeatmap.build(
+                    dayPlays = days.associate { it.day to it.plays },
+                    todayDayIndex = ListeningHeatmap.dayIndex(System.currentTimeMillis())
+                )
+                if (stats.totalPlays == 0) {
+                    YearListeningUi.EMPTY
+                } else {
+                    YearListeningUi(
+                        stats = stats,
+                        topArtists = artists.map { TopArtistTaste(it.artist, it.plays) },
+                        topSongTitle = titles.firstOrNull()?.title.orEmpty(),
+                        topSongPlays = titles.firstOrNull()?.plays ?: 0,
+                        distinctArtists = distinct,
+                        busiestHour = hours.maxByOrNull { it.plays }?.hour ?: -1
+                    )
+                }
+            }.collect { _yearListening.value = it }
+        }
+    }
+
+    /**
+     * Reads the user's own listening statistics (Room `play_records`, last
+     * seven days) and keeps the home screen's stats card, quick-play grid and
+     * "Buat kamu" recommendations in step with them. Purely on-device.
+     */
+    private fun observeListeningTaste() {
+        safeScope.launch {
+            combine(
+                dao.getPlayRecordsSince(System.currentTimeMillis() - WEEK_MS),
+                historySongs
+            ) { records, history -> records to history }
+                .collect { (records, history) ->
+                    val artists = records
+                        .groupBy { it.artist.trim() }
+                        .filterKeys { it.isNotBlank() }
+                        .map { (name, plays) -> TopArtistTaste(name, plays.size) }
+                        .sortedByDescending { it.plays }
+                        .take(TASTE_ARTIST_LIMIT)
+                    val topSongIds = records.groupingBy { it.songId }.eachCount()
+                        .toList()
+                        .sortedByDescending { it.second }
+                        .take(QUICK_GRID_LIMIT)
+                        .map { it.first }
+                    _listeningStats.value = ListeningStats(
+                        playsWeek = records.size,
+                        topArtists = artists,
+                        topSongIds = topSongIds
+                    )
+                    // Artwork lives in the history table, so the quick-play
+                    // grid joins the ids onto it here.
+                    val historyById = history.associateBy { it.id }
+                    _quickPlaySongs.value = topSongIds.mapNotNull { historyById[it] }
+
+                    // Refresh the shelf only when the taste itself changed —
+                    // not on every single play.
+                    val tasteKey = artists.map { it.name }
+                    if (tasteKey != lastTasteKey) {
+                        lastTasteKey = tasteKey
+                        loadForYou(artists)
+                    }
+                }
+        }
+    }
+
+    /**
+     * "Buat kamu": top tracks of the user's most-played artists plus the top
+     * tracks of Deezer's *related* neighbours (the honest "genre mirip"
+     * signal). Fails soft — a dead endpoint only leaves the shelf hidden.
+     */
+    private suspend fun loadForYou(topArtists: List<TopArtistTaste>) {
+        if (topArtists.isEmpty()) {
+            _forYouSongs.value = emptyList()
+            _forYouLabel.value = ""
+            return
+        }
+        val seen = HashSet<String>()
+        val picked = mutableListOf<Song>()
+        fun addAll(songs: List<Song>) {
+            songs.forEach { song -> if (seen.add(song.id)) picked += song }
+        }
+        topArtists.take(FORYOU_ARTIST_LIMIT).forEach { taste ->
+            val artistId = runCatching { repository.findArtistId(taste.name) }.getOrNull()
+                ?: return@forEach
+            addAll(
+                runCatching { repository.artistTopTracks(artistId, 6) }.getOrDefault(emptyList())
+            )
+            runCatching { repository.relatedArtists(artistId, FORYOU_RELATED_LIMIT) }
+                .getOrDefault(emptyList())
+                .take(FORYOU_RELATED_ARTISTS)
+                .forEach { related ->
+                    addAll(
+                        runCatching { repository.artistTopTracks(related.id, 3) }
+                            .getOrDefault(emptyList())
+                    )
+                }
+        }
+        _forYouSongs.value = picked.take(FORYOU_SONG_LIMIT)
+        _forYouLabel.value = "Karena kamu sering dengar ${topArtists.first().name}"
     }
 
     /**
@@ -564,9 +746,9 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * A pin the Deezer catalogue no longer serves (Nidji's "Laskar Pelangi"
-     * was delisted) is resolved from the YouTube source instead, so the Sky
-     * shelf always shows all five picks.
+     * A pin the Deezer catalogue does not serve (a delisted or region-blocked
+     * pick) is resolved from the YouTube source instead, so the Sky shelf
+     * always shows every pick.
      */
     private suspend fun resolveMissingPins(existing: List<Song>) {
         val present = existing
@@ -1314,6 +1496,26 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     val updateInfo: StateFlow<com.example.data.support.NoxaBackend.UpdateInfo?> =
         _updateInfo.asStateFlow()
 
+    // The developer never sees the forced-update popup: Sky publishes updates
+    // from this very account, and a modal with no dismissal would lock her out
+    // of the console that pushes them.
+    //
+    // This collector MUST live below the [_updateInfo] declaration: viewModelScope
+    // runs on Dispatchers.Main.immediate, so a launch from [init] emits the
+    // flow's current value *synchronously* during construction. When the
+    // restored session already belongs to a DEVELOPER, the old init-placed
+    // collector dereferenced _updateInfo before its initializer had run —
+    // a null backing field and the "set value on a null object" force close.
+    init {
+        viewModelScope.launch {
+            authManager.currentUser.collect { user ->
+                if (user?.role == com.example.data.support.AccountRole.DEVELOPER) {
+                    _updateInfo.value = null
+                }
+            }
+        }
+    }
+
     enum class UpdatePhase { Idle, Resolving, Downloading, ReadyToInstall, Failed }
 
     private val _updatePhase = MutableStateFlow(UpdatePhase.Idle)
@@ -1337,19 +1539,33 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
      * the DEVELOPER role — see the collector in [init] for the sign-in race.
      */
     fun checkForUpdate() {
-        if (authManager.currentUser.value?.role ==
+        val isDeveloper = authManager.currentUser.value?.role ==
             com.example.data.support.AccountRole.DEVELOPER
-        ) return
+        if (isDeveloper) return
         safeScope.launch {
-            val info = runCatching { backend.readState()?.update }.getOrNull() ?: return@launch
-            if (info.versionCode > com.example.BuildConfig.VERSION_CODE) {
-                _updateInfo.value = info
-                val skipped = updatePrefs().getLong(KEY_SKIPPED_UPDATE, -1L)
-                if (info.mandatory || skipped != info.versionCode) {
-                    _updatePhase.value = UpdatePhase.Idle
-                    _updateError.value = null
-                    _updateDialogVisible.value = true
-                }
+            val info = runCatching { backend.readState()?.update }.getOrNull()
+            val current = com.example.BuildConfig.VERSION_CODE.toLong()
+            // Stale-state hygiene: an update this build no longer needs
+            // (already installed, or published at/below our versionCode) is
+            // dropped instead of lingering as an "available update" card.
+            if (info == null || !com.example.data.remote.UpdateGate.isNewer(current, info.versionCode)) {
+                _updateInfo.value = null
+                _updateDialogVisible.value = false
+                return@launch
+            }
+            val skipped = updatePrefs().getLong(KEY_SKIPPED_UPDATE, -1L)
+            val show = com.example.data.remote.UpdateGate.shouldShow(
+                currentVersionCode = current,
+                publishedVersionCode = info.versionCode,
+                isDeveloper = isDeveloper,
+                skippedVersionCode = skipped,
+                mandatory = info.mandatory
+            )
+            _updateInfo.value = info
+            if (show) {
+                _updatePhase.value = UpdatePhase.Idle
+                _updateError.value = null
+                _updateDialogVisible.value = true
             }
         }
     }
@@ -1363,9 +1579,22 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** Reopens the popup from Pengaturan → Pembaruan. */
+    /**
+     * Reopens the popup from Pengaturan → Pembaruan — but only while the
+     * published version is genuinely newer than this build. A stale entry
+     * (user already on the latest version) is cleared instead of shown.
+     */
     fun openUpdateFromSettings() {
-        if (_updateInfo.value == null) return
+        val info = _updateInfo.value
+        if (info == null ||
+            !com.example.data.remote.UpdateGate.isNewer(
+                com.example.BuildConfig.VERSION_CODE.toLong(), info.versionCode
+            )
+        ) {
+            _updateInfo.value = null
+            _updateDialogVisible.value = false
+            return
+        }
         _updatePhase.value = UpdatePhase.Idle
         _updateError.value = null
         _updateDialogVisible.value = true
@@ -1453,8 +1682,17 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 if (finished) {
                     if (success && target.exists()) {
-                        _updatePhase.value = UpdatePhase.ReadyToInstall
-                        installApk(app, target)
+                        // Security: never hand an unverified file to the
+                        // system installer — the archive must be signed
+                        // with the same key as the installed app.
+                        val refusal = verifyUpdateSignature(app, target)
+                        if (refusal != null) {
+                            _updatePhase.value = UpdatePhase.Failed
+                            _updateError.value = refusal
+                        } else {
+                            _updatePhase.value = UpdatePhase.ReadyToInstall
+                            installApk(app, target)
+                        }
                     } else {
                         _updatePhase.value = UpdatePhase.Failed
                         _updateError.value = "Unduhan update gagal. Coba lagi."
@@ -1462,6 +1700,55 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                     return@launch
                 }
             }
+        }
+    }
+
+    /**
+     * Security: a pushed update must be signed with the *same* key as the
+     * installed NOXA. A tampered file (swapped on the host, hostile proxy,
+     * wrong link) is then refused honestly here instead of being handed to
+     * the system installer. Returns null when the file is safe, or a
+     * user-facing reason to refuse.
+     */
+    private fun verifyUpdateSignature(app: Application, file: java.io.File): String? {
+        return try {
+            val pm = app.packageManager
+            @Suppress("DEPRECATION")
+            val archiveFlags = if (android.os.Build.VERSION.SDK_INT >= 28) {
+                android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES
+            } else {
+                android.content.pm.PackageManager.GET_SIGNATURES
+            }
+            val archive = pm.getPackageArchiveInfo(file.absolutePath, archiveFlags)
+                ?: return "File update tidak bisa dibaca sebagai APK — unduh ulang."
+
+            fun signaturesOf(info: android.content.pm.PackageInfo): Set<String> =
+                if (android.os.Build.VERSION.SDK_INT >= 28) {
+                    info.signingInfo?.apkContentsSigners.orEmpty()
+                        .filterNotNull().map { it.toCharsString() }.toSet()
+                } else {
+                    @Suppress("DEPRECATION")
+                    info.signatures.orEmpty()
+                        .filterNotNull().map { it.toCharsString() }.toSet()
+                }
+
+            val archiveSigners = signaturesOf(archive)
+            @Suppress("DEPRECATION")
+            val ownSigners = signaturesOf(
+                pm.getPackageInfo(app.packageName, archiveFlags)
+            )
+            if (archiveSigners.isEmpty() ||
+                ownSigners.isEmpty() ||
+                archiveSigners.intersect(ownSigners).isEmpty()
+            ) {
+                "Update ditolak: tanda tangan APK tidak sama dengan NOXA yang " +
+                    "terpasang. Unduh hanya dari sumber resmi."
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Update signature check failed: ${e.message}")
+            "Gagal memverifikasi update: ${e.message}"
         }
     }
 
@@ -1556,6 +1843,10 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     @Volatile
     private var applyingRemote = false
 
+    /** One-skip-at-a-time guard for the vote executor (see [RoomVotes]). */
+    @Volatile
+    private var skipVoteInProgress = false
+
     private var roomJob: kotlinx.coroutines.Job? = null
 
     /** Enters a room (creating it when the code is new) as the signed-in user. */
@@ -1629,6 +1920,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 val user = authManager.currentUser.value ?: break
                 val room = runCatching { backend.readRoom(code) }.getOrNull() ?: continue
                 applyRemoteRoom(room, force = false)
+                executeVoteSkipIfNeeded(room, user.uid)
                 val current = _roomState.value
                 if (current is com.example.ui.screens.RoomUiState.InRoom) {
                     // Full refresh: song/playing/members may have all moved
@@ -1692,11 +1984,80 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         }
 
     /**
+     * **Vote Skip** — toggles this member's ballot for the song playing in
+     * the room. The song itself is never hijacked: the publish only flips the
+     * vote (plus our current position, so the timeline doesn't jump back).
+     */
+    fun toggleSkipVote() {
+        val code = roomCode ?: return
+        val user = authManager.currentUser.value ?: return
+        val song = playerState.value.currentSong ?: return
+        safeScope.launch {
+            runCatching {
+                backend.publishRoom(
+                    code = code,
+                    uid = user.uid,
+                    name = user.displayName ?: user.email ?: "user"
+                ) { room ->
+                    val votes = room.skipVotes.filterNot { it == user.uid }
+                    val withVote = if (room.skipVotes.contains(user.uid)) {
+                        votes
+                    } else {
+                        votes + user.uid
+                    }
+                    // Only refresh playback fields when we are actually on
+                    // the room's song — a freshly joined member must never
+                    // clobber the room with their stale local player.
+                    val synced = if (song.id == room.songId) {
+                        room.copy(
+                            playing = playerState.value.isPlaying,
+                            positionMs = playbackProgress.value.positionMs
+                        )
+                    } else {
+                        room
+                    }
+                    synced.copy(skipVotes = withVote)
+                }
+            }.getOrNull()?.let { published -> lastRemoteAt = published.updatedAt }
+        }
+    }
+
+    /**
+     * Majority reached → the deterministic skipper (first uid in sorted
+     * order, computed identically on every device) advances the queue once.
+     * The mirror publish clears the ballot; a follow-up publish guarantees
+     * the room can't wedge even when the skipper's queue had nothing next.
+     */
+    private suspend fun executeVoteSkipIfNeeded(
+        room: com.example.data.support.NoxaBackend.RoomState,
+        selfUid: String
+    ) {
+        val roster = room.members.map { it.uid }
+        val votes = com.example.data.support.RoomVotes.validVotes(room.skipVotes, roster)
+        if (!com.example.data.support.RoomVotes.shouldSkip(votes.size, roster.size)) return
+        if (com.example.data.support.RoomVotes.skipperUid(roster) != selfUid) return
+        if (skipVoteInProgress) return
+        skipVoteInProgress = true
+        try {
+            next()
+            // Let the player-state mirror publish the new song first…
+            kotlinx.coroutines.delay(700)
+            // …then guarantee the ballot is cleared either way. If the
+            // skipper's queue was empty, this drops the stale votes so the
+            // room can simply vote again on the next song.
+            publishRoomSnapshot(clearVotes = true)
+        } finally {
+            kotlinx.coroutines.delay(1_200)
+            skipVoteInProgress = false
+        }
+    }
+
+    /**
      * Local → room mirror. Deduped on (song, playing) so the collector
      * only publishes real changes; seeks and the 10s position heartbeat
      * call [mirrorNow] directly.
      */
-    private fun publishRoomSnapshot() {
+    private fun publishRoomSnapshot(clearVotes: Boolean = false) {
         val code = roomCode ?: return
         if (applyingRemote) return
         val user = authManager.currentUser.value ?: return
@@ -1716,7 +2077,10 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                         songArtist = song.artist,
                         songArtwork = song.artworkUrl,
                         playing = playing,
-                        positionMs = positionMs
+                        positionMs = positionMs,
+                        // A song/play change makes any running skip vote
+                        // stale; heartbeats and seeks keep it alive.
+                        skipVotes = if (clearVotes) emptyList() else room.skipVotes
                     )
                 }
             }.getOrNull()?.let { published -> lastRemoteAt = published.updatedAt }
@@ -1735,7 +2099,8 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 val key = "${st.currentSong?.id}|${st.isPlaying}"
                 if (applyingRemote || key == lastKey) return@collect
                 lastKey = key
-                publishRoomSnapshot()
+                // Real content change: a running skip vote is now moot.
+                publishRoomSnapshot(clearVotes = true)
             }
         }
         // Position heartbeat: keeps every member's timeline converging.
@@ -1752,8 +2117,10 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     private fun com.example.data.support.NoxaBackend.RoomState.toUiState(
         code: String,
         selfUid: String
-    ): com.example.ui.screens.RoomUiState.InRoom =
-        com.example.ui.screens.RoomUiState.InRoom(
+    ): com.example.ui.screens.RoomUiState.InRoom {
+        val roster = members.map { it.uid }
+        val validVotes = com.example.data.support.RoomVotes.validVotes(skipVotes, roster)
+        return com.example.ui.screens.RoomUiState.InRoom(
             code = code,
             songId = songId,
             songTitle = songTitle,
@@ -1767,8 +2134,12 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                     name = member.name,
                     isSelf = member.uid == selfUid
                 )
-            }
+            },
+            voteCount = validVotes.size,
+            votesNeeded = com.example.data.support.RoomVotes.votesNeeded(roster.size),
+            myVote = selfUid in skipVotes
         )
+    }
 
     private val _supportState =
         MutableStateFlow<com.example.ui.screens.SupportUiState>(com.example.ui.screens.SupportUiState.Loading)

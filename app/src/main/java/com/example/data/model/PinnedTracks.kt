@@ -35,12 +35,6 @@ object PinnedTracks {
             title = "Terlalu Manis",
             artist = "Slank",
             quote = "beberapa kenangan memang lebih indah dibiarkan menjadi bagian dari masa lalu."
-        ),
-        PinnedTrack(
-            title = "Laskar Pelangi",
-            artist = "Nidji",
-            quote = "jalan kita mungkin ga selalu mudah, tapi masih ada banyak hal " +
-                "yang layak diperjuangkan."
         )
     )
 
@@ -48,12 +42,12 @@ object PinnedTracks {
      * The pinned entry for this song, or null when it is not pinned.
      *
      * Strict catalogue matching first, then the relaxed rule as a fallback:
-     * the pin shelf itself may serve a pick from a user-generated source (the
-     * delisted "Laskar Pelangi" is resolved from YouTube, where the artist
-     * sits inside the title and the uploader is the label's channel). A track
-     * that earned its place on the shelf must still get Sky's quote and the
-     * star in the player — so the lookup the UI uses is exactly as forgiving
-     * as the shelf's own resolver, while still requiring the artist's name.
+     * a pin the catalogue cannot serve is resolved from YouTube, where the
+     * artist may sit inside the title and the uploader is the label's channel.
+     * A track that earned its place on the shelf must still get Sky's quote
+     * and the star in the player — so the lookup the UI uses is exactly as
+     * forgiving as the shelf's own resolver, while still requiring the
+     * artist's name.
      */
     fun find(song: Song): PinnedTrack? =
         ALL.firstOrNull { pin -> matches(pin, song.title, song.artist) }
@@ -89,9 +83,9 @@ object PinnedTracks {
      * Relaxed match for **user-generated sources** (YouTube), used only when
      * the catalogue cannot serve a pin:
      *
-     *  * the video title carries the artist inside it ("NIDJI - Laskar
-     *    Pelangi") because the uploader is the label's channel ("Musica
-     *    Studios"), not the artist — so the artist may appear in the title;
+     *  * the video title may carry the artist inside it, because the uploader
+     *    is the label's channel, not the artist — so the artist may appear
+     *    in the title;
      *  * the pin title may sit anywhere in the title, as long as it is a
      *    whole word (so "Dan" never matches "dan" mid-word).
      *
@@ -108,7 +102,7 @@ object PinnedTracks {
         if (titleFitsPin(t, pin)) return true
         // Short pins are case-sensitive here: "Dan" must never match the
         // Indonesian word "dan" (="and") inside an unrelated title, while
-        // long pins like "Laskar Pelangi" keep the forgiving case fold.
+        // long pins like "Terlalu Manis" keep the forgiving case fold.
         val options = if (pin.title.length <= 3) emptySet() else setOf(RegexOption.IGNORE_CASE)
         return Regex(
             "(?<![A-Za-z0-9])${Regex.escape(pin.title)}(?![A-Za-z0-9])",

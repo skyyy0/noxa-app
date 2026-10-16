@@ -3,6 +3,7 @@ package com.example.ui.screens
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -37,6 +38,7 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.QrCode
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.SupportAgent
@@ -56,6 +58,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -65,10 +70,12 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.local.AppSettings
 import com.example.data.local.AppSettingsStore
+import com.example.data.local.HeatmapStats
 import com.example.ui.theme.NoxaBlack
 import com.example.ui.theme.NoxaBorder
 import com.example.ui.theme.NoxaLime
@@ -81,12 +88,15 @@ import com.example.ui.theme.NoxaTextPrimary
 import com.example.ui.theme.NoxaTextSecondary
 import com.example.ui.theme.NoxaTextTertiary
 import com.example.ui.viewmodel.WeeklyRecap
+import com.example.ui.viewmodel.YearListeningUi
 
 @Composable
 fun ProfileScreen(
     currentUser: com.example.data.auth.NoxaUser?,
     isSigningIn: Boolean,
     weeklyRecap: WeeklyRecap,
+    /** Year-long heatmap + mini-wrapped (null stats = belum ada data). */
+    yearListening: YearListeningUi = YearListeningUi.EMPTY,
     appSettings: AppSettings,
     onSignInWithGoogle: (android.app.Activity, (String) -> Unit) -> Unit,
     onSignInWithEmail: (String, String, (String) -> Unit) -> Unit,
@@ -386,6 +396,16 @@ fun ProfileScreen(
                 }
             }
         }
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        // PETA PANAS DENGAR — a year of listening, day by day.
+        ListeningHeatmapCard(yearListening = yearListening)
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        // NOXA WRAPPED MINI — the deep recap.
+        WrappedMiniCard(yearListening = yearListening)
 
         Spacer(modifier = Modifier.height(24.dp))
 
@@ -1279,6 +1299,307 @@ private fun RecapRow(icon: androidx.compose.ui.graphics.vector.ImageVector, text
             color = NoxaTextPrimary,
             fontSize = 13.sp,
             fontWeight = FontWeight.Medium
+        )
+    }
+}
+
+// ------------------------------------------------- Peta Panas Dengar & Wrapped
+
+/** Lime intensity for one heatmap square, 0f (silent) → 1f (best day). */
+private fun heatColor(level: Float): Color = when {
+    level <= 0f -> NoxaSurfaceSecondary
+    level < 0.25f -> NoxaLime.copy(alpha = 0.25f)
+    level < 0.5f -> NoxaLime.copy(alpha = 0.5f)
+    level < 0.85f -> NoxaLime.copy(alpha = 0.78f)
+    else -> NoxaLime
+}
+
+/**
+ * **Peta Panas Dengar** — 365 lime squares, one per day, GitHub-style.
+ * Rows are weekdays (Sunday on top), columns are weeks; a brighter square
+ * means more plays that day. Purely decorative data from Room — nothing
+ * leaves the phone.
+ */
+@Composable
+private fun ListeningHeatmapCard(yearListening: YearListeningUi) {
+    val stats = yearListening.stats
+
+    Text(
+        text = "Peta Panas Dengar",
+        color = NoxaTextPrimary,
+        fontSize = 16.sp,
+        fontWeight = FontWeight.Bold,
+        modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
+    )
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp)
+            .testTag("listening_heatmap_card"),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = NoxaSurfaceElevated),
+        border = androidx.compose.foundation.BorderStroke(1.dp, NoxaBorder)
+    ) {
+        if (stats == null || stats.totalPlays == 0) {
+            Text(
+                text = "Belum ada data setahun ini. Putar musik dulu — petanya terisi sendiri, tiap hari.",
+                color = NoxaTextSecondary,
+                fontSize = 13.sp,
+                modifier = Modifier.padding(16.dp)
+            )
+            return@Card
+        }
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "365 hari terakhir · ${stats.totalPlays}× lagu diputar",
+                color = NoxaTextSecondary,
+                fontSize = 12.sp
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            HeatmapGrid(stats = stats)
+            Spacer(modifier = Modifier.height(10.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Sedikit", color = NoxaTextTertiary, fontSize = 10.sp)
+                Spacer(modifier = Modifier.width(5.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                    listOf(0f, 0.3f, 0.6f, 1f).forEach { level ->
+                        Box(
+                            modifier = Modifier
+                                .size(9.dp)
+                                .clip(CircleShape)
+                                .background(heatColor(level))
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.width(5.dp))
+                Text("Banyak", color = NoxaTextTertiary, fontSize = 10.sp)
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                HeatStat("Hari aktif", "${stats.activeDays}", Modifier.weight(1f))
+                HeatStat("Streak sekarang", "${stats.currentStreak} hari", Modifier.weight(1f))
+                HeatStat("Streak terbaik", "${stats.longestStreak} hari", Modifier.weight(1f))
+            }
+        }
+    }
+}
+
+@Composable
+private fun HeatStat(label: String, value: String, modifier: Modifier = Modifier) {
+    Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(
+            text = value,
+            color = NoxaLime,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.Black
+        )
+        Text(text = label, color = NoxaTextTertiary, fontSize = 10.sp)
+    }
+}
+
+/** The 7×53 grid itself — drawn on a Canvas so a year costs zero layouts. */
+@Composable
+private fun HeatmapGrid(stats: HeatmapStats) {
+    Canvas(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(112.dp)
+    ) {
+        val columns = 53
+        val gap = 2.dp.toPx()
+        val cellSize = ((size.width - gap * (columns - 1)) / columns)
+            .coerceAtMost(14.dp.toPx())
+        val gridWidth = cellSize * columns + gap * (columns - 1)
+        val offsetX = ((size.width - gridWidth) / 2f).coerceAtLeast(0f)
+        val firstWeekday = stats.cells.firstOrNull()?.weekday ?: 0
+        stats.cells.forEachIndexed { index, cell ->
+            val col = (index + firstWeekday) / 7
+            val row = cell.weekday
+            val level = if (stats.bestDayPlays <= 0) {
+                0f
+            } else {
+                cell.plays.toFloat() / stats.bestDayPlays
+            }
+            drawRect(
+                color = heatColor(level),
+                topLeft = Offset(
+                    x = offsetX + col * (cellSize + gap),
+                    y = row * (cellSize + gap)
+                ),
+                size = Size(cellSize, cellSize)
+            )
+        }
+    }
+}
+
+/**
+ * **NOXA Wrapped Mini** — the year in five honest numbers: total plays,
+ * three top artists, the most-played song, distinct artists, and the hour
+ * you listen most. Same on-device data as the heatmap.
+ */
+@Composable
+private fun WrappedMiniCard(yearListening: YearListeningUi) {
+    val stats = yearListening.stats ?: return
+
+    Text(
+        text = "NOXA Wrapped Mini",
+        color = NoxaTextPrimary,
+        fontSize = 16.sp,
+        fontWeight = FontWeight.Bold,
+        modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
+    )
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp)
+            .testTag("wrapped_mini_card"),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = NoxaSurfaceElevated),
+        border = androidx.compose.foundation.BorderStroke(1.dp, NoxaBorder)
+    ) {
+        Column(
+            modifier = Modifier
+                .background(
+                    Brush.linearGradient(
+                        listOf(NoxaPurpleDeep.copy(alpha = 0.55f), NoxaBlack)
+                    )
+                )
+                .padding(18.dp)
+        ) {
+            Text(
+                text = "SETAHUN TERAKHIR",
+                color = NoxaLime,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Black,
+                letterSpacing = 2.sp
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = "${stats.totalPlays}× lagu kamu diputar",
+                color = NoxaTextPrimary,
+                fontSize = 19.sp,
+                fontWeight = FontWeight.Black
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "dari ${yearListening.distinctArtists} artis berbeda",
+                color = NoxaTextSecondary,
+                fontSize = 12.sp
+            )
+
+            if (yearListening.topArtists.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = "ARTIS TERATAS",
+                    color = NoxaTextTertiary,
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 1.sp
+                )
+                yearListening.topArtists.forEachIndexed { index, taste ->
+                    WrappedRow(rank = "#${index + 1}", title = taste.name, meta = "${taste.plays}×")
+                }
+            }
+
+            if (yearListening.topSongTitle.isNotBlank()) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "LAGU PALING SERING",
+                    color = NoxaTextTertiary,
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 1.sp
+                )
+                WrappedIconRow(
+                    icon = Icons.Default.MusicNote,
+                    title = yearListening.topSongTitle,
+                    meta = "${yearListening.topSongPlays}×"
+                )
+            }
+
+            if (yearListening.busiestHour in 0..23) {
+                val hour = yearListening.busiestHour
+                Spacer(modifier = Modifier.height(8.dp))
+                WrappedIconRow(
+                    icon = Icons.Default.Schedule,
+                    title = "Jam paling rajin dengar",
+                    meta = String.format("%02d:00–%02d:00", hour, (hour + 1) % 24)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun WrappedRow(rank: String, title: String, meta: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = rank,
+            color = NoxaLime,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Black,
+            modifier = Modifier.width(30.dp)
+        )
+        Text(
+            text = title,
+            color = NoxaTextPrimary,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
+        Text(
+            text = meta,
+            color = NoxaTextSecondary,
+            fontSize = 12.sp
+        )
+    }
+}
+
+@Composable
+private fun WrappedIconRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    meta: String
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = NoxaLime,
+            modifier = Modifier
+                .width(30.dp)
+                .size(15.dp)
+        )
+        Text(
+            text = title,
+            color = NoxaTextPrimary,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
+        Text(
+            text = meta,
+            color = NoxaTextSecondary,
+            fontSize = 12.sp
         )
     }
 }

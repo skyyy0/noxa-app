@@ -520,6 +520,82 @@ service cloud.firestore {
 > [Mendapatkan file APK](#mendapatkan-file-apk)). Isi secret itu agar login
 > Google ikut ter-baking ke APK yang didistribusikan.
 
+### v1.15.7 — fix force-close NPE, NOXA AI Gemini2, beranda ala Spotify + statistik
+
+* **Force-close `NullPointerException` diperbaiki (fix utama)** — crash
+  `MutableStateFlow.setValue on a null object reference` di
+  `MusicViewModel$2$1.emit` terjadi karena collector role DEVELOPER yang
+  diluncurkan dari `init` menyentuh `_updateInfo` **sebelum** deklarasinya
+  terjalankan. `viewModelScope` memakai `Dispatchers.Main.immediate`, jadi
+  emisi pertama StateFlow berjalan sinkron tepat saat konstruksi — dan akun
+  Sky yang otomatis masuk kembali langsung memicunya. Collector kini dipindah
+  ke bawah deklarasi `_updateInfo`, sehingga field-nya selalu siap.
+* **Pin "Laskar Pelangi" dihapus atas permintaan Sky** — rak pin kini 4 lagu
+  (Kangen, Pupus, Dan, Terlalu Manis). Aturan matching tetap longgar untuk
+  sumber YouTube bila ada pin yang tak tersedia di katalog.
+* **NOXA AI pindah ke Omegatech Gemini2** — provider `Chatgpt-v2` mulai error;
+  kini memakai `api.omegatech.app/api/ai/Gemini2` (tanpa API key). Balasan
+  dibaca dari `data.response` (fallback `data.reply`), `sessionId` tetap
+  disimpan dan diputar balik tiap pesan sehingga ingatan obrolan lintas
+  sesi tetap hidup. Persona, tag aksi pemutar, dan aturan tanpa emoji tetap
+  sama.
+* **Beranda ala Spotify** — tiga blok baru:
+  **Putar cepat**, grid 2 kolom lagu yang paling sering diputar (fallback ke
+  riwayat terakhir), **Statistik kamu**, kartu jumlah lagu 7 hari + chip artis
+  teratas dengan jumlah putaran, dan rak **Buat kamu**, rekomendasi dari selera
+  sendiri dengan subjudul "Karena kamu sering dengar …".
+* **Rekomendasi dari statistik pemakaian (on-device)** — engine rasa baca
+  `play_records` 7 hari terakhir: 2 artis paling sering didengar → lagu
+  teratas mereka + lagu teratas **artis terkait Deezer** (sinyal "genre
+  mirip" yang jujur, bukan tebakan genre dari judul). Hanya di-refresh saat
+  selera berubah; gagal jaringan = rak disembunyikan, tidak pernah crash.
+  Data tetap di perangkat, tidak dikirim ke mana pun.
+* **Detail kecil ala iOS** — getaran halus (haptic) di tab navigasi, tombol
+  play/pause mini player & pemutar penuh, dan hati favorit (getar lebih
+  berat); ikon tab terpilih membesar 12% lalu mendarat dengan spring; rak &
+  kartu baru masuk bertahap (stagger) dengan fade + naik lembut.
+
+### v1.15.8 — Vote Skip, Peta Panas Dengar + Wrapped Mini, keamanan menyeluruh
+
+* **Vote Skip di Dengar Bareng** — anggota room bisa vote untuk lanjut ke
+  lagu berikutnya. Mayoritas ketat (`anggota/2 + 1`): 2 orang = 2 vote,
+  5 orang = 3 vote. Eksekusi deterministik — semua perangkat menghitung
+  *skipper* yang sama (uid pertama terurut), jadi walaupun lima perangkat
+  melihat mayoritas, room hanya melewati lagu **satu kali**. Bila skipper
+  keluar, kepemimpinan pindah otomatis ke uid berikutnya. Suara dari member
+  yang sudah keluar room dibuang; setiap perubahan playback (ganti lagu /
+  play-pause) otomatis mereset voting.
+* **Peta Panas Dengar** — heatmap 365 hari ala GitHub di Profile: satu kotak
+  lime per hari, kecerahan mengikuti jumlah putaran, plus total putaran,
+  hari aktif, streak sekarang & streak terbaik. Semua dihitung di SQLite
+  (agregat per hari) — baris mentah tidak pernah menumpuk di memori.
+* **NOXA Wrapped Mini** — kartu rekap setahun di bawah heatmap: total
+  putaran, jumlah artis berbeda, 3 artis teratas, lagu paling sering, dan
+  "jam paling rajin dengar". Data sepenuhnya on-device (Room `play_records`),
+  retensi kini 365 hari (dulu 30) karena heatmap butuh setahun.
+* **Pop-up update dikunci per-versi** — aturan tunggal di `UpdateGate`:
+  popup **hanya** muncul untuk instalasi yang `versionCode`-nya di bawah
+  versi yang di-push. Pengguna di versi terbaru (atau lebih baru) tidak
+  pernah melihatnya lagi; state basi dibersihkan, dialog tidak bisa dibuka
+  ulang dari Pengaturan bila versinya sudah sama, dan DEVELOPER tetap kebal.
+  Aturannya kini punya unit test (`UpdateGateTest`).
+* **Keamanan (mode seimbang)**
+  * **APK update diverifikasi** — sebelum panel instalasi dibuka, file yang
+    diunduh dicek tanda tangannya harus sama dengan NOXA yang terpasang;
+    file hasil tukar/patch palsu ditolak dengan pesan jujur.
+  * **HTTPS wajib** — network security config memblokir cleartext (http)
+    global dan hanya mempercayai sistem CA. Catatan: `STREAM_RESOLVER_URL`
+    kini wajib `https://`.
+  * **Backup data dimatikan** (`allowBackup=false`) — ledger akun lokal
+    (hash PBKDF2), sesi, dan Room tidak lagi ikut backup cloud/adb.
+  * **Brute-force login dibatasi** — 5 percobaan salah pertama bebas,
+    lalu jeda naik 15s → 30s → 1m → 2m → maks 5 menit (per perangkat,
+    per email); password benar memaafkan seluruh hitungan. Aturan murninya
+    punya unit test (`LoginThrottleTest`).
+  * **Log debug dibuang dari rilis** — R8 `assumenosideeffects` menghapus
+    `Log.v`/`Log.d` (URL stream, email) dari APK release; `i/w/e` tetap
+    ada untuk diagnostik jujur.
+
 ## Variabel `.env` (semuanya opsional)
 
 | Variabel | Wajib | Keterangan |

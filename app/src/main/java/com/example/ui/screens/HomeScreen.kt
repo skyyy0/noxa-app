@@ -25,6 +25,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.LocalFireDepartment
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.Star
@@ -67,6 +68,7 @@ import com.example.ui.theme.NoxaTextPrimary
 import com.example.ui.theme.NoxaTextSecondary
 import com.example.ui.theme.NoxaTextTertiary
 import com.example.data.auth.NoxaUser
+import com.example.ui.viewmodel.ListeningStats
 import java.util.Calendar
 
 @Composable
@@ -76,6 +78,14 @@ fun HomeScreen(
     pinnedSongs: List<Song> = emptyList(),
     /** Recently played songs — rendered as their own shelf. */
     recentSongs: List<Song> = emptyList(),
+    /** Most-played songs of the week — the Spotify-style quick-play grid. */
+    quickPlaySongs: List<Song> = emptyList(),
+    /** Taste-derived recommendations for the "Buat kamu" shelf. */
+    forYouSongs: List<Song> = emptyList(),
+    /** "Karena kamu sering dengar …" — the subtitle above forYouSongs. */
+    forYouLabel: String = "",
+    /** Weekly listening stats card; null (or zero plays) hides it. */
+    listeningStats: ListeningStats? = null,
     popularArtists: List<ArtistProfile> = emptyList(),
     resumeSong: Song?,
     isLoading: Boolean,
@@ -398,6 +408,267 @@ fun HomeScreen(
                             onPlaySong(heroSong, queue, index)
                         }
                     )
+                }
+            }
+        }
+
+        // A2. Putar Cepat — the Spotify-style grid of this week's top songs.
+        val gridSongs = if (quickPlaySongs.isNotEmpty()) quickPlaySongs else recentSongs.take(8)
+        if (gridSongs.isNotEmpty()) {
+            item(key = "quick_grid") {
+                Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = "Putar cepat",
+                            color = NoxaTextPrimary,
+                            fontSize = 19.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.weight(1f))
+                        Icon(
+                            imageVector = Icons.Default.LocalFireDepartment,
+                            contentDescription = null,
+                            tint = NoxaLime,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                    Text(
+                        text = "Lagu yang paling sering kamu putar",
+                        color = NoxaTextSecondary,
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(bottom = 10.dp)
+                    )
+                    gridSongs.chunked(2).forEach { rowSongs ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            rowSongs.forEach { song ->
+                                val index = gridSongs.indexOfFirst { it.id == song.id }
+                                Row(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(NoxaSurfaceElevated)
+                                        .noxaAppear(delayMillis = index * 40)
+                                        .noxaClickable { onPlaySong(song, gridSongs, index) }
+                                        .padding(6.dp)
+                                        .testTag("quick_tile_${song.id}"),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    AsyncImage(
+                                        model = ImageRequest.Builder(context)
+                                            .data(song.artworkUrl)
+                                            .size(96, 96)
+                                            .crossfade(true)
+                                            .build(),
+                                        contentDescription = song.title,
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier
+                                            .size(40.dp)
+                                            .clip(RoundedCornerShape(6.dp))
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = song.title,
+                                        color = NoxaTextPrimary,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                        lineHeight = 15.sp,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    Icon(
+                                        imageVector = Icons.Default.PlayArrow,
+                                        contentDescription = "Putar",
+                                        tint = NoxaLime,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
+                            if (rowSongs.size == 1) {
+                                Spacer(modifier = Modifier.weight(1f))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // A3. Statistik kamu — what you actually played this week (on-device).
+        if (listeningStats != null && listeningStats.playsWeek > 0) {
+            item(key = "listen_stats") {
+                Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp)) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(NoxaSurfaceElevated)
+                            .border(1.dp, NoxaBorder, RoundedCornerShape(16.dp))
+                            .padding(14.dp)
+                            .testTag("listen_stats_card")
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.LocalFireDepartment,
+                                contentDescription = null,
+                                tint = NoxaLime,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(7.dp))
+                            Text(
+                                text = "Statistik kamu",
+                                color = NoxaTextPrimary,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Row(verticalAlignment = Alignment.Bottom) {
+                            Text(
+                                text = listeningStats.playsWeek.toString(),
+                                color = NoxaLime,
+                                fontSize = 30.sp,
+                                fontWeight = FontWeight.Black
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "lagu diputar\n7 hari terakhir",
+                                color = NoxaTextSecondary,
+                                fontSize = 11.sp,
+                                lineHeight = 14.sp,
+                                modifier = Modifier.padding(bottom = 3.dp)
+                            )
+                        }
+                        if (listeningStats.topArtists.isNotEmpty()) {
+                            Spacer(modifier = Modifier.height(10.dp))
+                            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                itemsIndexed(
+                                    items = listeningStats.topArtists,
+                                    key = { _, artist -> "stat_${artist.name}" }
+                                ) { position, artist ->
+                                    Row(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(50))
+                                            .background(NoxaLime.copy(alpha = 0.12f))
+                                            .border(
+                                                1.dp,
+                                                NoxaLime.copy(alpha = 0.45f),
+                                                RoundedCornerShape(50)
+                                            )
+                                            .clickable { onOpenArtist("", artist.name) }
+                                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "#${position + 1} ${artist.name}",
+                                            color = NoxaTextPrimary,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                        Spacer(modifier = Modifier.width(5.dp))
+                                        Text(
+                                            text = "${artist.plays}x",
+                                            color = NoxaLime,
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // A4. Buat kamu — recommendations grown from the user's own taste.
+        if (forYouSongs.isNotEmpty()) {
+            item(key = "for_you") {
+                Column(modifier = Modifier.padding(top = 20.dp)) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 20.dp)
+                    ) {
+                        Text(
+                            text = "Buat kamu",
+                            color = NoxaTextPrimary,
+                            fontSize = 19.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = forYouLabel.ifBlank { "Rekomendasi dari selera mendengarmu" },
+                            color = NoxaTextSecondary,
+                            fontSize = 12.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    LazyRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        contentPadding = PaddingValues(horizontal = 20.dp),
+                        horizontalArrangement = Arrangement.spacedBy(14.dp)
+                    ) {
+                        itemsIndexed(
+                            items = forYouSongs,
+                            key = { _, song -> "foryou_${song.id}" },
+                            contentType = { _, _ -> "foryou_card" }
+                        ) { index, song ->
+                            Column(
+                                modifier = Modifier
+                                    .width(140.dp)
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .noxaAppear(delayMillis = index * 50)
+                                    .noxaClickable { onPlaySong(song, forYouSongs, index) }
+                                    .testTag("foryou_song_${song.id}")
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(140.dp)
+                                        .clip(RoundedCornerShape(14.dp))
+                                        .background(NoxaSurfaceElevated)
+                                        .border(1.dp, NoxaBorder, RoundedCornerShape(14.dp))
+                                ) {
+                                    AsyncImage(
+                                        model = ImageRequest.Builder(context)
+                                            .data(song.artworkUrl)
+                                            .size(280, 280)
+                                            .crossfade(true)
+                                            .build(),
+                                        contentDescription = song.title,
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                }
+
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                Text(
+                                    text = song.title,
+                                    color = NoxaTextPrimary,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+
+                                Text(
+                                    text = song.artist,
+                                    color = NoxaTextSecondary,
+                                    fontSize = 11.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }

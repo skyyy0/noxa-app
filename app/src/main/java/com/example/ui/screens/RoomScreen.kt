@@ -63,6 +63,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -105,7 +106,13 @@ sealed interface RoomUiState {
         val songArtwork: String = "",
         val playing: Boolean = false,
         val positionMs: Long = 0L,
-        val members: List<RoomMemberUi> = emptyList()
+        val members: List<RoomMemberUi> = emptyList(),
+        /** Vote Skip: distinct ballots from current members. */
+        val voteCount: Int = 0,
+        /** Strict-majority threshold for the current roster size. */
+        val votesNeeded: Int = 1,
+        /** Whether *this* member currently has a ballot in. */
+        val myVote: Boolean = false
     ) : RoomUiState
 
     data class Failed(val code: String, val message: String) : RoomUiState
@@ -130,6 +137,8 @@ fun RoomScreen(
     onSeekTo: (Long) -> Unit,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
+    /** Vote Skip — casts/withdraws this member's ballot for the current song. */
+    onVoteSkip: () -> Unit,
     /** Smooth local progress (ms) — used when the room plays our own song. */
     localPositionMs: Long,
     localDurationMs: Long,
@@ -168,6 +177,7 @@ fun RoomScreen(
                     onSeekTo = onSeekTo,
                     onPrevious = onPrevious,
                     onNext = onNext,
+                    onVoteSkip = onVoteSkip,
                     localPositionMs = localPositionMs,
                     localDurationMs = localDurationMs
                 )
@@ -432,6 +442,7 @@ private fun RoomInRoomBody(
     onSeekTo: (Long) -> Unit,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
+    onVoteSkip: () -> Unit,
     localPositionMs: Long,
     localDurationMs: Long
 ) {
@@ -753,6 +764,81 @@ private fun RoomInRoomBody(
         textAlign = TextAlign.Center,
         modifier = Modifier.fillMaxWidth()
     )
+
+    Spacer(modifier = Modifier.height(14.dp))
+
+    // --- Vote Skip: the democracy strip under the transport. One ballot per
+    // member; a strict majority makes the room's deterministic skipper
+    // advance everyone at once. Any playback change resets the count.
+    VoteSkipBar(
+        state = state,
+        onVoteSkip = onVoteSkip
+    )
+}
+
+@Composable
+private fun VoteSkipBar(
+    state: RoomUiState.InRoom,
+    onVoteSkip: () -> Unit
+) {
+    val needed = state.votesNeeded.coerceAtLeast(1)
+    val count = state.voteCount.coerceIn(0, needed)
+    val reached = state.voteCount >= needed
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .background(NoxaSurfaceElevated)
+            .border(
+                1.dp,
+                if (state.myVote) NoxaLime.copy(alpha = 0.6f) else NoxaBorder,
+                RoundedCornerShape(18.dp)
+            )
+            .clickable { onVoteSkip() }
+            .padding(horizontal = 14.dp, vertical = 12.dp)
+            .testTag("room_vote_skip")
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                Icons.Default.SkipNext,
+                contentDescription = "Vote skip",
+                tint = if (state.myVote || reached) NoxaLime else NoxaTextSecondary,
+                modifier = Modifier.size(20.dp)
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = if (state.myVote) "Vote Skip — kamu ikut" else "Vote Skip",
+                    color = if (state.myVote) NoxaLime else NoxaTextPrimary,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = when {
+                        reached -> "Mayoritas tercapai — lagu segera berikutnya!"
+                        else -> "${state.voteCount}/$needed anggota setuju lanjut"
+                    },
+                    color = NoxaTextTertiary,
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Spacer(modifier = Modifier.width(10.dp))
+            // Vote meter: filled pips, one per required vote.
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                repeat(needed) { i ->
+                    Box(
+                        modifier = Modifier
+                            .size(9.dp)
+                            .clip(CircleShape)
+                            .background(if (i < count) NoxaLime else NoxaSurfaceSecondary)
+                    )
+                }
+            }
+        }
+    }
 }
 
 @Composable

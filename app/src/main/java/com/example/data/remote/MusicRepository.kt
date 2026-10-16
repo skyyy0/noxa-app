@@ -125,6 +125,10 @@ class MusicRepository(
     suspend fun artistTopTracks(artistId: Long, limit: Int = 25): List<Song> =
         deezer.topTracksForArtist(artistId, limit)
 
+    /** Musically adjacent artists — the "genre mirip" basis for Buat kamu. */
+    suspend fun relatedArtists(artistId: Long, limit: Int = 8): List<ArtistProfile> =
+        deezer.relatedArtists(artistId, limit)
+
     /** Discography of an artist. */
     suspend fun artistAlbums(artistId: Long): List<AlbumInfo> = deezer.artistAlbums(artistId)
 

@@ -18,11 +18,17 @@
     -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
+    <!--
+        Security hardening (v1.15.8): backup & device-transfer are OFF.
+        App data carries the local account ledger (salted password hashes),
+        sessions and Room history — none of it should leave the device
+        through adb/cloud backup. Accounts live in the shared registry
+        anyway, so nothing user-critical is lost.
+    -->
     <application
         android:name=".NoxaApplication"
-        android:allowBackup="true"
-        android:dataExtractionRules="@xml/data_extraction_rules"
-        android:fullBackupContent="@xml/backup_rules"
+        android:allowBackup="false"
+        android:networkSecurityConfig="@xml/network_security_config"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"

@@ -16,6 +16,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -62,6 +64,20 @@ fun Modifier.noxaClickable(enabled: Boolean = true, onClick: () -> Unit): Modifi
             enabled = enabled,
             onClick = onClick
         )
+}
+
+/**
+ * Tap with an iOS-style light tick: the same soft press feedback as
+ * [noxaClickable], plus a haptic pulse so taps on navigation and transport
+ * controls feel physical. Uses the lightest feedback type so it never
+ * becomes annoying.
+ */
+fun Modifier.noxaTap(enabled: Boolean = true, onClick: () -> Unit): Modifier = composed {
+    val haptic = LocalHapticFeedback.current
+    noxaClickable(enabled = enabled) {
+        if (enabled) haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+        onClick()
+    }
 }
 
 /**

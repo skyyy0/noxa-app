@@ -15,6 +15,18 @@ data class PlaylistSummary(
     val songCount: Int
 )
 
+/** One day's play count for the listening heatmap (`day` = epoch day). */
+data class DayPlays(val day: Long, val plays: Int)
+
+/** Artist tally for the mini-wrapped card. */
+data class ArtistPlays(val artist: String, val plays: Int)
+
+/** Song tally for the mini-wrapped card. */
+data class TitlePlays(val title: String, val plays: Int)
+
+/** Hour-of-day tally (0–23) for the mini-wrapped card. */
+data class HourPlays(val hour: Int, val plays: Int)
+
 @Dao
 interface NoxaDao {
     // Favorites
@@ -95,4 +107,39 @@ interface NoxaDao {
     /** Keep the recap cheap: everything older than the retention window goes. */
     @Query("DELETE FROM play_records WHERE playedAt < :cutoff")
     suspend fun prunePlayRecords(cutoff: Long)
+
+    // Aggregates for the listening heatmap & mini-wrapped. Grouping happens
+    // in SQLite so a year of plays never has to travel to the app as raw rows.
+
+    @Query(
+        "SELECT playedAt / 86400000 AS day, COUNT(*) AS plays FROM play_records " +
+            "WHERE playedAt >= :since GROUP BY day"
+    )
+    fun observePlaysPerDay(since: Long): Flow<List<DayPlays>>
+
+    @Query(
+        "SELECT artist AS artist, COUNT(*) AS plays FROM play_records " +
+            "WHERE playedAt >= :since AND artist <> '' GROUP BY artist " +
+            "ORDER BY plays DESC LIMIT :limit"
+    )
+    fun observeTopArtists(since: Long, limit: Int): Flow<List<ArtistPlays>>
+
+    @Query(
+        "SELECT title AS title, COUNT(*) AS plays FROM play_records " +
+            "WHERE playedAt >= :since AND title <> '' GROUP BY title " +
+            "ORDER BY plays DESC LIMIT :limit"
+    )
+    fun observeTopTitles(since: Long, limit: Int): Flow<List<TitlePlays>>
+
+    @Query(
+        "SELECT CAST(strftime('%H', playedAt / 1000, 'unixepoch') AS INTEGER) AS hour, " +
+            "COUNT(*) AS plays FROM play_records WHERE playedAt >= :since GROUP BY hour"
+    )
+    fun observePlaysPerHour(since: Long): Flow<List<HourPlays>>
+
+    @Query(
+        "SELECT COUNT(DISTINCT artist) FROM play_records " +
+            "WHERE playedAt >= :since AND artist <> ''"
+    )
+    fun observeDistinctArtistCount(since: Long): Flow<Int>
 }

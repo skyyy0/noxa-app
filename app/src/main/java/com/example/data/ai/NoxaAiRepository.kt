@@ -89,14 +89,16 @@ data class AiReply(
 /**
  * The NOXA AI chat backend.
  *
- * Talks to the keyless Omegatech chat endpoint
- * (`api.omegatech.app/api/ai/Chatgpt-v2`) which keeps per-session memory via
- * `sessionId`/`chatId` — both are persisted here, so the assistant remembers
- * the conversation across app restarts.
+ * Talks to the keyless Omegatech **Gemini2** chat endpoint
+ * (`api.omegatech.app/api/ai/Gemini2`) which keeps per-session memory via
+ * `sessionId` — persisted here, so the assistant remembers the conversation
+ * across app restarts. The previous provider (`Chatgpt-v2`) started failing;
+ * the wire format differs only in the reply field (`response` vs `reply`),
+ * which is parsed tolerantly below.
  *
  * A strict system prompt is prepended to the **first** message of each
  * session: it fixes the persona (part of NOXA, controls the player through
- * action tags, never uses emoji, stays playful in Indonesian). Replies are
+ * action tags, never uses emoji, stays polite in Indonesian). Replies are
  * additionally emoji-stripped and tag-parsed client side, so the prompt is
  * enforced even when the model gets creative.
  */
@@ -110,7 +112,6 @@ class NoxaAiRepository(context: Context) {
         .build()
 
     val sessionId: String? get() = prefs.getString(KEY_SESSION, null)?.takeIf { it.isNotBlank() }
-    val chatId: String? get() = prefs.getString(KEY_CHAT, null)?.takeIf { it.isNotBlank() }
 
     /**
      * Sends one user message and returns the cleaned reply with its actions.
@@ -118,18 +119,17 @@ class NoxaAiRepository(context: Context) {
      * the caller shows an honest error and keeps the draft.
      */
     suspend fun chat(userMessage: String): AiReply = withContext(Dispatchers.IO) {
-        val firstOfSession = sessionId == null || chatId == null
+        val firstOfSession = sessionId == null
         val payload = if (firstOfSession) "$SYSTEM_PROMPT\n\n$userMessage" else userMessage
 
         val urlBuilder = BASE_URL.toHttpUrlOrNull()!!.newBuilder()
             .addQueryParameter("action", "chat")
             .addQueryParameter("message", payload)
         sessionId?.let { urlBuilder.addQueryParameter("sessionId", it) }
-        chatId?.let { urlBuilder.addQueryParameter("chatId", it) }
 
         val request = Request.Builder()
             .url(urlBuilder.build())
-            .header("User-Agent", "NOXA/1.13")
+            .header("User-Agent", "NOXA/1.15.7")
             .get()
             .build()
 
@@ -143,22 +143,26 @@ class NoxaAiRepository(context: Context) {
         val root = try {
             JSONObject(raw)
         } catch (e: Exception) {
-            // Some endpoints wrap payloads; find the JSON object with "data".
             throw IllegalStateException("bad payload")
         }
-        if (!root.optBoolean("success")) {
-            throw IllegalStateException(root.optString("message", "not success"))
+        // Gemini2 answers { success, statusCode, data }; older Omegatech
+        // payloads only carried success — accept either shape.
+        val ok = root.optBoolean("success") || root.optInt("statusCode", 0) == 200
+        if (!ok) {
+            throw IllegalStateException(
+                root.optString("message", root.optString("error", "not success"))
+            )
         }
         val data = root.optJSONObject("data") ?: throw IllegalStateException("no data")
 
+        // The session token rotates per call — always keep the newest one so
+        // the assistant's memory survives app restarts.
         data.optString("sessionId").takeIf { it.isNotBlank() }?.let {
             prefs.edit().putString(KEY_SESSION, it).apply()
         }
-        data.optString("chatId").takeIf { it.isNotBlank() }?.let {
-            prefs.edit().putString(KEY_CHAT, it).apply()
-        }
 
-        val reply = data.optString("reply")
+        // Gemini2 calls it "response"; tolerate a "reply" payload too.
+        val reply = data.optString("response").ifBlank { data.optString("reply") }
         if (reply.isBlank()) throw IllegalStateException("empty reply")
 
         val cleaned = NoxaAiActions.stripEmoji(reply)
@@ -171,7 +175,7 @@ class NoxaAiRepository(context: Context) {
 
     /** Starts a fresh conversation (called from the chat header menu). */
     fun resetSession() {
-        prefs.edit().remove(KEY_SESSION).remove(KEY_CHAT).remove(KEY_HISTORY).apply()
+        prefs.edit().remove(KEY_SESSION).remove(KEY_HISTORY).apply()
     }
 
     /** Restores the locally persisted chat transcript (newest last). */
@@ -218,10 +222,9 @@ class NoxaAiRepository(context: Context) {
 
     companion object {
         private const val KEY_SESSION = "session_id"
-        private const val KEY_CHAT = "chat_id"
         private const val KEY_HISTORY = "history_json"
         private const val HISTORY_LIMIT = 120
-        private const val BASE_URL = "https://api.omegatech.app/api/ai/Chatgpt-v2"
+        private const val BASE_URL = "https://api.omegatech.app/api/ai/Gemini2"
 
         /**
          * The persona, sent once per session. Deliberately strict: identity,

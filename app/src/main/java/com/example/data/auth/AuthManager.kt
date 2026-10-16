@@ -54,6 +54,40 @@ class AuthManager(private val context: Context) {
     /** Keyless shared registry (accounts, roles, support chat). */
     private val backend = com.example.data.support.NoxaBackend()
 
+    // ------------------------------------------- sign-in throttle (brute force)
+
+    /** Per-device ledger of recent failed sign-ins, keyed by email. */
+    private val throttlePrefs =
+        context.getSharedPreferences("noxa_login_throttle", Context.MODE_PRIVATE)
+
+    /** How long this email must wait after its recent failures (0 = none). */
+    private fun loginWaitMs(email: String): Long {
+        val key = email.trim().lowercase(java.util.Locale.ROOT)
+        return LoginThrottle.remainingMs(
+            failures = throttlePrefs.getInt("fail_$key", 0),
+            lastFailureAt = throttlePrefs.getLong("last_$key", 0L),
+            now = System.currentTimeMillis()
+        )
+    }
+
+    private fun recordLoginFailure(email: String) {
+        val key = email.trim().lowercase(java.util.Locale.ROOT)
+        throttlePrefs.edit()
+            .putInt("fail_$key", throttlePrefs.getInt("fail_$key", 0) + 1)
+            .putLong("last_$key", System.currentTimeMillis())
+            .apply()
+    }
+
+    /** A correct sign-in forgives every earlier failure for this email. */
+    private fun clearLoginFailures(email: String) {
+        val key = email.trim().lowercase(java.util.Locale.ROOT)
+        throttlePrefs.edit().remove("fail_$key").remove("last_$key").apply()
+    }
+
+    private fun humanWait(ms: Long): String =
+        if (ms < 60_000L) "${(ms + 999) / 1000} detik lagi"
+        else "${(ms + 59_999) / 60_000} menit lagi"
+
     /**
      * Fire-and-forget scope for pushing a completed sign-in's identity into
      * the shared registry. Google, phone and Firebase sign-ins never go
@@ -430,6 +464,13 @@ class AuthManager(private val context: Context) {
         onSuccess: (NoxaUser) -> Unit = {},
         onError: (String) -> Unit = {}
     ) {
+        // Brute-force backoff: a device that keeps guessing is asked to wait
+        // (LoginThrottle — first failures are free, then it doubles).
+        val pendingWait = loginWaitMs(email)
+        if (pendingWait > 0) {
+            onError("Terlalu banyak percobaan gagal. Coba lagi dalam ${humanWait(pendingWait)}.")
+            return
+        }
         _isSigningIn.value = true
         scope.launch {
             var registryUnreachable = false
@@ -450,6 +491,7 @@ class AuthManager(private val context: Context) {
                             storeRemoteSession(user)
                             _currentUser.value = user
                             _isGuestMode.value = false
+                            clearLoginFailures(email)
                             onSuccess(user)
                             return@launch
                         }
@@ -496,6 +538,7 @@ class AuthManager(private val context: Context) {
                                 _currentUser.value = user
                                 _isGuestMode.value = false
                                 syncToRegistry(user)
+                                clearLoginFailures(email)
                                 onSuccess(user)
                                 return@launch
                             }
@@ -517,10 +560,12 @@ class AuthManager(private val context: Context) {
                         _currentUser.value = user
                         _isGuestMode.value = false
                         syncToRegistry(user)
+                        clearLoginFailures(email)
                         onSuccess(user)
                         return@launch
                     }
 
+                    recordLoginFailure(email)
                     onError(
                         if (registryUnreachable) {
                             "Server akun tidak terjangkau. Periksa koneksi internet lalu coba lagi."

@@ -7,6 +7,16 @@
 -renamesourcefileattribute SourceFile
 -keepattributes *Annotation*,Signature,InnerClasses,EnclosingMethod
 
+# --- Release hygiene --------------------------------------------------
+# Verbose/debug logs never ship: they can leak stream URLs, resolver
+# responses and account emails into logcat on user devices. Info/warning/
+# error stay — they back the honest diagnostics (ShareCard, resolver,
+# crash paths) without the chatter.
+-assumenosideeffects class android.util.Log {
+    public static int v(...);
+    public static int d(...);
+}
+
 # --- Moshi -------------------------------------------------------------
 # Adapters are code-generated (KSP) and looked up by the generated factory
 # names; data classes keep their @Json members.

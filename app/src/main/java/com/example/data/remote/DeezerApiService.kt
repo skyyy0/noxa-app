@@ -41,6 +41,12 @@ interface DeezerApiService {
         @Path("artistId") artistId: Long
     ): Response<DeezerArtistDetailResponse>
 
+    @GET("artist/{artistId}/related")
+    suspend fun relatedArtists(
+        @Path("artistId") artistId: Long,
+        @Query("limit") limit: Int
+    ): Response<DeezerArtistListResponse>
+
     @GET("artist/{artistId}/albums")
     suspend fun artistAlbums(
         @Path("artistId") artistId: Long,

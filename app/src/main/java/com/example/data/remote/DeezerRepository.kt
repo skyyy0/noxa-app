@@ -87,6 +87,31 @@ class DeezerRepository {
     suspend fun artistIdFor(artistName: String): Long? = resolveArtistId(artistName)
 
     /**
+     * Artists musically adjacent to this one (Deezer's "related artists").
+     * This is the honest "genre mirip" signal: the recommendation shelf uses
+     * it to go from the user's most-played artists to their nearest neighbours
+     * instead of guessing genres from titles.
+     */
+    suspend fun relatedArtists(artistId: Long, limit: Int = RELATED_LIMIT): List<ArtistProfile> =
+        withContext(Dispatchers.IO) {
+            val body = safeResponse(
+                block = { api.relatedArtists(artistId, limit) },
+                isFailure = { it.isFailure }
+            ) ?: return@withContext emptyList()
+            body.data.orEmpty().mapNotNull { artist ->
+                val id = artist.id?.takeIf { it > 0 } ?: return@mapNotNull null
+                ArtistProfile(
+                    id = id,
+                    name = artist.name?.trim().orEmpty().ifEmpty { "Unknown Artist" },
+                    pictureUrl = artist.pictureXl ?: artist.pictureBig ?: artist.pictureMedium ?: "",
+                    fanCount = artist.nbFan ?: 0L,
+                    albumCount = artist.nbAlbum ?: 0,
+                    link = artist.link ?: ""
+                )
+            }.distinctBy { it.id }
+        }
+
+    /**
      * A single track by Deezer id — what resolves a shared NOXA link
      * (`deezer:<id>`) back into a playable song.
      */
@@ -293,5 +318,6 @@ class DeezerRepository {
         private const val SEARCH_LIMIT = 25
         private const val ALBUM_LIMIT = 50
         private const val ALBUM_TRACK_LIMIT = 100
+        private const val RELATED_LIMIT = 12
     }
 }

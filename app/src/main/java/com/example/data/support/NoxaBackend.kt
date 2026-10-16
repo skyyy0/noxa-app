@@ -719,7 +719,14 @@ class NoxaBackend {
         val positionMs: Long = 0L,
         /** Bumped ONLY by content changes — never by heartbeats. */
         val updatedAt: Long = 0L,
-        val members: List<RoomMember> = emptyList()
+        val members: List<RoomMember> = emptyList(),
+        /**
+         * Vote Skip: uids of members currently voting to advance. Any local
+         * playback change (song/play-pause) clears the ballot — the vote is
+         * only ever about *this* song. Reaching a majority makes the room's
+         * deterministic leader perform the skip (see `RoomVotes`).
+         */
+        val skipVotes: List<String> = emptyList()
     )
 
     /** Full backend document, mirrored 1:1 onto the Telegraph page. */
@@ -795,6 +802,11 @@ class NoxaBackend {
                     )
                 )
             }
+            val rawVotes = obj.optJSONArray("skipVotes") ?: JSONArray()
+            val skipVotes = ArrayList<String>(rawVotes.length())
+            for (i in 0 until rawVotes.length()) {
+                rawVotes.optString(i).takeIf { it.isNotBlank() }?.let { skipVotes += it }
+            }
             state.rooms[code] = RoomState(
                 code = code,
                 songId = obj.optString("songId"),
@@ -804,7 +816,8 @@ class NoxaBackend {
                 playing = obj.optBoolean("playing"),
                 positionMs = obj.optLong("positionMs"),
                 updatedAt = obj.optLong("updatedAt"),
-                members = members
+                members = members,
+                skipVotes = skipVotes
             )
         }
         state.update = json.optJSONObject("update")?.let { u ->
@@ -890,6 +903,8 @@ class NoxaBackend {
                                     .put("lastSeen", m.lastSeen)
                             )
                         }
+                        val votes = JSONArray()
+                        room.skipVotes.forEach { uid -> votes.put(uid) }
                         rooms.put(
                             code,
                             JSONObject()
@@ -901,6 +916,7 @@ class NoxaBackend {
                                 .put("positionMs", room.positionMs)
                                 .put("updatedAt", room.updatedAt)
                                 .put("members", members)
+                                .put("skipVotes", votes)
                         )
                     }
                     root.put("rooms", rooms)

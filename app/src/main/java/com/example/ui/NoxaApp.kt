@@ -4,6 +4,7 @@ import android.app.Activity
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -42,6 +43,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -62,6 +64,8 @@ import com.example.ui.components.FullPlayerSheet
 import com.example.ui.components.MiniPlayer
 import com.example.ui.components.ShareSheetDialog
 import com.example.ui.components.YouTubePolicyDialog
+import com.example.ui.components.NoxaMotion
+import com.example.ui.components.noxaTap
 import com.example.ui.screens.AboutSkyScreen
 import com.example.ui.screens.AiChatScreen
 import com.example.ui.screens.AlbumScreen
@@ -161,7 +165,14 @@ fun NoxaApp(
     val pinnedSongs by viewModel.pinnedSongs.collectAsStateWithLifecycle()
     val popularArtists by viewModel.popularArtists.collectAsStateWithLifecycle()
     val weeklyRecap by viewModel.weeklyRecap.collectAsStateWithLifecycle()
+    val yearListening by viewModel.yearListening.collectAsStateWithLifecycle()
     val appSettings by viewModel.appSettings.collectAsStateWithLifecycle()
+
+    // Home taste: quick-play grid, stats card and "Buat kamu" shelf.
+    val quickPlaySongs by viewModel.quickPlaySongs.collectAsStateWithLifecycle()
+    val forYouSongs by viewModel.forYouSongs.collectAsStateWithLifecycle()
+    val forYouLabel by viewModel.forYouLabel.collectAsStateWithLifecycle()
+    val listeningStats by viewModel.listeningStats.collectAsStateWithLifecycle()
 
     // In-app update published by the developer account (wajib / opsional).
     val updateInfo by viewModel.updateInfo.collectAsStateWithLifecycle()
@@ -270,11 +281,18 @@ fun NoxaApp(
                                 targetValue = if (isSelected) NoxaLime else Color.Transparent,
                                 label = "nav_pill"
                             )
+                            // The selected icon swells a touch and settles on a
+                            // spring — the small living detail iOS is known for.
+                            val iconScale by animateFloatAsState(
+                                targetValue = if (isSelected) 1.12f else 1f,
+                                animationSpec = NoxaMotion.snappySpring,
+                                label = "nav_icon_scale"
+                            )
                             Row(
                                 modifier = Modifier
                                     .clip(CircleShape)
                                     .background(pillColor)
-                                    .clickable { navigateToTab(screen) }
+                                    .noxaTap { navigateToTab(screen) }
                                     .padding(horizontal = 14.dp, vertical = 8.dp)
                                     .testTag("nav_item_${screen.route}"),
                                 verticalAlignment = Alignment.CenterVertically
@@ -283,7 +301,12 @@ fun NoxaApp(
                                     imageVector = screen.icon,
                                     contentDescription = screen.title,
                                     tint = if (isSelected) NoxaBlack else NoxaTextTertiary,
-                                    modifier = Modifier.size(20.dp)
+                                    modifier = Modifier
+                                        .size(20.dp)
+                                        .graphicsLayer {
+                                            scaleX = iconScale
+                                            scaleY = iconScale
+                                        }
                                 )
                                 AnimatedVisibility(
                                     visible = isSelected,
@@ -319,6 +342,10 @@ fun NoxaApp(
                         sections = homeSections,
                         pinnedSongs = pinnedSongs,
                         recentSongs = historySongs.take(12),
+                        quickPlaySongs = quickPlaySongs,
+                        forYouSongs = forYouSongs,
+                        forYouLabel = forYouLabel,
+                        listeningStats = listeningStats,
                         onPlaySkyMix = { viewModel.playSkyMix() },
                         popularArtists = popularArtists,
                         resumeSong = resumableSong,
@@ -487,6 +514,7 @@ fun NoxaApp(
                         currentUser = currentUser,
                         isSigningIn = isSigningIn,
                         weeklyRecap = weeklyRecap,
+                        yearListening = yearListening,
                         appSettings = appSettings,
                         onSignInWithGoogle = { activity: Activity, onError: (String) -> Unit ->
                             viewModel.signInWithGoogle(activity, onError = onError)
@@ -613,6 +641,7 @@ fun NoxaApp(
                         onSeekTo = { pos -> viewModel.seekTo(pos) },
                         onPrevious = { viewModel.previous() },
                         onNext = { viewModel.next() },
+                        onVoteSkip = { viewModel.toggleSkipVote() },
                         localPositionMs = if (sameSong) roomProgress.positionMs else 0L,
                         localDurationMs = if (sameSong) {
                             roomProgress.durationMs.takeIf { it > 0 }
@@ -663,6 +692,11 @@ fun NoxaApp(
         // publisher out of the very console she pushes it from.
         val pendingUpdate = updateInfo
         if (updateDialogVisible && pendingUpdate != null &&
+            // Render-site guard: even if stale state slipped through, a build
+            // already on/past the published versionCode never draws the popup.
+            com.example.data.remote.UpdateGate.isNewer(
+                com.example.BuildConfig.VERSION_CODE.toLong(), pendingUpdate.versionCode
+            ) &&
             currentUser?.role != com.example.data.support.AccountRole.DEVELOPER
         ) {
             com.example.ui.components.UpdateDialog(

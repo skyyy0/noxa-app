@@ -39,6 +39,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -68,6 +70,7 @@ fun MiniPlayer(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val haptic = LocalHapticFeedback.current
     AnimatedVisibility(
         visible = currentSong != null,
         // Soft spring entrance and a quicker tweened exit: the bar glides
@@ -138,9 +141,12 @@ fun MiniPlayer(
 
                     Spacer(modifier = Modifier.width(8.dp))
 
-                    // Favorite Button
+                    // Favorite Button — a heavier tick marks the heart.
                     IconButton(
-                        onClick = onToggleFavorite,
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onToggleFavorite()
+                        },
                         modifier = Modifier.size(36.dp).testTag("mini_player_fav_btn")
                     ) {
                         Icon(
@@ -157,7 +163,7 @@ fun MiniPlayer(
                         .size(38.dp)
                         .clip(CircleShape)
                         .background(NoxaLime)
-                        .noxaClickable { onTogglePlayPause() }
+                        .noxaTap { onTogglePlayPause() }
                         .testTag("mini_player_play_pause_btn"),
                         contentAlignment = Alignment.Center
                     ) {

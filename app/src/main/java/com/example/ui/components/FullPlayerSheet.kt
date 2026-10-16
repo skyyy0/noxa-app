@@ -80,8 +80,10 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -155,6 +157,7 @@ fun FullPlayerSheet(
     // One icon in the top bar arms it; the style chips only surface while
     // it is on (iOS-ish: controls appear on demand, never clutter the bar).
     val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
     var spectrumOn by rememberSaveable { mutableStateOf(false) }
     var spectrumStyle by rememberSaveable { mutableStateOf(SpectrumStyle.BARS) }
     var spectrumNotice by remember { mutableStateOf<String?>(null) }
@@ -455,7 +458,11 @@ fun FullPlayerSheet(
                     }
 
                     IconButton(
-                        onClick = onToggleFavorite,
+                        onClick = {
+                            // A heavier tick marks the heart, iOS-style.
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onToggleFavorite()
+                        },
                         modifier = Modifier.testTag("full_player_favorite_btn")
                     ) {
                         Icon(
@@ -570,7 +577,7 @@ fun FullPlayerSheet(
                             .size(68.dp)
                             .clip(CircleShape)
                             .background(NoxaLime)
-                            .noxaClickable { onTogglePlayPause() }
+                            .noxaTap { onTogglePlayPause() }
                             .testTag("full_player_play_pause_btn"),
                         contentAlignment = Alignment.Center
                     ) {
