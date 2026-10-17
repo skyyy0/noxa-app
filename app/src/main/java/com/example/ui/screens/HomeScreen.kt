@@ -26,6 +26,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.LocalFireDepartment
+import androidx.compose.material.icons.filled.NewReleases
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.Star
@@ -87,6 +88,10 @@ fun HomeScreen(
     /** Weekly listening stats card; null (or zero plays) hides it. */
     listeningStats: ListeningStats? = null,
     popularArtists: List<ArtistProfile> = emptyList(),
+    /** New releases from followed artists — the "Radar Rilis" shelf. */
+    releaseRadar: List<com.example.data.model.AlbumInfo> = emptyList(),
+    /** Opens an album page from the radar shelf. */
+    onOpenAlbum: (Long) -> Unit = {},
     resumeSong: Song?,
     isLoading: Boolean,
     errorMessage: String?,
@@ -742,6 +747,92 @@ fun HomeScreen(
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                     textAlign = TextAlign.Center
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // C0. Radar Rilis — new albums from artists you follow (v2.0.0).
+        if (releaseRadar.isNotEmpty()) {
+            item(key = "release_radar_shelf") {
+                Column(modifier = Modifier.padding(top = 20.dp)) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 20.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.NewReleases,
+                                contentDescription = null,
+                                tint = NoxaLime,
+                                modifier = Modifier.size(19.dp)
+                            )
+                            Spacer(modifier = Modifier.width(7.dp))
+                            Text(
+                                text = "Radar Rilis",
+                                color = NoxaTextPrimary,
+                                fontSize = 19.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        Text(
+                            text = "Album baru dari artis yang kamu ikuti",
+                            color = NoxaTextSecondary,
+                            fontSize = 12.sp
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    LazyRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        contentPadding = PaddingValues(horizontal = 20.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        itemsIndexed(
+                            items = releaseRadar,
+                            key = { _, album -> "radar_${album.id}" },
+                            contentType = { _, _ -> "radar_album" }
+                        ) { index, album ->
+                            Column(
+                                modifier = Modifier
+                                    .width(132.dp)
+                                    .noxaAppear(delayMillis = index * 60)
+                                    .noxaClickable { onOpenAlbum(album.id) }
+                                    .testTag("radar_album_${album.id}")
+                            ) {
+                                AsyncImage(
+                                    model = ImageRequest.Builder(context)
+                                        .data(album.coverUrl)
+                                        .size(300, 300)
+                                        .crossfade(true)
+                                        .build(),
+                                    contentDescription = album.title,
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier
+                                        .size(132.dp)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .border(1.dp, NoxaBorder, RoundedCornerShape(12.dp))
+                                )
+                                Spacer(modifier = Modifier.height(7.dp))
+                                Text(
+                                    text = album.title,
+                                    color = NoxaTextPrimary,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = album.artistName.ifBlank { album.releaseYear },
+                                    color = NoxaTextSecondary,
+                                    fontSize = 11.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
                         }

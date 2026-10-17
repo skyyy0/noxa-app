@@ -6,13 +6,17 @@ import android.view.SurfaceView
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -31,6 +35,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -43,6 +48,8 @@ import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.NightsStay
+import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -76,10 +83,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -104,6 +118,7 @@ import com.example.media.PlaybackProgress
 import com.example.media.PlayerUiState
 import com.example.ui.theme.NoxaBlack
 import com.example.ui.theme.NoxaBorder
+import com.example.ui.theme.NoxaError
 import com.example.ui.theme.NoxaLime
 import com.example.ui.theme.NoxaSurface
 import com.example.ui.theme.NoxaSurfaceElevated
@@ -137,6 +152,8 @@ fun FullPlayerSheet(
     onToggleRepeat: () -> Unit,
     onToggleFavorite: () -> Unit,
     onSetSleepTimer: (Int?) -> Unit,
+    /** Arms (`true`) / disarms (`false`) the "stop at song end" timer mode. */
+    onSetSleepTimerEndOfTrack: ((Boolean) -> Unit)? = null,
     onOpenEqualizer: () -> Unit,
     onSelectQueueItem: (Song, Int) -> Unit,
     onShare: () -> Unit,
@@ -214,6 +231,28 @@ fun FullPlayerSheet(
     // (spinner) or ready (surface).
     val isVideoActive = videoUiState is VideoUiState.Loading || videoUiState is VideoUiState.Ready
 
+    // ------------------------------------------- v2.0.0: tema dinamis artwork
+    // The background glow takes the dominant colour of the current cover so
+    // the player breathes with the album; falls back to the lime accent.
+    var artworkTint by remember { mutableStateOf(NoxaLime) }
+    val animatedTint by animateColorAsState(
+        targetValue = artworkTint,
+        animationSpec = tween(600),
+        label = "artwork_tint"
+    )
+    LaunchedEffect(playerState.currentSong?.artworkUrl) {
+        val url = playerState.currentSong?.artworkUrl
+        if (url.isNullOrBlank()) {
+            artworkTint = NoxaLime
+        } else {
+            artworkTint = com.example.ui.util.ArtworkPalette.dominantColorOf(
+                url,
+                coil.Coil.imageLoader(context),
+                context
+            ) ?: NoxaLime
+        }
+    }
+
     AnimatedVisibility(
         visible = visible && playerState.currentSong != null,
         enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
@@ -226,14 +265,31 @@ fun FullPlayerSheet(
         // that was matched to a YouTube video when its full audio was resolved.
         val canHaveMv = song.source == MusicSource.YOUTUBE || song.matchedVideoId.isNotBlank()
 
+        // --------------------------------------- v2.0.0: swipe-down to close
+        // Dragging the handle down slides the whole sheet (and dims it);
+        // past the threshold it snaps closed, otherwise it springs back.
+        val dragOffset = remember { Animatable(0f) }
+        val dragScope = rememberCoroutineScope()
+        // Reference height for the dim curve — sheet-level, not density-math
+        // inside graphicsLayer (where `size` is not a Float source).
+        val dimReferencePx = with(androidx.compose.ui.platform.LocalDensity.current) {
+            700.dp.toPx()
+        }
+
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(NoxaBlack)
                 .statusBarsPadding()
+                .graphicsLayer {
+                    translationY = dragOffset.value
+                    val fraction = (dragOffset.value / dimReferencePx).coerceIn(0f, 1f)
+                    alpha = 1f - fraction * 0.35f
+                }
                 .testTag("full_player_sheet")
         ) {
-            // Ambient subtle radial gradient glow from top
+            // Ambient subtle radial gradient glow from top — tinted by the
+            // current artwork's dominant colour (tema dinamis).
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -241,7 +297,7 @@ fun FullPlayerSheet(
                     .background(
                         Brush.verticalGradient(
                             colors = listOf(
-                                NoxaLime.copy(alpha = 0.08f),
+                                animatedTint.copy(alpha = 0.16f),
                                 Color.Transparent
                             )
                         )
@@ -256,6 +312,42 @@ fun FullPlayerSheet(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.SpaceBetween
             ) {
+                // Drag handle — the swipe-down affordance (iOS-style).
+                Box(
+                    modifier = Modifier
+                        .padding(top = 6.dp, bottom = 2.dp)
+                        .size(width = 42.dp, height = 4.dp)
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(animatedTint.copy(alpha = 0.5f))
+                        .pointerInput(song.id) {
+                            // ~140 dp of downward travel dismisses the sheet.
+                            val closeThresholdPx = 140.dp.toPx()
+                            detectVerticalDragGestures(
+                                onVerticalDrag = { change, dragAmount ->
+                                    change.consume()
+                                    dragScope.launch {
+                                        dragOffset.snapTo(
+                                            (dragOffset.value + dragAmount).coerceAtLeast(0f)
+                                        )
+                                    }
+                                },
+                                onDragEnd = {
+                                    if (dragOffset.value > closeThresholdPx) {
+                                        onClose()
+                                    } else {
+                                        dragScope.launch {
+                                            dragOffset.animateTo(
+                                                0f,
+                                                spring(stiffness = Spring.StiffnessMediumLow)
+                                            )
+                                        }
+                                    }
+                                }
+                            )
+                        }
+                        .testTag("full_player_drag_handle")
+                )
+
                 // Top Action Bar
                 Row(
                     modifier = Modifier
@@ -654,22 +746,36 @@ fun FullPlayerSheet(
                         modifier = Modifier.testTag("full_player_sleep_timer_btn")
                     ) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            val sleepActive = playerState.sleepTimerMinutes != null ||
+                                playerState.sleepTimerEndOfTrack
                             Icon(
                                 imageVector = Icons.Default.NightsStay,
                                 contentDescription = "Sleep Timer",
-                                tint = if (playerState.sleepTimerMinutes != null) NoxaLime else NoxaTextSecondary,
+                                tint = if (sleepActive) NoxaLime else NoxaTextSecondary,
                                 modifier = Modifier.size(22.dp)
                             )
                             Spacer(modifier = Modifier.height(3.dp))
-                            if (playerState.sleepTimerMinutes != null) {
-                                SleepTimerLabel(progressFlow)
-                            } else {
-                                Text(
-                                    text = "Tidur",
-                                    color = NoxaTextTertiary,
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Medium
-                                )
+                            when {
+                                playerState.sleepTimerEndOfTrack -> {
+                                    // No clock to count: the promise is the song itself.
+                                    Text(
+                                        text = "Akhir",
+                                        color = NoxaLime,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                                playerState.sleepTimerMinutes != null -> {
+                                    SleepTimerLabel(progressFlow)
+                                }
+                                else -> {
+                                    Text(
+                                        text = "Tidur",
+                                        color = NoxaTextTertiary,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                }
                             }
                         }
                     }
@@ -832,55 +938,316 @@ fun FullPlayerSheet(
             }
         }
 
-        // Sleep Timer Bottom Sheet
+        // Sleep Timer Bottom Sheet — a live countdown ring, chip grid and a
+        // gentle fade-out instead of an abrupt cut (modern, iOS-flavoured).
         if (showSleepTimerDialog) {
             ModalBottomSheet(
                 onDismissRequest = { showSleepTimerDialog = false },
                 containerColor = NoxaSurface,
-                sheetState = rememberModalBottomSheetState()
+                sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
             ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(24.dp)
-                ) {
-                    Text(
-                        text = "Sleep Timer",
-                        color = NoxaTextPrimary,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-                    listOf(
-                        "Matikan" to null,
-                        "15 Menit" to 15,
-                        "30 Menit" to 30,
-                        "45 Menit" to 45,
-                        "60 Menit" to 60
-                    ).forEach { (label, mins) ->
-                        val isSelected = playerState.sleepTimerMinutes == mins
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(if (isSelected) NoxaSurfaceSecondary else Color.Transparent)
-                                .clickable {
-                                    onSetSleepTimer(mins)
-                                    showSleepTimerDialog = false
-                                }
-                                .padding(vertical = 12.dp, horizontal = 16.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = label,
-                                color = if (isSelected) NoxaLime else NoxaTextPrimary,
-                                fontSize = 15.sp,
-                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                            )
-                        }
+                SleepTimerSheet(
+                    playerState = playerState,
+                    progressFlow = progressFlow,
+                    onSelectMinutes = { mins ->
+                        onSetSleepTimer(mins)
+                        showSleepTimerDialog = false
+                    },
+                    onSetEndOfTrack = { enabled ->
+                        onSetSleepTimerEndOfTrack?.invoke(enabled)
+                        showSleepTimerDialog = false
+                    },
+                    onCancel = {
+                        onSetSleepTimer(null)
+                        onSetSleepTimerEndOfTrack?.invoke(false)
+                        showSleepTimerDialog = false
                     }
+                )
+            }
+        }
+    }
+}
+
+/**
+ * The sleep-timer sheet body: header, a live countdown ring while armed, a
+ * grid of duration chips (plus "end of track") and an honest note about the
+ * fade-out. Split from [FullPlayerSheet] so the countdown can recompose on its
+ * own ticks.
+ */
+@Composable
+private fun SleepTimerSheet(
+    playerState: PlayerUiState,
+    progressFlow: StateFlow<PlaybackProgress>,
+    onSelectMinutes: (Int) -> Unit,
+    onSetEndOfTrack: (Boolean) -> Unit,
+    onCancel: () -> Unit
+) {
+    val progress by progressFlow.collectAsState()
+    val minutesActive = playerState.sleepTimerMinutes
+    val endOfTrack = playerState.sleepTimerEndOfTrack
+    val active = minutesActive != null || endOfTrack
+
+    // Remaining seconds of the running timer: the minutes countdown lives in
+    // progress; end-of-track counts the real song tail so the ring hugs the
+    // actual track length.
+    val totalMs = if (progress.durationMs > 0) {
+        progress.durationMs
+    } else {
+        playerState.durationMs
+    }
+    val remainingSeconds: Long? = when {
+        endOfTrack && totalMs > 0L -> ((totalMs - progress.positionMs).coerceAtLeast(0L)) / 1000L
+        endOfTrack -> null // duration unknown: wait, never fire blind
+        else -> progress.sleepTimerRemainingSeconds
+    }
+    val totalSeconds: Long = when {
+        endOfTrack -> totalMs / 1000L
+        minutesActive != null -> minutesActive * 60L
+        else -> 0L
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 24.dp)
+            .padding(bottom = 32.dp)
+    ) {
+        // Header: moon badge + title + one honest line about the behaviour.
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(CircleShape)
+                    .background(NoxaLime.copy(alpha = 0.14f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.NightsStay,
+                    contentDescription = null,
+                    tint = NoxaLime,
+                    modifier = Modifier.size(24.dp)
+                )
+            }
+            Spacer(modifier = Modifier.width(14.dp))
+            Column {
+                Text(
+                    text = "Sleep Timer",
+                    color = NoxaTextPrimary,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = if (active) "Timer aktif — suara meredup sebelum berhenti"
+                    else "Pilih kapan musik harus berhenti",
+                    color = NoxaTextTertiary,
+                    fontSize = 12.sp
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        if (active) {
+            // Live countdown ring — the small detail that makes it feel alive.
+            SleepCountdownRing(
+                remainingSeconds = remainingSeconds,
+                totalSeconds = totalSeconds,
+                endOfTrack = endOfTrack
+            )
+            Spacer(modifier = Modifier.height(20.dp))
+        }
+
+        // Duration chips, two per row.
+        val options = listOf(10, 15, 30, 45, 60)
+        options.chunked(2).forEach { rowOptions ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                rowOptions.forEach { mins ->
+                    SleepOptionChip(
+                        modifier = Modifier.weight(1f),
+                        title = "$mins menit",
+                        subtitle = null,
+                        selected = minutesActive == mins,
+                        onClick = { onSelectMinutes(mins) }
+                    )
                 }
+                // Keep the grid even when the row is short (5 options → 2/2/1).
+                if (rowOptions.size == 1) {
+                    Spacer(modifier = Modifier.weight(1f))
+                }
+            }
+            Spacer(modifier = Modifier.height(10.dp))
+        }
+        SleepOptionChip(
+            modifier = Modifier.fillMaxWidth(),
+            title = "Berakhir di akhir lagu",
+            subtitle = "Musik meredup lalu berhenti di penghujung lagu ini",
+            selected = endOfTrack,
+            leadingIcon = Icons.Default.MusicNote,
+            onClick = { onSetEndOfTrack(!endOfTrack) }
+        )
+
+        if (active) {
+            Spacer(modifier = Modifier.height(16.dp))
+            SleepOptionChip(
+                modifier = Modifier.fillMaxWidth(),
+                title = "Matikan timer",
+                subtitle = null,
+                selected = false,
+                destructive = true,
+                onClick = onCancel
+            )
+        }
+
+        Spacer(modifier = Modifier.height(14.dp))
+        Text(
+            text = "Volume diredupkan pelan ±10 detik sebelum berhenti — tidak ada " +
+                "dentang tiba-tiba di tengah tidur.",
+            color = NoxaTextTertiary,
+            fontSize = 12.sp,
+            lineHeight = 17.sp,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth()
+        )
+    }
+}
+
+/** One tappable timer option: press-dip, lime selection, optional icon. */
+@Composable
+private fun SleepOptionChip(
+    title: String,
+    subtitle: String?,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    leadingIcon: ImageVector? = null,
+    destructive: Boolean = false
+) {
+    val bg by animateColorAsState(
+        targetValue = when {
+            selected -> NoxaLime
+            destructive -> NoxaError.copy(alpha = 0.12f)
+            else -> NoxaSurfaceElevated
+        },
+        animationSpec = tween(durationMillis = 220),
+        label = "sleepChipBg"
+    )
+    val borderColor = when {
+        selected -> NoxaLime
+        destructive -> NoxaError.copy(alpha = 0.5f)
+        else -> NoxaBorder
+    }
+    val contentColor = if (selected) NoxaBlack else NoxaTextPrimary
+
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(18.dp))
+            .background(bg)
+            .border(1.dp, borderColor, RoundedCornerShape(18.dp))
+            .noxaTap(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (leadingIcon != null) {
+            Icon(
+                imageVector = leadingIcon,
+                contentDescription = null,
+                tint = contentColor,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                color = contentColor,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            if (subtitle != null) {
+                Text(
+                    text = subtitle,
+                    color = if (selected) NoxaBlack.copy(alpha = 0.65f) else NoxaTextTertiary,
+                    fontSize = 11.sp
+                )
+            }
+        }
+        if (selected) {
+            Icon(
+                imageVector = Icons.Default.Check,
+                contentDescription = "Terpilih",
+                tint = if (destructive) NoxaTextPrimary else NoxaBlack,
+                modifier = Modifier.size(18.dp)
+            )
+        }
+    }
+}
+
+/** Animated circular countdown shown while a sleep timer is armed. */
+@Composable
+private fun SleepCountdownRing(
+    remainingSeconds: Long?,
+    totalSeconds: Long,
+    endOfTrack: Boolean
+) {
+    val targetFraction = if (totalSeconds > 0L && remainingSeconds != null) {
+        (remainingSeconds.toFloat() / totalSeconds.toFloat()).coerceIn(0f, 1f)
+    } else {
+        0f
+    }
+    val fraction by animateFloatAsState(
+        targetValue = targetFraction,
+        animationSpec = tween(durationMillis = 600),
+        label = "sleepRing"
+    )
+
+    Box(
+        modifier = Modifier.fillMaxWidth(),
+        contentAlignment = Alignment.Center
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Canvas(modifier = Modifier.size(168.dp)) {
+                val stroke = 9.dp.toPx()
+                val inset = stroke / 2f
+                val arcSize = Size(size.width - stroke, size.height - stroke)
+                drawArc(
+                    color = NoxaSurfaceSecondary,
+                    startAngle = -90f,
+                    sweepAngle = 360f,
+                    useCenter = false,
+                    topLeft = Offset(inset, inset),
+                    size = arcSize,
+                    style = Stroke(width = stroke, cap = StrokeCap.Round)
+                )
+                drawArc(
+                    color = NoxaLime,
+                    startAngle = -90f,
+                    sweepAngle = 360f * fraction,
+                    useCenter = false,
+                    topLeft = Offset(inset, inset),
+                    size = arcSize,
+                    style = Stroke(width = stroke, cap = StrokeCap.Round)
+                )
+            }
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(
+                    text = if (remainingSeconds != null) {
+                        FormatUtils.formatDuration(remainingSeconds * 1000L)
+                    } else {
+                        "—:—"
+                    },
+                    color = NoxaTextPrimary,
+                    fontSize = 36.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = if (endOfTrack) "sampai lagu selesai" else "lagi",
+                    color = NoxaTextTertiary,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium
+                )
             }
         }
     }

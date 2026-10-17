@@ -36,6 +36,8 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.QueuePlayNext
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.VolumeOff
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -60,6 +62,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import com.example.ui.theme.NoxaError
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -237,6 +240,14 @@ fun SongListItem(
     onShare: (() -> Unit)? = null,
     /** Opens the artist profile; the artist name becomes tappable when set. */
     onOpenArtist: ((String, String) -> Unit)? = null,
+    /** v2.0.0 — current star rating (0..5) shown in the quick menu. */
+    rating: Int = 0,
+    /** v2.0.0 — "Beri bintang" star row; null hides it. */
+    onRate: ((Song, Int) -> Unit)? = null,
+    /** v2.0.0 — "Jangan putar lagi (lagu)"; null hides it. */
+    onMuteSong: (() -> Unit)? = null,
+    /** v2.0.0 — "Jangan putar lagi (artis)"; null hides it. */
+    onMuteArtist: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     var menuOpen by remember { mutableStateOf(false) }
@@ -330,7 +341,9 @@ fun SongListItem(
         }
 
         // Overflow actions: queue management, playlists and sharing.
-        if (onPlayNext != null || onAddToQueue != null || onAddToPlaylist != null || onShare != null) {
+        if (onPlayNext != null || onAddToQueue != null || onAddToPlaylist != null ||
+            onShare != null || onRate != null || onMuteSong != null || onMuteArtist != null
+        ) {
             Box {
                 IconButton(
                     onClick = { menuOpen = true },
@@ -396,6 +409,70 @@ fun SongListItem(
                             onClick = {
                                 menuOpen = false
                                 onShare()
+                            }
+                        )
+                    }
+                    // --------------------------------------- v2.0.0: bintang & mute
+                    if (onRate != null) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Beri bintang",
+                                color = NoxaTextSecondary,
+                                fontSize = 12.sp,
+                                modifier = Modifier.weight(1f)
+                            )
+                            (1..5).forEach { star ->
+                                IconButton(
+                                    onClick = {
+                                        // Tap the active star again to clear.
+                                        onRate(song, if (rating == star) 0 else star)
+                                    },
+                                    modifier = Modifier.size(28.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Star,
+                                        contentDescription = "$star bintang",
+                                        tint = if (star <= rating) NoxaLime else NoxaTextTertiary,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    if (onMuteSong != null) {
+                        DropdownMenuItem(
+                            text = { Text("Jangan putar lagu ini", color = NoxaTextPrimary, fontSize = 14.sp) },
+                            leadingIcon = {
+                                Icon(Icons.Default.VolumeOff, contentDescription = null, tint = NoxaError)
+                            },
+                            onClick = {
+                                menuOpen = false
+                                onMuteSong()
+                            }
+                        )
+                    }
+                    if (onMuteArtist != null) {
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    "Jangan putar ${song.artist}",
+                                    color = NoxaTextPrimary,
+                                    fontSize = 14.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            },
+                            leadingIcon = {
+                                Icon(Icons.Default.VolumeOff, contentDescription = null, tint = NoxaError)
+                            },
+                            onClick = {
+                                menuOpen = false
+                                onMuteArtist()
                             }
                         )
                     }

@@ -33,7 +33,11 @@ data class AlbumInfo(
     val releaseYear: String = "",
     val trackCount: Int = 0,
     val artistName: String = "",
-    val artistId: Long = 0L
+    val artistId: Long = 0L,
+    /** Deezer `record_type`: album / single / compile — drives the filter chips. */
+    val type: String = "",
+    /** Full ISO release date when Deezer provides it (radar rilis filter). */
+    val releaseDate: String = ""
 )
 
 /** Album header plus its full tracklist, in track order. */

@@ -34,8 +34,8 @@ android {
     applicationId = "com.noxa.music"
     minSdk = 24
     targetSdk = 36
-    versionCode = 18
-    versionName = "1.15.8"
+    versionCode = 19
+    versionName = "2.0.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }

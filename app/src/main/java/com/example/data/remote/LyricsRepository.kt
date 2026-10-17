@@ -55,6 +55,44 @@ class LyricsRepository {
         result
     }
 
+    /**
+     * **Cari pakai lirik** — reverse lookup: given a fragment of lyrics,
+     * LRCLIB's free-text search returns the tracks those words belong to.
+     * Hits are de-duplicated by artist+title; the caller then resolves them
+     * against the catalogue so every result is actually playable.
+     */
+    suspend fun searchByLyricText(query: String): List<LyricSearchHit> =
+        withContext(Dispatchers.IO) {
+            val trimmed = query.trim()
+            if (trimmed.length < MIN_LYRIC_QUERY) return@withContext emptyList()
+            val body = get("$BASE_URL/api/search?q=${encode(trimmed)}")
+                ?: return@withContext emptyList()
+            val array = try {
+                JSONArray(body)
+            } catch (e: Exception) {
+                return@withContext emptyList()
+            }
+            val seen = HashSet<String>()
+            val hits = mutableListOf<LyricSearchHit>()
+            for (i in 0 until array.length()) {
+                val item = array.optJSONObject(i) ?: continue
+                val track = item.optStringOrNull("trackName") ?: continue
+                val artist = item.optStringOrNull("artistName") ?: continue
+                // LRCLIB mixes instrumental/cover entries; only real lyric
+                // carriers count for a lyric search.
+                if (item.isNull("syncedLyrics") && item.isNull("plainLyrics")) continue
+                val key = "${artist.lowercase()}|${track.lowercase()}"
+                if (!seen.add(key)) continue
+                hits += LyricSearchHit(
+                    trackName = track,
+                    artistName = artist,
+                    durationMs = item.optLong("duration", 0L) * 1000L
+                )
+                if (hits.size >= LYRIC_SEARCH_LIMIT) break
+            }
+            hits
+        }
+
     private fun fetchExact(song: Song): TrackLyrics? {
         val url = buildString {
             append(BASE_URL)
@@ -148,8 +186,25 @@ class LyricsRepository {
         private const val USER_AGENT = "NOXA/1.5 (https://github.com/skyyy0/noxa-app)"
         /** Added to a candidate's score when it has no synced lyrics at all. */
         private const val OFFSET_PENALTY = 1_000_000L
+
+        /** A lyric fragment must be at least this long to search by text. */
+        const val MIN_LYRIC_QUERY = 4
+
+        /** How many distinct tracks a lyric search returns. */
+        private const val LYRIC_SEARCH_LIMIT = 8
     }
 }
+
+/**
+ * One LRCLIB search hit for the "cari pakai lirik" feature: the track the
+ * given lyric text belongs to. [durationMs] is the track's own length as
+ * reported by LRCLIB, used to pick the best catalog match afterwards.
+ */
+data class LyricSearchHit(
+    val trackName: String,
+    val artistName: String,
+    val durationMs: Long
+)
 
 /**
  * Parser for the LRC format LRCLIB returns.

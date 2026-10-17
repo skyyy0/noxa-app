@@ -142,4 +142,43 @@ interface NoxaDao {
             "WHERE playedAt >= :since AND artist <> ''"
     )
     fun observeDistinctArtistCount(since: Long): Flow<Int>
+
+    // ---------------------------------------------------- followed artists
+
+    @Query("SELECT * FROM followed_artists ORDER BY followedAt DESC")
+    fun getFollowedArtists(): Flow<List<FollowedArtistEntity>>
+
+    @Query("SELECT artistId FROM followed_artists")
+    suspend fun followedArtistIdsOnce(): List<Long>
+
+    @Query("SELECT EXISTS(SELECT 1 FROM followed_artists WHERE artistId = :artistId)")
+    fun isArtistFollowed(artistId: Long): Flow<Boolean>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertFollowedArtist(artist: FollowedArtistEntity)
+
+    @Query("DELETE FROM followed_artists WHERE artistId = :artistId")
+    suspend fun unfollowArtist(artistId: Long)
+
+    // ------------------------------------------------------- song ratings
+
+    @Query("SELECT * FROM song_ratings")
+    fun getSongRatings(): Flow<List<SongRatingEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertSongRating(rating: SongRatingEntity)
+
+    @Query("DELETE FROM song_ratings WHERE songId = :songId")
+    suspend fun clearSongRating(songId: String)
+
+    // ---------------------------------------------- muted (jangan putar lagi)
+
+    @Query("SELECT * FROM muted_entries")
+    fun getMutedEntries(): Flow<List<MutedEntryEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertMuted(entry: MutedEntryEntity)
+
+    @Query("DELETE FROM muted_entries WHERE kind = :kind AND value = :value")
+    suspend fun deleteMuted(kind: String, value: String)
 }

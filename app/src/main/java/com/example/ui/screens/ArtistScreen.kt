@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -31,10 +32,17 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -47,6 +55,8 @@ import com.example.data.model.AlbumInfo
 import com.example.data.model.ArtistProfile
 import com.example.data.model.Song
 import com.example.ui.components.SongListItem
+import com.example.ui.components.noxaAppear
+import com.example.ui.components.noxaTap
 import com.example.ui.theme.NoxaBlack
 import com.example.ui.theme.NoxaBorder
 import com.example.ui.theme.NoxaLime
@@ -74,14 +84,26 @@ fun VerifiedArtistBadge(
 }
 
 /**
- * Artist profile page: photo, verified check, listener count, tappable album
- * shelf (each opens the album page) and the artist's top tracks in order.
+ * v2.0.0 artist page — built to be richer than a plain list:
+ *
+ *  * Full-bleed **hero photo with scroll parallax** (the photo drifts slower
+ *    than the content, iOS album-page feel) + gradient scrim + oversized name.
+ *  * **Stats row**: monthly listeners, release count — big numbers, tap-free.
+ *  * **Ikuti** button with live state, feeding the Home release radar.
+ *  * **Bio** (Wikipedia) with expand/collapse — hides itself when unavailable.
+ *  * **Populer** list where every row carries a popularity bar (Deezer rank,
+ *    honest label) instead of an invented play count.
+ *  * **Discography with filter chips** (Semua / Album / Single / Kompilasi).
+ *  * **Penggemar juga mendengar** — related-artist avatars that open their
+ *    pages, so browsing "one club" of artists never dead-ends.
  */
 @Composable
 fun ArtistScreen(
     state: ArtistUiState,
     favoriteIds: Set<String>,
     currentPlayingSongId: String?,
+    isFollowing: Boolean,
+    onToggleFollow: () -> Unit,
     onBack: () -> Unit,
     onPlaySong: (Song, List<Song>, Int) -> Unit,
     onToggleFavorite: (Song) -> Unit,
@@ -92,15 +114,17 @@ fun ArtistScreen(
     onOpenAlbum: (Long) -> Unit,
     onOpenArtist: (String, String) -> Unit,
     onRetry: () -> Unit,
+    /** v2.0.0 — rating bintang & "jangan putar lagi" di daftar populer. */
+    songRatings: Map<String, Int> = emptyMap(),
+    onRateSong: (Song, Int) -> Unit = { _, _ -> },
+    onMuteSong: (Song) -> Unit = {},
+    onMuteArtist: (Song) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Box(
         modifier = modifier
             .fillMaxSize()
             .background(NoxaBlack)
-            // Keeps the back button clear of the status bar/clock on every
-            // device (notches, punch holes, edge-to-edge).
-            .statusBarsPadding()
     ) {
         when (state) {
             is ArtistUiState.Loading -> {
@@ -142,175 +166,479 @@ fun ArtistScreen(
             }
 
             is ArtistUiState.Ready -> {
-                val profile = state.profile
-                val topSongs = state.topSongs
-                val albums = state.albums
+                ArtistPageContent(
+                    state = state,
+                    favoriteIds = favoriteIds,
+                    currentPlayingSongId = currentPlayingSongId,
+                    isFollowing = isFollowing,
+                    onToggleFollow = onToggleFollow,
+                    onBack = onBack,
+                    onPlaySong = onPlaySong,
+                    onToggleFavorite = onToggleFavorite,
+                    onPlayNext = onPlayNext,
+                    onAddToQueue = onAddToQueue,
+                    onAddToPlaylist = onAddToPlaylist,
+                    onShare = onShare,
+                    onOpenAlbum = onOpenAlbum,
+                    onOpenArtist = onOpenArtist,
+                    songRatings = songRatings,
+                    onRateSong = onRateSong,
+                    onMuteSong = onMuteSong,
+                    onMuteArtist = onMuteArtist
+                )
+            }
+        }
+    }
+}
 
+@Composable
+private fun ArtistPageContent(
+    state: ArtistUiState.Ready,
+    favoriteIds: Set<String>,
+    currentPlayingSongId: String?,
+    isFollowing: Boolean,
+    onToggleFollow: () -> Unit,
+    onBack: () -> Unit,
+    onPlaySong: (Song, List<Song>, Int) -> Unit,
+    onToggleFavorite: (Song) -> Unit,
+    onPlayNext: (Song) -> Unit,
+    onAddToQueue: (Song) -> Unit,
+    onAddToPlaylist: (Song) -> Unit,
+    onShare: (Song) -> Unit,
+    onOpenAlbum: (Long) -> Unit,
+    onOpenArtist: (String, String) -> Unit,
+    /** v2.0.0 — rating bintang & "jangan putar lagi" di daftar populer. */
+    songRatings: Map<String, Int> = emptyMap(),
+    onRateSong: (Song, Int) -> Unit = { _, _ -> },
+    onMuteSong: (Song) -> Unit = {},
+    onMuteArtist: (Song) -> Unit = {}
+) {
+    val profile = state.profile
+    val topSongs = state.topSongs
+    val albums = state.albums
+    val relatedArtists = state.relatedArtists
+    val bio = state.bio
+
+    val scroll = rememberScrollState()
+    // The hero photo drifts at half scroll speed — the parallax anchor.
+    val parallax by remember {
+        derivedStateOf { scroll.value * 0.5f }
+    }
+
+    var bioExpanded by remember { mutableStateOf(false) }
+    var discographyFilter by remember { mutableStateOf("Semua") }
+
+    val filteredAlbums = remember(albums, discographyFilter) {
+        when (discographyFilter) {
+            "Album" -> albums.filter { it.type.equals("album", ignoreCase = true) }
+            "Single" -> albums.filter { it.type.equals("single", ignoreCase = true) }
+            "Kompilasi" -> albums.filter { it.type.equals("compile", ignoreCase = true) }
+            else -> albums
+        }
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(scroll)
+                .navigationBarsPadding()
+        ) {
+            // ------------------------------------------------ hero + parallax
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(340.dp)
+            ) {
+                AsyncImage(
+                    model = ImageRequest.Builder(LocalContext.current)
+                        .data(profile.pictureUrl)
+                        .size(800, 800)
+                        .crossfade(true)
+                        .build(),
+                    contentDescription = profile.name,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(400.dp)
+                        .graphicsLayer { translationY = -parallax }
+                )
+                // Scrim: transparent at the photo's top, black at the content
+                // edge — the name always sits on readable darkness.
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(400.dp)
+                        .background(
+                            Brush.verticalGradient(
+                                colors = listOf(
+                                    Color.Black.copy(alpha = 0.35f),
+                                    Color.Transparent,
+                                    NoxaBlack
+                                ),
+                                startY = 0f
+                            )
+                        )
+                )
                 Column(
                     modifier = Modifier
-                        .fillMaxSize()
-                        .verticalScroll(rememberScrollState())
-                        .padding(bottom = 24.dp)
+                        .align(Alignment.BottomStart)
+                        .padding(horizontal = 20.dp, vertical = 18.dp)
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 8.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        IconButton(onClick = onBack) {
-                            Icon(
-                                imageVector = Icons.Default.ArrowBack,
-                                contentDescription = "Kembali",
-                                tint = NoxaTextPrimary
-                            )
-                        }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            text = "Artis",
+                            text = profile.name,
                             color = NoxaTextPrimary,
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.SemiBold
+                            fontSize = 34.sp,
+                            fontWeight = FontWeight.Black,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
                         )
-                    }
-
-                    // Header: photo + name + verified check + listener count.
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        AsyncImage(
-                            model = ImageRequest.Builder(LocalContext.current)
-                                .data(profile.pictureUrl)
-                                .size(400, 400)
-                                .crossfade(true)
-                                .build(),
-                            contentDescription = profile.name,
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier
-                                .size(132.dp)
-                                .clip(RoundedCornerShape(16.dp))
-                                .border(1.dp, NoxaBorder, RoundedCornerShape(16.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        VerifiedArtistBadge(
+                            isBigArtist = profile.isBigArtist,
+                            sizeDp = 22
                         )
-                        Spacer(modifier = Modifier.width(16.dp))
-                        Column {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    text = profile.name,
-                                    color = NoxaTextPrimary,
-                                    fontSize = 24.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                VerifiedArtistBadge(
-                                    isBigArtist = profile.isBigArtist,
-                                    sizeDp = 20
-                                )
-                            }
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Text(
-                                text = buildString {
-                                    append(FormatUtils.formatCount(profile.fanCount))
-                                    append(" pendengar")
-                                    if (profile.albumCount > 0) {
-                                        append(" • ")
-                                        append(profile.albumCount)
-                                        append(" rilisan")
-                                    }
-                                },
-                                color = NoxaTextSecondary,
-                                fontSize = 13.sp
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(18.dp))
-
-                    // Play everything: the top-track list becomes the queue.
-                    if (topSongs.isNotEmpty()) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(24.dp))
-                                    .background(NoxaLime)
-                                    .clickable { onPlaySong(topSongs[0], topSongs, 0) }
-                                    .padding(horizontal = 26.dp, vertical = 11.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.PlayArrow,
-                                    contentDescription = null,
-                                    tint = NoxaBlack,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = "Putar semua",
-                                    color = NoxaBlack,
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                        }
-                    }
-
-                    // Discography shelf — each card opens the album page.
-                    if (albums.isNotEmpty()) {
-                        Spacer(modifier = Modifier.height(24.dp))
-                        SectionTitle("Album")
-                        LazyRow(
-                            contentPadding = PaddingValues(horizontal = 16.dp),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            modifier = Modifier.padding(top = 10.dp)
-                        ) {
-                            items(
-                                items = albums,
-                                key = { it.id }
-                            ) { album ->
-                                AlbumCard(album = album, onClick = { onOpenAlbum(album.id) })
-                            }
-                        }
-                    }
-
-                    // Top tracks.
-                    Spacer(modifier = Modifier.height(24.dp))
-                    SectionTitle("Lagu Teratas")
-                    if (topSongs.isEmpty()) {
-                        Text(
-                            text = "Belum ada lagu untuk artis ini.",
-                            color = NoxaTextTertiary,
-                            fontSize = 13.sp,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
-                        )
-                    } else {
-                        Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)) {
-                            topSongs.forEachIndexed { index, song ->
-                                SongListItem(
-                                    song = song,
-                                    rank = index + 1,
-                                    isPlaying = song.id == currentPlayingSongId,
-                                    isFavorite = favoriteIds.contains(song.id),
-                                    onPlay = { onPlaySong(song, topSongs, index) },
-                                    onToggleFavorite = { onToggleFavorite(song) },
-                                    onPlayNext = { onPlayNext(song) },
-                                    onAddToQueue = { onAddToQueue(song) },
-                                    onAddToPlaylist = { onAddToPlaylist(song) },
-                                    onShare = { onShare(song) },
-                                    onOpenArtist = onOpenArtist
-                                )
-                            }
-                        }
                     }
                 }
             }
+
+            // ------------------------------------------------------- stats
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(18.dp)
+            ) {
+                StatBlock(
+                    value = FormatUtils.formatCount(profile.fanCount),
+                    label = "pendengar",
+                    modifier = Modifier.weight(1f)
+                )
+                if (profile.albumCount > 0) {
+                    StatBlock(
+                        value = profile.albumCount.toString(),
+                        label = "rilisan",
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                StatBlock(
+                    value = topSongs.size.toString(),
+                    label = "lagu teratas",
+                    modifier = Modifier.weight(1f)
+                )
+            }
+
+            // ------------------------------------------- action row + follow
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 14.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (topSongs.isNotEmpty()) {
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(24.dp))
+                            .background(NoxaLime)
+                            .noxaTap { onPlaySong(topSongs[0], topSongs, 0) }
+                            .padding(horizontal = 24.dp, vertical = 11.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.PlayArrow,
+                            contentDescription = null,
+                            tint = NoxaBlack,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Putar semua",
+                            color = NoxaBlack,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+                // Ikuti: fills the accent when following, outline when not.
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(24.dp))
+                        .background(
+                            if (isFollowing) NoxaLime.copy(alpha = 0.16f) else Color.Transparent
+                        )
+                        .border(
+                            1.dp,
+                            if (isFollowing) NoxaLime else NoxaBorder,
+                            RoundedCornerShape(24.dp)
+                        )
+                        .noxaTap { onToggleFollow() }
+                        .padding(horizontal = 22.dp, vertical = 11.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = if (isFollowing) "Diikuti" else "Ikuti",
+                        color = if (isFollowing) NoxaLime else NoxaTextPrimary,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+
+            // ------------------------------------------------------------ bio
+            if (!bio.isNullOrBlank()) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(NoxaSurfaceElevated)
+                        .padding(14.dp)
+                ) {
+                    Text(
+                        text = "Tentang",
+                        color = NoxaTextPrimary,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = bio,
+                        color = NoxaTextSecondary,
+                        fontSize = 13.sp,
+                        lineHeight = 19.sp,
+                        maxLines = if (bioExpanded) Int.MAX_VALUE else 4,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = if (bioExpanded) "Tutup" else "Baca selengkapnya",
+                        color = NoxaLime,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .noxaTap { bioExpanded = !bioExpanded }
+                            .padding(vertical = 2.dp, horizontal = 4.dp)
+                    )
+                }
+            }
+
+            // --------------------------------------------------------- populer
+            if (topSongs.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(20.dp))
+                SectionTitle("Populer")
+                Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)) {
+                    topSongs.forEachIndexed { index, song ->
+                        SongListItem(
+                            song = song,
+                            rank = index + 1,
+                            isPlaying = song.id == currentPlayingSongId,
+                            isFavorite = favoriteIds.contains(song.id),
+                            onPlay = { onPlaySong(song, topSongs, index) },
+                            onToggleFavorite = { onToggleFavorite(song) },
+                            onPlayNext = { onPlayNext(song) },
+                            onAddToQueue = { onAddToQueue(song) },
+                            onAddToPlaylist = { onAddToPlaylist(song) },
+                            onShare = { onShare(song) },
+                            onOpenArtist = onOpenArtist,
+                            rating = songRatings[song.id] ?: 0,
+                            onRate = onRateSong,
+                            onMuteSong = { onMuteSong(song) },
+                            onMuteArtist = { onMuteArtist(song) }
+                        )
+                        // Popularity bar (Deezer rank 0–100) — the honest
+                        // per-track signal; no invented play counts.
+                        PopularityBar(rank = song.viewCount?.toLongOrNull() ?: 0L)
+                    }
+                }
+            }
+
+            // ---------------------------------------------- related artists
+            if (relatedArtists.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(18.dp))
+                SectionTitle("Penggemar juga mendengar")
+                LazyRow(
+                    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    items(items = relatedArtists, key = { it.id }) { related ->
+                        RelatedArtistCard(
+                            artist = related,
+                            onClick = { onOpenArtist(related.id.toString(), related.name) }
+                        )
+                    }
+                }
+            }
+
+            // ---------------------------------------------------- discography
+            if (albums.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(16.dp))
+                SectionTitle("Diskografi")
+                DiscographyFilterRow(
+                    selected = discographyFilter,
+                    onSelect = { discographyFilter = it },
+                    available = albums.map { it.type }.distinct()
+                )
+                LazyRow(
+                    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    items(
+                        items = filteredAlbums,
+                        key = { it.id }
+                    ) { album ->
+                        AlbumCard(
+                            album = album,
+                            onClick = { onOpenAlbum(album.id) },
+                            modifier = Modifier.noxaAppear(delayMillis = 0)
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(28.dp))
+        }
+
+        // Floating back button — always reachable over the hero photo.
+        IconButton(
+            onClick = onBack,
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .statusBarsPadding()
+                .padding(8.dp)
+                .size(40.dp)
+                .clip(CircleShape)
+                .background(Color.Black.copy(alpha = 0.45f))
+        ) {
+            Icon(
+                imageVector = Icons.Default.ArrowBack,
+                contentDescription = "Kembali",
+                tint = NoxaTextPrimary,
+                modifier = Modifier.size(22.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun StatBlock(value: String, label: String, modifier: Modifier = Modifier) {
+    Column(modifier = modifier) {
+        Text(
+            text = value,
+            color = NoxaTextPrimary,
+            fontSize = 19.sp,
+            fontWeight = FontWeight.Black,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Text(
+            text = label,
+            color = NoxaTextTertiary,
+            fontSize = 11.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+/** Thin popularity meter under a Populer row (rank 0–100). */
+@Composable
+private fun PopularityBar(rank: Long) {
+    if (rank <= 0L) return
+    val fraction = (rank.coerceIn(0L, 100L) / 100f)
+    Box(
+        modifier = Modifier
+            .padding(start = 92.dp, end = 20.dp, top = 2.dp, bottom = 4.dp)
+            .fillMaxWidth()
+            .height(2.dp)
+            .clip(RoundedCornerShape(2.dp))
+            .background(NoxaSurfaceSecondary)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth(fraction)
+                .height(2.dp)
+                .clip(RoundedCornerShape(2.dp))
+                .background(NoxaLime.copy(alpha = 0.75f))
+        )
+    }
+}
+
+@Composable
+private fun RelatedArtistCard(artist: ArtistProfile, onClick: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .width(96.dp)
+            .noxaTap { onClick() },
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        AsyncImage(
+            model = ImageRequest.Builder(LocalContext.current)
+                .data(artist.pictureUrl)
+                .size(240, 240)
+                .crossfade(true)
+                .build(),
+            contentDescription = artist.name,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier
+                .size(84.dp)
+                .clip(CircleShape)
+                .border(1.dp, NoxaBorder, CircleShape)
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = artist.name,
+            color = NoxaTextPrimary,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+        )
+    }
+}
+
+/** Chips: Semua + every record type the discography actually contains. */
+@Composable
+private fun DiscographyFilterRow(
+    selected: String,
+    onSelect: (String) -> Unit,
+    available: List<String>
+) {
+    val labels = remember(available) {
+        buildList {
+            add("Semua")
+            available.forEach { type ->
+                when {
+                    type.equals("album", ignoreCase = true) -> add("Album")
+                    type.equals("single", ignoreCase = true) -> add("Single")
+                    type.equals("compile", ignoreCase = true) -> add("Kompilasi")
+                }
+            }
+        }.distinct()
+    }
+    if (labels.size <= 1) return
+    LazyRow(
+        contentPadding = PaddingValues(horizontal = 20.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        items(labels) { label ->
+            val isSelected = label == selected
+            Text(
+                text = label,
+                color = if (isSelected) NoxaBlack else NoxaTextSecondary,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(if (isSelected) NoxaLime else NoxaSurfaceSecondary)
+                    .noxaTap { onSelect(label) }
+                    .padding(horizontal = 14.dp, vertical = 7.dp)
+            )
         }
     }
 }
@@ -322,17 +650,21 @@ private fun SectionTitle(text: String) {
         color = NoxaTextPrimary,
         fontSize = 17.sp,
         fontWeight = FontWeight.Bold,
-        modifier = Modifier.padding(horizontal = 16.dp)
+        modifier = Modifier.padding(horizontal = 20.dp)
     )
 }
 
 @Composable
-private fun AlbumCard(album: AlbumInfo, onClick: () -> Unit) {
+private fun AlbumCard(
+    album: AlbumInfo,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
     Column(
-        modifier = Modifier
+        modifier = modifier
             .width(140.dp)
             .clip(RoundedCornerShape(12.dp))
-            .clickable { onClick() }
+            .noxaTap { onClick() }
             .padding(4.dp)
     ) {
         AsyncImage(

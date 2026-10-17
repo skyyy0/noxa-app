@@ -2,7 +2,7 @@ package com.example.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,10 +26,15 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PlaylistPlay
 import androidx.compose.material.icons.filled.Shuffle
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -43,6 +48,7 @@ import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -51,22 +57,30 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
 import com.example.data.local.PlaylistSummary
 import com.example.data.model.Song
 import com.example.ui.components.SongListItem
+import com.example.ui.components.noxaAppear
+import com.example.ui.components.noxaTap
 import com.example.ui.theme.NoxaBlack
 import com.example.ui.theme.NoxaBorder
+import com.example.ui.theme.NoxaError
 import com.example.ui.theme.NoxaLime
+import com.example.ui.theme.NoxaSurface
 import com.example.ui.theme.NoxaSurfaceElevated
 import com.example.ui.theme.NoxaSurfaceSecondary
 import com.example.ui.theme.NoxaTextPrimary
 import com.example.ui.theme.NoxaTextSecondary
 import com.example.ui.theme.NoxaTextTertiary
+import com.example.ui.viewmodel.SharedPlaylistUi
 
 @Composable
 fun LibraryScreen(
@@ -86,26 +100,65 @@ fun LibraryScreen(
     onDeletePlaylist: (Long) -> Unit,
     onOpenPlaylist: (Long) -> Unit,
     onClearHistory: () -> Unit,
+    /** Collaborative-playlist flow (join sheet) — see [SharedPlaylistUi]. */
+    sharedPlaylistUi: SharedPlaylistUi = SharedPlaylistUi.Idle,
+    onCheckSharedPlaylist: (String) -> Unit = {},
+    onImportSharedPlaylist: () -> Unit = {},
+    onConsumeSharedPlaylist: () -> Unit = {},
+    /** playlistId -> share code, for the "Kolaboratif" badge on rows. */
+    sharedLinks: Map<String, String> = emptyMap(),
+    /** v2.0.0 — rating bintang & "jangan putar lagi" di Favorit/Riwayat. */
+    songRatings: Map<String, Int> = emptyMap(),
+    onRateSong: (Song, Int) -> Unit = { _, _ -> },
+    onMuteSong: (Song) -> Unit = {},
+    onMuteArtist: (Song) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var selectedTab by remember { mutableIntStateOf(0) }
     var showCreatePlaylistDialog by remember { mutableStateOf(false) }
     var newPlaylistName by remember { mutableStateOf("") }
     var playlistIdPendingDelete by remember { mutableStateOf<Long?>(null) }
+    var showJoinSheet by remember { mutableStateOf(false) }
+    var joinInput by remember { mutableStateOf("") }
+
+    // A successful import hands the new playlist over to the detail screen
+    // (navigation happens in NoxaApp); here we only close the sheet.
+    LaunchedEffect(sharedPlaylistUi) {
+        if (sharedPlaylistUi is SharedPlaylistUi.Imported) {
+            showJoinSheet = false
+            joinInput = ""
+        }
+    }
 
     val tabs = listOf("Favorit (${favorites.size})", "Playlist (${playlistSummaries.size})", "Riwayat")
 
-    Column(
+    Box(
         modifier = modifier
             .fillMaxSize()
             .background(NoxaBlack)
-            .statusBarsPadding()
             .testTag("library_screen")
     ) {
+        // Ambient lime glow behind the header — depth instead of a flat page.
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(240.dp)
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(NoxaLime.copy(alpha = 0.07f), Color.Transparent)
+                    )
+                )
+        )
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+        ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 16.dp),
+                .padding(horizontal = 20.dp, vertical = 16.dp)
+                .noxaAppear(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -117,20 +170,44 @@ fun LibraryScreen(
             )
 
             if (selectedTab == 1) {
-                IconButton(
-                    onClick = { showCreatePlaylistDialog = true },
-                    modifier = Modifier
-                        .size(36.dp)
-                        .clip(CircleShape)
-                        .background(NoxaSurfaceSecondary)
-                        .testTag("add_playlist_btn")
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Add,
-                        contentDescription = "Playlist baru",
-                        tint = NoxaLime,
-                        modifier = Modifier.size(20.dp)
-                    )
+                    IconButton(
+                        onClick = {
+                            joinInput = ""
+                            onConsumeSharedPlaylist()
+                            showJoinSheet = true
+                        },
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .background(NoxaSurfaceSecondary)
+                            .testTag("join_shared_playlist_btn")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Link,
+                            contentDescription = "Gabung playlist kolaboratif",
+                            tint = NoxaLime,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                    IconButton(
+                        onClick = { showCreatePlaylistDialog = true },
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .background(NoxaSurfaceSecondary)
+                            .testTag("add_playlist_btn")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = "Playlist baru",
+                            tint = NoxaLime,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
                 }
             } else if (selectedTab == 2 && history.isNotEmpty()) {
                 TextButton(
@@ -252,6 +329,10 @@ fun LibraryScreen(
                                 onAddToPlaylist = { onAddToPlaylist(song) },
                                 onShare = { onShare(song) },
                                 onOpenArtist = onOpenArtist,
+                                rating = songRatings[song.id] ?: 0,
+                                onRate = onRateSong,
+                                onMuteSong = { onMuteSong(song) },
+                                onMuteArtist = { onMuteArtist(song) },
                                 modifier = Modifier.padding(horizontal = 4.dp)
                             )
                         }
@@ -273,28 +354,25 @@ fun LibraryScreen(
                         modifier = Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(bottom = 24.dp, top = 12.dp, start = 16.dp, end = 16.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        items(playlistSummaries, key = { it.playlistId }) { playlist ->
+                    ) {                        items(playlistSummaries, key = { it.playlistId }) { playlist ->
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .clip(RoundedCornerShape(12.dp))
+                                    .clip(RoundedCornerShape(14.dp))
                                     .background(NoxaSurfaceElevated)
-                                    .border(1.dp, NoxaBorder, RoundedCornerShape(12.dp))
-                                    .clickable { onOpenPlaylist(playlist.playlistId) }
+                                    .border(1.dp, NoxaBorder, RoundedCornerShape(14.dp))
+                                    // Press-dip + light tick instead of a flat web-style row.
+                                    .noxaTap { onOpenPlaylist(playlist.playlistId) }
                                     .padding(14.dp)
                                     .testTag("playlist_row_${playlist.playlistId}"),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.weight(1f)
-                                ) {
+                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
                                     Box(
                                         modifier = Modifier
                                             .size(44.dp)
-                                            .clip(RoundedCornerShape(8.dp))
+                                            .clip(RoundedCornerShape(10.dp))
                                             .background(NoxaSurfaceSecondary),
                                         contentAlignment = Alignment.Center
                                     ) {
@@ -315,11 +393,24 @@ fun LibraryScreen(
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis
                                         )
-                                        Text(
-                                            text = "${playlist.songCount} lagu",
-                                            color = NoxaTextSecondary,
-                                            fontSize = 12.sp
-                                        )
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Text(
+                                                text = "${playlist.songCount} lagu",
+                                                color = NoxaTextSecondary,
+                                                fontSize = 12.sp
+                                            )
+                                            if (sharedLinks.containsKey(playlist.playlistId.toString())) {
+                                                Text(
+                                                    text = "◆ Kolaboratif",
+                                                    color = NoxaLime,
+                                                    fontSize = 11.sp,
+                                                    fontWeight = FontWeight.SemiBold
+                                                )
+                                            }
+                                        }
                                     }
                                 }
 
@@ -361,6 +452,10 @@ fun LibraryScreen(
                                 onAddToPlaylist = { onAddToPlaylist(song) },
                                 onShare = { onShare(song) },
                                 onOpenArtist = onOpenArtist,
+                                rating = songRatings[song.id] ?: 0,
+                                onRate = onRateSong,
+                                onMuteSong = { onMuteSong(song) },
+                                onMuteArtist = { onMuteArtist(song) },
                                 modifier = Modifier.padding(horizontal = 4.dp)
                             )
                         }
@@ -368,6 +463,23 @@ fun LibraryScreen(
                 }
             }
         }
+        } // end Column (nested in the glow Box)
+    } // end root Box
+
+    if (showJoinSheet) {
+        JoinSharedPlaylistSheet(
+            state = sharedPlaylistUi,
+            input = joinInput,
+            onInputChange = { joinInput = it },
+            onCheck = { onCheckSharedPlaylist(joinInput) },
+            onImport = { onImportSharedPlaylist() },
+            onReset = { onConsumeSharedPlaylist() },
+            onDismiss = {
+                showJoinSheet = false
+                joinInput = ""
+                onConsumeSharedPlaylist()
+            }
+        )
     }
 
     if (showCreatePlaylistDialog) {
@@ -503,6 +615,287 @@ private fun EmptyState(
                     shape = RoundedCornerShape(20.dp)
                 ) {
                     Text(actionLabel, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The "join a collaborative playlist" sheet: paste → check → preview →
+ * import. Every state of [SharedPlaylistUi] gets a designed treatment (live
+ * loading row, honest error banner, staggered preview card) rather than a
+ * bare dialog — the modern-app feel the feature deserves.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun JoinSharedPlaylistSheet(
+    state: SharedPlaylistUi,
+    input: String,
+    onInputChange: (String) -> Unit,
+    onCheck: () -> Unit,
+    onImport: () -> Unit,
+    onReset: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = NoxaSurface,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ) {
+        val inputBlock: @Composable () -> Unit = {
+            OutlinedTextField(
+                value = input,
+                onValueChange = onInputChange,
+                singleLine = true,
+                label = { Text("Tempel tautan atau kode", color = NoxaTextTertiary, fontSize = 13.sp) },
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = NoxaLime,
+                    unfocusedBorderColor = NoxaBorder,
+                    focusedTextColor = NoxaTextPrimary,
+                    unfocusedTextColor = NoxaTextPrimary,
+                    cursorColor = NoxaLime
+                ),
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(modifier = Modifier.height(14.dp))
+            Button(
+                onClick = onCheck,
+                enabled = input.isNotBlank() && state !is SharedPlaylistUi.Checking,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = NoxaLime,
+                    contentColor = NoxaBlack
+                ),
+                shape = RoundedCornerShape(18.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(50.dp)
+            ) {
+                if (state is SharedPlaylistUi.Checking) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        color = NoxaBlack,
+                        strokeWidth = 2.dp
+                    )
+                } else {
+                    Text("Cek Playlist", fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 24.dp)
+                .padding(bottom = 32.dp)
+        ) {
+            // Header: badge + title + one honest line.
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .clip(CircleShape)
+                        .background(NoxaLime.copy(alpha = 0.14f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Link,
+                        contentDescription = null,
+                        tint = NoxaLime,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.width(14.dp))
+                Column {
+                    Text(
+                        text = "Gabung Playlist Kolaboratif",
+                        color = NoxaTextPrimary,
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "Kode 6 karakter dari temanmu — musiknya ditarik ke sini",
+                        color = NoxaTextTertiary,
+                        fontSize = 12.sp
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            when {
+                state is SharedPlaylistUi.Checking || state is SharedPlaylistUi.Importing -> {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(NoxaSurfaceElevated)
+                            .padding(18.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(14.dp)
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(22.dp),
+                            color = NoxaLime,
+                            strokeWidth = 2.5.dp
+                        )
+                        Text(
+                            text = if (state is SharedPlaylistUi.Checking) {
+                                "Mengecek kode ke server…"
+                            } else {
+                                "Menyimpan playlist ke perangkat…"
+                            },
+                            color = NoxaTextSecondary,
+                            fontSize = 14.sp
+                        )
+                    }
+                }
+
+                state is SharedPlaylistUi.Error -> {
+                    // Honest failure: banner first, then the field again so
+                    // a mistyped code can be fixed without reopening the sheet.
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(NoxaError.copy(alpha = 0.12f))
+                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Warning,
+                            contentDescription = null,
+                            tint = NoxaError,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Text(
+                            text = state.message,
+                            color = NoxaTextPrimary,
+                            fontSize = 13.sp
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(16.dp))
+                    inputBlock()
+                }
+
+                state is SharedPlaylistUi.Preview -> {
+                    val preview = state.playlist
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(NoxaSurfaceElevated)
+                            .border(1.dp, NoxaBorder, RoundedCornerShape(20.dp))
+                            .padding(18.dp)
+                            .noxaAppear()
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = preview.name.ifBlank { "Playlist" },
+                                    color = NoxaTextPrimary,
+                                    fontSize = 17.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = "oleh ${preview.ownerName.ifBlank { "NOXA User" }} • " +
+                                        "${preview.songs.size} lagu",
+                                    color = NoxaTextSecondary,
+                                    fontSize = 12.sp
+                                )
+                            }
+                            Text(
+                                text = preview.code,
+                                color = NoxaLime,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 2.sp
+                            )
+                        }
+
+                        if (preview.songs.isNotEmpty()) {
+                            Spacer(modifier = Modifier.height(14.dp))
+                            preview.songs.take(3).forEach { song ->
+                                Row(
+                                    modifier = Modifier.padding(vertical = 5.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    AsyncImage(
+                                        model = song.artwork,
+                                        contentDescription = null,
+                                        modifier = Modifier
+                                            .size(36.dp)
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(NoxaSurfaceSecondary),
+                                        contentScale = androidx.compose.ui.layout.ContentScale.Crop
+                                    )
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Column {
+                                        Text(
+                                            text = song.title,
+                                            color = NoxaTextPrimary,
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Medium,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = song.artist,
+                                            color = NoxaTextTertiary,
+                                            fontSize = 11.sp,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                }
+                            }
+                            if (preview.songs.size > 3) {
+                                Text(
+                                    text = "+ ${preview.songs.size - 3} lagu lainnya",
+                                    color = NoxaTextTertiary,
+                                    fontSize = 12.sp,
+                                    modifier = Modifier.padding(top = 4.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Button(
+                        onClick = onImport,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = NoxaLime,
+                            contentColor = NoxaBlack
+                        ),
+                        shape = RoundedCornerShape(18.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(50.dp)
+                    ) {
+                        Text("Gabung ke Koleksi", fontWeight = FontWeight.Bold)
+                    }
+                    TextButton(onClick = onReset, modifier = Modifier.align(Alignment.CenterHorizontally)) {
+                        Text("Gunakan kode lain", color = NoxaTextSecondary, fontSize = 13.sp)
+                    }
+                }
+
+                else -> {
+                    inputBlock()
+                    Spacer(modifier = Modifier.height(14.dp))
+                    Text(
+                        text = "Buka Koleksi di HP temanmu → Playlist → ikon tautan untuk " +
+                            "membagikan kode miliknya.",
+                        color = NoxaTextTertiary,
+                        fontSize = 12.sp,
+                        lineHeight = 17.sp
+                    )
                 }
             }
         }

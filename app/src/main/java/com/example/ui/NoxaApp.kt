@@ -70,6 +70,7 @@ import com.example.ui.screens.AboutSkyScreen
 import com.example.ui.screens.AiChatScreen
 import com.example.ui.screens.AlbumScreen
 import com.example.ui.screens.ArtistScreen
+import com.example.ui.screens.DeviceScanScreen
 import com.example.ui.screens.DevPanelScreen
 import com.example.ui.screens.EqualizerScreen
 import com.example.ui.screens.GetStartedScreen
@@ -86,6 +87,7 @@ import com.example.ui.theme.NoxaSurfaceElevated
 import com.example.ui.theme.NoxaTextPrimary
 import com.example.ui.theme.NoxaTextSecondary
 import com.example.ui.theme.NoxaTextTertiary
+import com.example.ui.viewmodel.ArtistUiState
 import com.example.ui.viewmodel.MusicViewModel
 import com.example.ui.viewmodel.VideoUiState
 import androidx.compose.runtime.mutableStateOf
@@ -167,6 +169,31 @@ fun NoxaApp(
     val weeklyRecap by viewModel.weeklyRecap.collectAsStateWithLifecycle()
     val yearListening by viewModel.yearListening.collectAsStateWithLifecycle()
     val appSettings by viewModel.appSettings.collectAsStateWithLifecycle()
+
+    // Collaborative playlists: one flow for the sheets, one for banners,
+    // and the playlistId -> code map for chips.
+    // ------------------------------------------- v2.0.0: Sistem Pintar & radar
+    val needsPerfScan by viewModel.needsPerfScan.collectAsStateWithLifecycle()
+    val isScanning by viewModel.isScanning.collectAsStateWithLifecycle()
+    val devicePerf by viewModel.devicePerf.collectAsStateWithLifecycle()
+    val releaseRadar by viewModel.releaseRadar.collectAsStateWithLifecycle()
+    val followedArtistIds by viewModel.followedArtistIds.collectAsStateWithLifecycle()
+    val lyricSearch by viewModel.lyricSearch.collectAsStateWithLifecycle()
+    val mutedSongs by viewModel.mutedSongs.collectAsStateWithLifecycle()
+    val mutedArtists by viewModel.mutedArtists.collectAsStateWithLifecycle()
+    val songRatings by viewModel.songRatings.collectAsStateWithLifecycle()
+
+    val sharedPlaylistUi by viewModel.sharedPlaylistUi.collectAsStateWithLifecycle()
+    val sharedNotice by viewModel.sharedNotice.collectAsStateWithLifecycle()
+    val sharedLinks by viewModel.sharedLinks.collectAsStateWithLifecycle()
+
+    // A successful import opens the fresh playlist (and consumes the event).
+    LaunchedEffect(sharedPlaylistUi) {
+        val imported = sharedPlaylistUi as? com.example.ui.viewmodel.SharedPlaylistUi.Imported
+            ?: return@LaunchedEffect
+        navController.navigate(Screen.Playlist.routeFor(imported.playlistId))
+        viewModel.consumeSharedPlaylistUi()
+    }
 
     // Home taste: quick-play grid, stats card and "Buat kamu" shelf.
     val quickPlaySongs by viewModel.quickPlaySongs.collectAsStateWithLifecycle()
@@ -337,6 +364,13 @@ fun NoxaApp(
                     .padding(bottom = innerPadding.calculateBottomPadding())
             ) {
                 composable(Screen.Home.route) {
+                    // One-time first launch: the device scan must finish
+                    // before the feed is allowed to hit the network.
+                    if (needsPerfScan) {
+                        LaunchedEffect(Unit) { viewModel.runPerfScan() }
+                        DeviceScanScreen(profile = devicePerf, isScanning = isScanning)
+                        return@composable
+                    }
                     HomeScreen(
                         heroSong = heroSong,
                         sections = homeSections,
@@ -361,7 +395,11 @@ fun NoxaApp(
                         onSignInWithGoogle = { activity -> viewModel.signInWithGoogle(activity) },
                         onOpenGetStarted = { navController.navigate(Screen.GetStarted.route) },
                         onRetry = { viewModel.loadHome() },
-                        onOpenArtist = openArtistProfile
+                        onOpenArtist = openArtistProfile,
+                        releaseRadar = releaseRadar,
+                        onOpenAlbum = { albumId ->
+                            navController.navigate(Screen.Album.routeFor(albumId))
+                        }
                     )
                 }
 
@@ -398,7 +436,14 @@ fun NoxaApp(
                         onAddToQueue = { viewModel.addToQueue(it) },
                         onAddToPlaylist = { songPendingPlaylist = it },
                         onShare = { songPendingShare = it },
-                        onOpenArtist = openArtistProfile
+                        onOpenArtist = openArtistProfile,
+                        lyricSearch = lyricSearch,
+                        onSearchByLyrics = { viewModel.searchByLyrics(it) },
+                        onClearLyricSearch = { viewModel.clearLyricSearch() },
+                        songRatings = songRatings,
+                        onRateSong = { song, stars -> viewModel.rateSong(song, stars) },
+                        onMuteSong = { viewModel.muteSong(it) },
+                        onMuteArtist = { viewModel.muteArtist(it) }
                     )
                 }
 
@@ -419,7 +464,16 @@ fun NoxaApp(
                         onDeletePlaylist = { viewModel.deletePlaylist(it) },
                         onOpenPlaylist = { navController.navigate(Screen.Playlist.routeFor(it)) },
                         onClearHistory = { viewModel.clearHistory() },
-                        onOpenArtist = openArtistProfile
+                        onOpenArtist = openArtistProfile,
+                        sharedPlaylistUi = sharedPlaylistUi,
+                        onCheckSharedPlaylist = { viewModel.previewSharedPlaylist(it) },
+                        onImportSharedPlaylist = { viewModel.importSharedPlaylist() },
+                        onConsumeSharedPlaylist = { viewModel.consumeSharedPlaylistUi() },
+                        sharedLinks = sharedLinks,
+                        songRatings = songRatings,
+                        onRateSong = { song, stars -> viewModel.rateSong(song, stars) },
+                        onMuteSong = { viewModel.muteSong(it) },
+                        onMuteArtist = { viewModel.muteArtist(it) }
                     )
                 }
 
@@ -444,7 +498,14 @@ fun NoxaApp(
                             onPlayNext = { viewModel.playNext(it) },
                             onAddToQueue = { viewModel.addToQueue(it) },
                             onShare = { songPendingShare = it },
-                            onOpenArtist = openArtistProfile
+                            onOpenArtist = openArtistProfile,
+                            sharedCode = sharedLinks[playlistId.toString()],
+                            sharedPlaylistUi = sharedPlaylistUi,
+                            sharedNotice = sharedNotice,
+                            onSharePlaylist = { viewModel.sharePlaylist(playlistId) },
+                            onSyncPlaylist = { viewModel.syncSharedPlaylist(playlistId) },
+                            onDismissNotice = { viewModel.dismissSharedNotice() },
+                            onConsumeSharedPlaylist = { viewModel.consumeSharedPlaylistUi() }
                         )
                     }
                 }
@@ -470,7 +531,17 @@ fun NoxaApp(
                                 navController.navigate(Screen.Album.routeFor(albumId))
                             },
                             onOpenArtist = openArtistProfile,
-                            onRetry = { viewModel.loadArtist(artistId) }
+                            onRetry = { viewModel.loadArtist(artistId) },
+                            isFollowing = followedArtistIds.contains(artistId),
+                            onToggleFollow = {
+                                (artistUiState as? ArtistUiState.Ready)?.let { ready ->
+                                    viewModel.toggleFollowArtist(ready.profile)
+                                }
+                            },
+                            songRatings = songRatings,
+                            onRateSong = { song, stars -> viewModel.rateSong(song, stars) },
+                            onMuteSong = { viewModel.muteSong(it) },
+                            onMuteArtist = { viewModel.muteArtist(it) }
                         )
                     }
                 }
@@ -561,7 +632,12 @@ fun NoxaApp(
                             viewModel.deleteAccount(email, onResult)
                         },
                         availableUpdate = updateInfo,
-                        onOpenUpdate = { viewModel.openUpdateFromSettings() }
+                        onOpenUpdate = { viewModel.openUpdateFromSettings() },
+                        onSetCrossfade = { viewModel.setCrossfadeEnabled(it) },
+                        perfProfile = devicePerf,
+                        mutedArtists = mutedArtists,
+                        mutedSongs = mutedSongs,
+                        onUnmute = { kind, value -> viewModel.unmute(kind, value) }
                     )
                 }
 
@@ -726,8 +802,10 @@ fun NoxaApp(
             onToggleRepeat = { viewModel.toggleRepeat() },
             onToggleFavorite = {
                 playerState.currentSong?.let { viewModel.toggleFavorite(it) }
-            },
-            onSetSleepTimer = { viewModel.setSleepTimer(it) },
+            },                onSetSleepTimer = { viewModel.setSleepTimer(it) },
+                onSetSleepTimerEndOfTrack = { enabled ->
+                    viewModel.setSleepTimerEndOfTrack(enabled)
+                },
             onOpenEqualizer = {
                 viewModel.closeFullPlayer()
                 navController.navigate(Screen.Equalizer.route)

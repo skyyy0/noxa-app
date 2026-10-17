@@ -174,6 +174,10 @@ class NoxaBackend {
     suspend fun <T> mutate(block: (BackendState) -> T): T? = withContext(Dispatchers.IO) {
         val state = readState() ?: return@withContext null
         val result = block(state)
+        // Every write passes through here, so document-size discipline for the
+        // collaborative playlists lives here too — no single feature can push
+        // the page over Telegraph's limit.
+        pruneSharedPlaylists(state)
         if (writeState(state)) result else null
     }
 
@@ -503,6 +507,37 @@ class NoxaBackend {
         }
     }
 
+    // ------------------------------------------- collaborative playlists
+
+    /** Reads one collaborative playlist, or null when missing / offline. */
+    suspend fun readSharedPlaylist(code: String): SharedPlaylist? {
+        val normalized = SharedPlaylistCodes.normalize(code)
+        if (!SharedPlaylistCodes.isValid(normalized)) return null
+        return readState()?.sharedPlaylists?.get(normalized)
+    }
+
+    /**
+     * Creates or replaces [playlist] under its code and stamps a fresh
+     * `updatedAt` (the version every collaborator compares against). Returns
+     * the stored copy, or null when the backend could not be reached.
+     */
+    suspend fun publishSharedPlaylist(playlist: SharedPlaylist): SharedPlaylist? {
+        val normalized = SharedPlaylistCodes.normalize(playlist.code)
+        if (!SharedPlaylistCodes.isValid(normalized)) return null
+        val stored = playlist.copy(code = normalized, updatedAt = System.currentTimeMillis())
+        return mutate { state ->
+            val existing = state.sharedPlaylists[normalized]
+            state.sharedPlaylists[normalized] = if (existing == null) {
+                stored
+            } else {
+                // Keep the original creation stamp; songs and name are the
+                // publisher's current truth (guarded client-side by sync).
+                stored.copy(createdAt = existing.createdAt)
+            }
+            state.sharedPlaylists.getValue(normalized)
+        }
+    }
+
     /** Drops this member; the room dies with its last member. */
     suspend fun leaveRoom(code: String, uid: String) {
         val normalized = normalizeRoomCode(code)
@@ -740,6 +775,9 @@ class NoxaBackend {
 
         /** Live listening rooms keyed by room code. */
         val rooms = LinkedHashMap<String, RoomState>()
+
+        /** Collaborative playlists keyed by their 6-character share code. */
+        val sharedPlaylists = LinkedHashMap<String, SharedPlaylist>()
     }
 
     private fun parseState(json: JSONObject): BackendState {
@@ -818,6 +856,35 @@ class NoxaBackend {
                 updatedAt = obj.optLong("updatedAt"),
                 members = members,
                 skipVotes = skipVotes
+            )
+        }
+        val shared = json.optJSONObject("sharedPlaylists") ?: JSONObject()
+        for (code in shared.keys()) {
+            val obj = shared.optJSONObject(code) ?: continue
+            val rawSongs = obj.optJSONArray("songs") ?: JSONArray()
+            val songs = ArrayList<SharedPlaylistSong>(rawSongs.length())
+            for (i in 0 until rawSongs.length()) {
+                val s = rawSongs.optJSONObject(i) ?: continue
+                val id = s.optString("id")
+                if (id.isBlank()) continue
+                songs.add(
+                    SharedPlaylistSong(
+                        id = id,
+                        title = s.optString("title"),
+                        artist = s.optString("artist"),
+                        artwork = s.optString("artwork"),
+                        durationMs = s.optLong("durationMs")
+                    )
+                )
+            }
+            state.sharedPlaylists[code] = SharedPlaylist(
+                code = code,
+                name = obj.optString("name"),
+                ownerUid = obj.optString("ownerUid"),
+                ownerName = obj.optString("ownerName"),
+                createdAt = obj.optLong("createdAt"),
+                updatedAt = obj.optLong("updatedAt"),
+                songs = songs
             )
         }
         state.update = json.optJSONObject("update")?.let { u ->
@@ -921,7 +988,60 @@ class NoxaBackend {
                     }
                     root.put("rooms", rooms)
                 }
+                if (state.sharedPlaylists.isNotEmpty()) {
+                    val shared = JSONObject()
+                    state.sharedPlaylists.forEach { (code, playlist) ->
+                        val songs = JSONArray()
+                        playlist.songs.forEach { s ->
+                            songs.put(
+                                JSONObject()
+                                    .put("id", s.id)
+                                    .put("title", s.title)
+                                    .put("artist", s.artist)
+                                    .put("artwork", s.artwork)
+                                    .put("durationMs", s.durationMs)
+                            )
+                        }
+                        shared.put(
+                            code,
+                            JSONObject()
+                                .put("name", playlist.name)
+                                .put("ownerUid", playlist.ownerUid)
+                                .put("ownerName", playlist.ownerName)
+                                .put("createdAt", playlist.createdAt)
+                                .put("updatedAt", playlist.updatedAt)
+                                .put("songs", songs)
+                        )
+                    }
+                    root.put("sharedPlaylists", shared)
+                }
             }
+    }
+
+    /**
+     * Keeps collaborative playlists inside Telegraph's page-size limit: a
+     * per-playlist song cap plus a global cap that keeps the freshest
+     * playlists first. Runs on every write (see [mutate]).
+     */
+    private fun pruneSharedPlaylists(state: BackendState) {
+        if (state.sharedPlaylists.isEmpty()) return
+        val MAX_SONGS_PER_PLAYLIST = 200
+        val MAX_PLAYLISTS = 40
+        state.sharedPlaylists.forEach { (code, playlist) ->
+            if (playlist.songs.size > MAX_SONGS_PER_PLAYLIST) {
+                state.sharedPlaylists[code] = playlist.copy(
+                    songs = playlist.songs.take(MAX_SONGS_PER_PLAYLIST)
+                )
+            }
+        }
+        if (state.sharedPlaylists.size > MAX_PLAYLISTS) {
+            val keep = state.sharedPlaylists.values
+                .sortedByDescending { it.updatedAt }
+                .take(MAX_PLAYLISTS)
+                .map { it.code }
+                .toSet()
+            state.sharedPlaylists.keys.retainAll(keep)
+        }
     }
 
     /** Keeps the document inside Telegraph's page-size limit. */

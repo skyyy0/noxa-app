@@ -105,6 +105,14 @@ fun ProfileScreen(
     onSetAutoplaySimilar: (Boolean) -> Unit,
     onSetKaraokeOverlay: (Boolean) -> Unit,
     onSetAutoResumeOnOpen: (Boolean) -> Unit,
+    /** v2.0.0 — crossfade lembut antar lagu (Sistem Pintar mematikan di HP kelas Hemat). */
+    onSetCrossfade: (Boolean) -> Unit = {},
+    /** v2.0.0 — profil perangkat hasil pemindaian sekali di awal. */
+    perfProfile: com.example.data.local.PerfProfile? = null,
+    /** v2.0.0 — daftar senyap "Jangan putar lagi" untuk dibatalkan di sini. */
+    mutedArtists: Set<String> = emptySet(),
+    mutedSongs: Set<String> = emptySet(),
+    onUnmute: (String, String) -> Unit = { _, _ -> },
     onSignOut: () -> Unit,
     onNavigateToAboutSky: () -> Unit,
     onOpenAiChat: () -> Unit,
@@ -942,10 +950,113 @@ fun ProfileScreen(
                     onCheckedChange = onSetAutoResumeOnOpen,
                     tag = "setting_auto_resume"
                 )
+                SettingsToggleRow(
+                    title = "Crossfade lembut",
+                    subtitle = if (perfProfile?.crossfadeAllowed == false) {
+                        "Nonaktif di perangkat kelas Hemat (keputusan Sistem Pintar)"
+                    } else {
+                        "Pelankan volume di akhir lagu biar transisi mulus"
+                    },
+                    checked = appSettings.crossfadeEnabled && perfProfile?.crossfadeAllowed != false,
+                    onCheckedChange = onSetCrossfade,
+                    tag = "setting_crossfade"
+                )
             }
         }
 
-        Spacer(modifier = Modifier.height(20.dp))
+        // SISTEM PINTAR — hasil pemindaian perangkat sekali di awal; semua
+        // knob performa aplikasi (preload, crossfade, cache gambar) ikut tier ini.
+        Text(
+            text = "Sistem Pintar",
+            color = NoxaTextPrimary,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
+        )
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .testTag("perf_profile_card"),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = NoxaSurfaceElevated),
+            border = androidx.compose.foundation.BorderStroke(1.dp, NoxaBorder)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = perfProfile?.tierLabel ?: "Seimbang",
+                        color = NoxaLime,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = "Mode pemutaran sesuai kemampuan HP kamu",
+                        color = NoxaTextTertiary,
+                        fontSize = 12.sp
+                    )
+                }
+                Spacer(modifier = Modifier.height(10.dp))
+                PerfInfoRow("RAM", "${perfProfile?.totalMemGb ?: 0.0} GB")
+                PerfInfoRow("Inti prosesor", "${perfProfile?.cores ?: 1}")
+                PerfInfoRow(
+                    "Chipset",
+                    perfProfile?.chipName?.takeIf { it.isNotBlank() } ?: "Tidak diketahui"
+                )
+                PerfInfoRow(
+                    "Jendela pra-muat",
+                    "${((perfProfile?.preloadWindowMs ?: 45_000L) / 1000)} detik sebelum lagu habis"
+                )
+            }
+        }
+
+        // Senyap — daftar "Jangan putar lagi" yang bisa dibatalkan per item.
+        if (mutedArtists.isNotEmpty() || mutedSongs.isNotEmpty()) {
+            Text(
+                text = "Jangan putar lagi",
+                color = NoxaTextPrimary,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
+            )
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp)
+                    .testTag("muted_entries_card"),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = NoxaSurfaceElevated),
+                border = androidx.compose.foundation.BorderStroke(1.dp, NoxaBorder)
+            ) {
+                Column(modifier = Modifier.padding(vertical = 4.dp)) {
+                    mutedArtists.sorted().forEach { artist ->
+                        MutedEntryRow(
+                            label = artist,
+                            kindLabel = "Artis",
+                            onUndo = {
+                                onUnmute(
+                                    com.example.data.local.MutedEntryEntity.KIND_ARTIST,
+                                    artist
+                                )
+                            }
+                        )
+                    }
+                    mutedSongs.sorted().forEach { songId ->
+                        MutedEntryRow(
+                            label = songId,
+                            kindLabel = "Lagu",
+                            onUndo = {
+                                onUnmute(
+                                    com.example.data.local.MutedEntryEntity.KIND_SONG,
+                                    songId
+                                )
+                            }
+                        )
+                    }
+                }
+            }
+        }
 
         Spacer(modifier = Modifier.height(20.dp))
 
@@ -1284,6 +1395,67 @@ private fun ChangePasswordDialog(
 }
 
 private val NoxaErrorText = androidx.compose.ui.graphics.Color(0xFFFF6B61)
+
+/** One "RAM / cores / chipset" line inside the Sistem Pintar card. */
+@Composable
+private fun PerfInfoRow(label: String, value: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 3.dp),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(text = label, color = NoxaTextSecondary, fontSize = 13.sp)
+        Text(
+            text = value,
+            color = NoxaTextPrimary,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(start = 12.dp)
+        )
+    }
+}
+
+/** One muted song/artist with a "Batalkan" undo action. */
+@Composable
+private fun MutedEntryRow(label: String, kindLabel: String, onUndo: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = label,
+                color = NoxaTextPrimary,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = kindLabel,
+                color = NoxaTextTertiary,
+                fontSize = 11.sp
+            )
+        }
+        Spacer(modifier = Modifier.width(10.dp))
+        Text(
+            text = "Batalkan",
+            color = NoxaLime,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .clickable { onUndo() }
+                .padding(horizontal = 10.dp, vertical = 6.dp)
+                .testTag("unmute_${kindLabel}_$label")
+        )
+    }
+}
 
 /** Handle shape for usernames registered through Firestore. */
 private val USERNAME_HANDLE = Regex("^[A-Za-z0-9_.]{3,20}$")

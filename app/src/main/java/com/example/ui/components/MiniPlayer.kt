@@ -8,7 +8,6 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -94,7 +93,8 @@ fun MiniPlayer(
                 .clip(RoundedCornerShape(16.dp))
                 .background(NoxaSurfaceElevated)
                 .border(1.dp, NoxaBorder, RoundedCornerShape(16.dp))
-                .clickable { onClick() }
+                // iOS-style press dip + light tick instead of a flat tap.
+                .noxaTap { onClick() }
                 .testTag("mini_player")
         ) {
             Column {

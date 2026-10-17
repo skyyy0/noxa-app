@@ -23,6 +23,7 @@ import com.example.data.model.Song
 import com.example.data.model.TrackLyrics
 import com.example.data.remote.HomeMusicSection
 import com.example.data.remote.YouTubeSourceRepository
+import com.example.data.support.SharedPlaylistCodes
 import com.example.media.MvPlayer
 import com.example.media.PlaybackProgress
 import com.example.media.PlayerUiState
@@ -41,6 +42,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChangedBy
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -81,9 +83,24 @@ private const val FORYOU_RELATED_LIMIT = 4
 private const val FORYOU_RELATED_ARTISTS = 2
 private const val FORYOU_SONG_LIMIT = 12
 
-/** Dengar Bareng: how often the room is polled, and position heartbeat. */
-private const val ROOM_POLL_MS = 2_000L
-private const val ROOM_HEARTBEAT_MS = 10_000L
+/**
+ * Dengar Bareng: how often the room is polled. Pulled in from 2 s to 1 s in
+ * v2.0.0 so a peer's pause/seek lands within a heartbeat instead of visibly
+ * lagging — the payload is a single small JSON doc, cheap enough to poll.
+ */
+private const val ROOM_POLL_MS = 1_000L
+private const val ROOM_HEARTBEAT_MS = 6_000L
+
+/** Radar Rilis: releases younger than this count as "new", and how many
+ * followed artists are checked per refresh. */
+private const val RADAR_MAX_AGE_DAYS = 90L
+private const val RADAR_ARTIST_LIMIT = 20
+
+/**
+ * Preemptive preload: this long before a track ends, the next one's full
+ * stream is resolved in the background so the transition has zero loading.
+ */
+private const val PRELOAD_NEAR_END_MS = 30_000L
 
 /** The mini weekly recap shown on the profile screen. */
 data class WeeklyRecap(
@@ -164,9 +181,24 @@ sealed interface ArtistUiState {
     data class Ready(
         val profile: ArtistProfile,
         val topSongs: List<Song>,
-        val albums: List<AlbumInfo>
+        val albums: List<AlbumInfo>,
+        /** Musically adjacent artists — the "penggemar juga mendengar" shelf. */
+        val relatedArtists: List<ArtistProfile> = emptyList(),
+        /** Short Wikipedia bio; null when unavailable (section hides). */
+        val bio: String? = null
     ) : ArtistUiState
     data class Error(val message: String) : ArtistUiState
+}
+
+/** Result of a "cari pakai lirik" reverse lookup, ready to render. */
+data class LyricSearchUi(
+    val query: String,
+    val songs: List<Song>,
+    val matchedLine: String
+) {
+    companion object {
+        val EMPTY = LyricSearchUi("", emptyList(), "")
+    }
 }
 
 /** What the album page should show. */
@@ -174,6 +206,23 @@ sealed interface AlbumUiState {
     data object Loading : AlbumUiState
     data class Ready(val album: AlbumInfo, val tracks: List<Song>) : AlbumUiState
     data class Error(val message: String) : AlbumUiState
+}
+
+/**
+ * What the collaborative-playlist flow should show. One flow drives both
+ * sheets: the join sheet in the Library (Checking / Preview / Importing /
+ * Imported / Error) and the share sheet in the playlist detail (Publishing /
+ * Shared / Error). [SharedPlaylistUi.Idle] is the resting state.
+ */
+sealed interface SharedPlaylistUi {
+    data object Idle : SharedPlaylistUi
+    data class Publishing(val name: String) : SharedPlaylistUi
+    data class Shared(val code: String, val name: String) : SharedPlaylistUi
+    data object Checking : SharedPlaylistUi
+    data class Preview(val playlist: com.example.data.support.SharedPlaylist) : SharedPlaylistUi
+    data object Importing : SharedPlaylistUi
+    data class Imported(val playlistId: Long, val name: String, val songCount: Int) : SharedPlaylistUi
+    data class Error(val message: String) : SharedPlaylistUi
 }
 
 class MusicViewModel(application: Application) : AndroidViewModel(application) {
@@ -242,6 +291,13 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         _appSettings.value = _appSettings.value.copy(autoResumeOnOpen = enabled)
     }
 
+    /** Soft volume crossfade between consecutive tracks. */
+    fun setCrossfadeEnabled(enabled: Boolean) {
+        settingsStore.crossfadeEnabled = enabled
+        _appSettings.value = _appSettings.value.copy(crossfadeEnabled = enabled)
+        player.crossfadeEnabled = enabled
+    }
+
     val playerState: StateFlow<PlayerUiState> = player.uiState
 
     /**
@@ -294,6 +350,61 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     private val _searchQuery = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
 
+    // ---------------------------------------------- Sistem Pintar (v2.0.0)
+
+    /**
+     * True when the first-run device scan still has to run (fresh install).
+     * The home route gates its content on this so the scan animation plays
+     * before the feed hits the network.
+     */
+    private val _needsPerfScan = MutableStateFlow(!app.perfProfileStore.isReady)
+    val needsPerfScan: StateFlow<Boolean> = _needsPerfScan.asStateFlow()
+
+    /**
+     * Runs the one-time device scan: measures RAM, cores and chipset, saves
+     * the resulting profile and lets the home screen continue. ~1.8 s of
+     * staged animation is spent so the scan feels deliberate, not glitchy.
+     */
+    fun runPerfScan() {
+        safeScope.launch {
+            _isScanning.value = true
+            // Let the scan UI paint its first frame before measuring.
+            delay(150)
+            val profile = runCatching {
+                com.example.data.local.PerfProfileStore.measure(app)
+            }.getOrElse {
+                com.example.data.local.PerfProfile.from(
+                    totalMemBytes = 0L,
+                    cores = Runtime.getRuntime().availableProcessors(),
+                    isLowRamDevice = app.isLowRamDevice
+                )
+            }
+            runCatching { app.perfProfileStore.save(profile) }
+            _devicePerf.value = profile
+            // A beat per detected item so the scan list reads naturally.
+            delay(500)
+            _isScanning.value = false
+            delay(350)
+            _needsPerfScan.value = false
+            // The image pipeline is tuned from the profile right away.
+            player.applyPerfProfile(profile)
+        }
+    }
+
+    private val _isScanning = MutableStateFlow(false)
+    val isScanning: StateFlow<Boolean> = _isScanning.asStateFlow()
+
+    private val _devicePerf = MutableStateFlow(
+        app.perfProfileStore.load() ?: com.example.data.local.PerfProfile.from(
+            totalMemBytes = 0L,
+            cores = Runtime.getRuntime().availableProcessors(),
+            isLowRamDevice = app.isLowRamDevice
+        )
+    )
+
+    /** The measured device profile — shown on the scan screen and Profile. */
+    val devicePerf: StateFlow<com.example.data.local.PerfProfile> = _devicePerf.asStateFlow()
+
     private val _searchResults = MutableStateFlow<List<Song>>(emptyList())
     val searchResults: StateFlow<List<Song>> = _searchResults.asStateFlow()
 
@@ -317,6 +428,217 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
 
     private var artistJob: Job? = null
     private var albumJob: Job? = null
+
+    // ------------------------------------------- v2.0.0: follow + radar rilis
+
+    /** Ids of artists the user follows — drives the Ikuti button state. */
+    val followedArtistIds: StateFlow<Set<Long>> = dao.getFollowedArtists()
+        .map { list -> list.mapTo(HashSet()) { it.artistId } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptySet())
+
+    /** New releases from followed artists — the Home "Radar Rilis" shelf. */
+    private val _releaseRadar = MutableStateFlow<List<AlbumInfo>>(emptyList())
+    val releaseRadar: StateFlow<List<AlbumInfo>> = _releaseRadar.asStateFlow()
+
+    /**
+     * Follow/unfollow an artist from the artist page. Followed artists feed
+     * the Home release-radar shelf (new albums within the last 90 days).
+     */
+    fun toggleFollowArtist(profile: ArtistProfile) {
+        safeScope.launch {
+            try {
+                if (followedArtistIds.value.contains(profile.artistIdKey())) {
+                    dao.unfollowArtist(profile.artistIdKey())
+                } else {
+                    dao.insertFollowedArtist(
+                        com.example.data.local.FollowedArtistEntity(
+                            artistId = profile.artistIdKey(),
+                            name = profile.name,
+                            pictureUrl = profile.pictureUrl
+                        )
+                    )
+                    loadReleaseRadar()
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Follow toggle failed: ${e.message}")
+            }
+        }
+    }
+
+    /** Deezer id as the Room key; profiles always carry it. */
+    private fun ArtistProfile.artistIdKey(): Long = id
+
+    /**
+     * Radar Rilis: the newest album of each followed artist, when it is
+     * younger than [RADAR_MAX_AGE_DAYS]. Fails soft per artist.
+     */
+    private suspend fun loadReleaseRadar() {
+        val ids = runCatching { dao.followedArtistIdsOnce() }.getOrDefault(emptyList())
+        if (ids.isEmpty()) {
+            _releaseRadar.value = emptyList()
+            return
+        }
+        val cutoff = java.time.LocalDate.now().minusDays(RADAR_MAX_AGE_DAYS)
+        val recent = ids.take(RADAR_ARTIST_LIMIT).mapNotNull { id ->
+            runCatching { repository.artistAlbums(id) }.getOrDefault(emptyList())
+                .filter { album ->
+                    runCatching {
+                        java.time.LocalDate.parse(album.releaseDate).isAfter(cutoff)
+                    }.getOrDefault(false)
+                }
+                .maxByOrNull { it.releaseDate }
+        }
+        _releaseRadar.value = recent
+            .sortedByDescending { it.releaseDate }
+            .distinctBy { it.id }
+    }
+
+    // ------------------------------------------- v2.0.0: cari pakai lirik
+
+    private val _lyricSearch = MutableStateFlow(LyricSearchUi.EMPTY)
+    val lyricSearch: StateFlow<LyricSearchUi> = _lyricSearch.asStateFlow()
+
+    private var lyricSearchJob: Job? = null
+
+    /**
+     * **Cari pakai lirik** — reverse lookup: a line of lyrics becomes the
+     * tracks those words belong to. LRCLIB identifies the song; the NOXA
+     * catalogue then resolves each hit into something actually playable.
+     */
+    fun searchByLyrics(fragment: String) {
+        lyricSearchJob?.cancel()
+        val trimmed = fragment.trim()
+        if (trimmed.length < com.example.data.remote.LyricsRepository.MIN_LYRIC_QUERY) {
+            _lyricSearch.value = LyricSearchUi.EMPTY
+            return
+        }
+        lyricSearchJob = safeScope.launch {
+            _isSearching.value = true
+            _lyricSearch.value = LyricSearchUi.EMPTY
+            val hits = runCatching { lyricsRepository.searchByLyricText(trimmed) }
+                .getOrDefault(emptyList())
+            val songs = hits.mapNotNull { hit ->
+                // "Artist - Title" is the most reliable catalogue query shape.
+                val found = runCatching {
+                    repository.search("${hit.artistName} ${hit.trackName}").take(5)
+                }.getOrDefault(emptyList())
+                found.firstOrNull { song ->
+                    song.title.contains(hit.trackName, ignoreCase = true) ||
+                        hit.trackName.contains(song.title, ignoreCase = true)
+                }
+            }.distinctBy { it.id }
+            _lyricSearch.value = LyricSearchUi(
+                query = trimmed,
+                songs = songs,
+                matchedLine = trimmed
+            )
+            _isSearching.value = false
+        }
+    }
+
+    /** Clears the lyric-search result (leaving the Search tab). */
+    fun clearLyricSearch() {
+        lyricSearchJob?.cancel()
+        _lyricSearch.value = LyricSearchUi.EMPTY
+    }
+
+    // --------------------------------------- v2.0.0: rating & jangan putar lagi
+
+    /** Song id → 1..5 stars. */
+    val songRatings: StateFlow<Map<String, Int>> = dao.getSongRatings()
+        .map { list -> list.associate { it.songId to it.rating } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
+
+    /** Muted songs and artists ("jangan putar lagi"). */
+    private val _mutedSongs = MutableStateFlow<Set<String>>(emptySet())
+    val mutedSongs: StateFlow<Set<String>> = _mutedSongs.asStateFlow()
+
+    private val _mutedArtists = MutableStateFlow<Set<String>>(emptySet())
+    val mutedArtists: StateFlow<Set<String>> = _mutedArtists.asStateFlow()
+
+    /** Loads the mute list once; kept reactive via the same collector. */
+    private fun observeMutedEntries() {
+        safeScope.launch {
+            dao.getMutedEntries().collect { entries ->
+                _mutedSongs.value = entries
+                    .filter { it.kind == com.example.data.local.MutedEntryEntity.KIND_SONG }
+                    .mapTo(HashSet()) { it.value }
+                _mutedArtists.value = entries
+                    .filter { it.kind == com.example.data.local.MutedEntryEntity.KIND_ARTIST }
+                    .mapTo(HashSet()) { it.value.lowercase() }
+            }
+        }
+    }
+
+    /** Stars 1..5, or 0 to clear the rating. */
+    fun rateSong(song: Song, rating: Int) {
+        safeScope.launch {
+            try {
+                if (rating <= 0) {
+                    dao.clearSongRating(song.id)
+                } else {
+                    dao.upsertSongRating(
+                        com.example.data.local.SongRatingEntity(
+                            songId = song.id,
+                            rating = rating.coerceIn(1, 5)
+                        )
+                    )
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Rating failed: ${e.message}")
+            }
+        }
+    }
+
+    /** "Jangan putar lagi" for one song; the current queue entry is dropped. */
+    fun muteSong(song: Song) {
+        safeScope.launch {
+            try {
+                dao.insertMuted(
+                    com.example.data.local.MutedEntryEntity(
+                        kind = com.example.data.local.MutedEntryEntity.KIND_SONG,
+                        value = song.id
+                    )
+                )
+                player.removeFromQueue(song)
+            } catch (e: Exception) {
+                Log.w(TAG, "Mute failed: ${e.message}")
+            }
+        }
+    }
+
+    /** "Jangan putar lagi" for a whole artist. */
+    fun muteArtist(song: Song) {
+        val artist = song.artist.trim()
+        if (artist.isEmpty()) return
+        safeScope.launch {
+            try {
+                dao.insertMuted(
+                    com.example.data.local.MutedEntryEntity(
+                        kind = com.example.data.local.MutedEntryEntity.KIND_ARTIST,
+                        value = artist
+                    )
+                )
+                player.uiState.value.queue
+                    .filter { it.artist.equals(artist, ignoreCase = true) && it.id != song.id }
+                    .forEach { player.removeFromQueue(it) }
+            } catch (e: Exception) {
+                Log.w(TAG, "Mute artist failed: ${e.message}")
+            }
+        }
+    }
+
+    /** Undo a mute from the profile settings. */
+    fun unmute(kind: String, value: String) {
+        safeScope.launch {
+            runCatching { dao.deleteMuted(kind, value) }
+        }
+    }
+
+    /** True when autoplay / mix generation must skip this song. */
+    private fun isMuted(song: Song): Boolean =
+        song.id in _mutedSongs.value ||
+            song.artist.trim().lowercase() in _mutedArtists.value
 
     // Room Favorites & History
     val favoriteSongs: StateFlow<List<Song>> = dao.getFavoriteSongs()
@@ -401,6 +723,57 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     private val _aiError = MutableStateFlow<String?>(null)
     val aiError: StateFlow<String?> = _aiError.asStateFlow()
 
+    // ---- collaborative-playlist state (declared BEFORE init on purpose:
+    // initializers run in declaration order, and init reloads the stored links
+    // — the same ordering trap that caused the v1.15.7 NPE).
+
+    private val sharedPlaylistPrefs by lazy {
+        getApplication<Application>().getSharedPreferences("noxa_shared_playlists", 0)
+    }
+
+    private val _sharedPlaylistUi = MutableStateFlow<SharedPlaylistUi>(SharedPlaylistUi.Idle)
+    val sharedPlaylistUi: StateFlow<SharedPlaylistUi> = _sharedPlaylistUi.asStateFlow()
+
+    /** Transient banners (sync result, push conflict) shown by the detail page. */
+    private val _sharedNotice = MutableStateFlow<String?>(null)
+    val sharedNotice: StateFlow<String?> = _sharedNotice.asStateFlow()
+
+    /** playlistId (as string, prefs-friendly) -> share code. */
+    private val _sharedLinks = MutableStateFlow<Map<String, String>>(emptyMap())
+    val sharedLinks: StateFlow<Map<String, String>> = _sharedLinks.asStateFlow()
+
+    /** Code for a linked playlist, for chips & share sheets. */
+    fun sharedCodeFor(playlistId: Long): String? =
+        _sharedLinks.value[playlistId.toString()]
+
+    fun consumeSharedPlaylistUi() {
+        if (_sharedPlaylistUi.value !is SharedPlaylistUi.Idle) {
+            _sharedPlaylistUi.value = SharedPlaylistUi.Idle
+        }
+    }
+
+    fun dismissSharedNotice() {
+        _sharedNotice.value = null
+    }
+
+    private fun rememberLink(playlistId: Long, code: String, baseUpdatedAt: Long) {
+        sharedPlaylistPrefs.edit()
+            .putString(linkKey(playlistId), code)
+            .putLong(baseKey(playlistId), baseUpdatedAt)
+            .apply()
+        _sharedLinks.update { it + (playlistId.toString() to code) }
+    }
+
+    private fun loadSharedLinks() {
+        val links = mutableMapOf<String, String>()
+        sharedPlaylistPrefs.all.forEach { (key, value) ->
+            if (key.startsWith("link_") && value is String && value.isNotBlank()) {
+                links[key.removePrefix("link_")] = value
+            }
+        }
+        _sharedLinks.value = links
+    }
+
     init {
         authManager.attemptSilentAutoSignIn(viewModelScope)
         restoreLastSession()
@@ -431,6 +804,15 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         observeWeeklyRecap()
         observeListeningTaste()
         observeYearListening()
+        observeMutedEntries()
+        // Preemptive preload: the next track's stream is resolved ahead of
+        // time so the transition has no loading pause (tier-sized window).
+        observePreloadNext()
+        // Crossfade starts in the player's hands from the very first frame.
+        player.crossfadeEnabled = settingsStore.crossfadeEnabled && app.perfProfile.crossfadeAllowed
+        // Collaborative-playlist links (playlistId -> share code) survive
+        // restarts; reload them so chips and share sheets know immediately.
+        loadSharedLinks()
         // Restore the NOXA AI transcript so the assistant keeps continuity.
         _aiMessages.value = aiRepository.loadHistory()
     }
@@ -655,6 +1037,46 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * **Preemptive preload** — the seamless-transition engine. While a track
+     * plays and the queue has a next item, once playback enters the tier's
+     * preload window (30 s HEMAT → 60 s NGEBUT), the next track's full stream
+     * is resolved in the background and swapped into ExoPlayer's timeline.
+     * When the song ends the player advances instantly: the URL is already
+     * buffered — no "memuat lagu" hold, no gap.
+     */
+    private var preloadedForId: String? = null
+
+    private fun observePreloadNext() {
+        safeScope.launch {
+            combine(player.uiState, player.progress) { s, p -> s to p }
+                .collect { (state, progress) ->
+                    if (!state.isPlaying) return@collect
+                    val idx = state.queueIndex
+                    if (idx < 0 || idx >= state.queue.lastIndex) return@collect
+                    val next = state.queue[idx + 1]
+                    if (next.id == preloadedForId || isMuted(next)) return@collect
+                    val duration = state.durationMs
+                    if (duration <= 0L) return@collect
+                    val remaining = duration - progress.positionMs
+                    if (remaining > app.perfProfile.preloadWindowMs) return@collect
+                    preloadedForId = next.id
+                    preloadStream(next)
+                }
+        }
+    }
+
+    /** Resolves the next track's stream and swaps it into the timeline. */
+    private fun preloadStream(song: Song) {
+        safeScope.launch {
+            val resolved = runCatching { resolvePlaybackSource(song) }.getOrNull()
+                ?: return@launch
+            if (resolved.streamUrl.isNotBlank() && resolved.streamUrl != song.streamUrl) {
+                player.updateSongStream(resolved)
+            }
+        }
+    }
+
     private fun appendSimilarTracks(song: Song, playedQueue: List<Song>) {
         safeScope.launch {
             val artistId = song.artistId.toLongOrNull()
@@ -667,7 +1089,8 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             }
             similar
                 .filter { candidate ->
-                    candidate.id != song.id && playedQueue.none { it.id == candidate.id }
+                    candidate.id != song.id && playedQueue.none { it.id == candidate.id } &&
+                        !isMuted(candidate)
                 }
                 .take(AUTOPLAY_APPEND_LIMIT)
                 .forEach { candidate ->
@@ -730,6 +1153,9 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 _pinnedSongs.value = feed.pinned
                 resolveMissingPins(feed.pinned)
                 _popularArtists.value = feed.artists
+                // Radar Rilis rides along with the home load — it is cheap
+                // (albums of already-followed artists only) and fails soft.
+                runCatching { loadReleaseRadar() }
                 if (feed.sections.isEmpty() && feed.hero == null) {
                     _homeError.value =
                         "Tidak ada data dari server musik. Periksa koneksi internet lalu coba lagi."
@@ -930,6 +1356,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     fun playSong(song: Song, queue: List<Song> = listOf(song), index: Int = 0) {
         _resumableSong.value = null
         autoplayAppendedFor = null
+        preloadedForId = null
         // YouTube tracks always need the policy — there is no other audio.
         // Deezer previews only *may* use YouTube for full-length audio, so the
         // dialog is asked once: accepted -> full audio attempted, declined ->
@@ -1246,6 +1673,11 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         player.setSleepTimer(minutes)
     }
 
+    /** Arms/disarms the "stop at the end of this song" sleep-timer mode. */
+    fun setSleepTimerEndOfTrack(enabled: Boolean = true) {
+        player.setSleepTimerEndOfTrack(enabled)
+    }
+
     fun setEqualizerPreset(presetName: String) {
         player.setEqualizerPreset(presetName)
     }
@@ -1402,6 +1834,15 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         safeScope.launch {
             dao.deletePlaylistSongs(id)
             dao.deletePlaylist(id)
+            // A deleted local copy breaks its collaboration link; drop the
+            // mapping so a stale code never resurfaces on a future playlist.
+            if (sharedLinks.value.containsKey(id.toString())) {
+                sharedPlaylistPrefs.edit()
+                    .remove(linkKey(id))
+                    .remove(baseKey(id))
+                    .apply()
+                _sharedLinks.update { links -> links - id.toString() }
+            }
         }
     }
 
@@ -1413,12 +1854,191 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     fun addSongToPlaylist(playlistId: Long, song: Song, position: Int = Int.MAX_VALUE) {
         safeScope.launch {
             dao.insertPlaylistSong(PlaylistSongEntity.fromSong(playlistId, song, position))
+            pushSharedPlaylist(playlistId)
         }
     }
 
     fun removeSongFromPlaylist(playlistId: Long, songId: String) {
         safeScope.launch {
             dao.deletePlaylistSong(playlistId, songId)
+            pushSharedPlaylist(playlistId)
+        }
+    }
+
+    // ------------------------------------------- collaborative playlists
+    //
+    // Playlists shared by 6-character code through the same keyless backend
+    // document as accounts & rooms. Links (playlistId -> code + last synced
+    // remote updatedAt) live in their own SharedPreferences file; the sync
+    // rule in [SharedPlaylistSync] refuses to overwrite a friend's newer edit.
+    //
+    // NOTE: the state properties for this feature are declared further up,
+    // *before* the init block — initializers run in declaration order and the
+    // init block loads the links (the v1.15.7 NPE lesson).
+
+    private fun linkKey(playlistId: Long) = "link_$playlistId"
+    private fun baseKey(playlistId: Long) = "base_$playlistId"
+
+    /**
+     * Publishes a local playlist under a fresh (or existing) share code.
+     * Result surfaces as [SharedPlaylistUi.Shared] with the code to hand out.
+     */
+    fun sharePlaylist(playlistId: Long) {
+        val user = authManager.currentUser.value
+        if (user == null) {
+            _sharedPlaylistUi.value = SharedPlaylistUi.Error(
+                "Masuk ke akun dulu — playlist kolaboratif terikat ke akun kamu."
+            )
+            return
+        }
+        val name = playlistSummaries.value
+            .firstOrNull { it.playlistId == playlistId }?.name ?: "Playlist"
+        val code = sharedCodeFor(playlistId) ?: SharedPlaylistCodes.newCode()
+        _sharedPlaylistUi.value = SharedPlaylistUi.Publishing(name)
+        safeScope.launch {
+            val songs = runCatching { dao.getPlaylistSongs(playlistId).first() }
+                .getOrNull().orEmpty().map { it.toSong() }
+            val now = System.currentTimeMillis()
+            val published = runCatching {
+                backend.publishSharedPlaylist(
+                    com.example.data.support.SharedPlaylist(
+                        code = code,
+                        name = name,
+                        ownerUid = user.uid,
+                        ownerName = user.displayName ?: user.email ?: "NOXA User",
+                        createdAt = now,
+                        updatedAt = now,
+                        songs = songs.map { com.example.data.support.SharedPlaylistSong.fromSong(it) }
+                    )
+                )
+            }.getOrNull()
+            if (published == null) {
+                _sharedPlaylistUi.value = SharedPlaylistUi.Error(
+                    "Server tidak terjangkau. Periksa koneksi lalu coba lagi."
+                )
+                return@launch
+            }
+            rememberLink(playlistId, published.code, published.updatedAt)
+            _sharedPlaylistUi.value = SharedPlaylistUi.Shared(published.code, published.name)
+        }
+    }
+
+    /**
+     * Looks up whatever the user pasted (bare code, link or share message).
+     * On success the flow carries a preview card; on failure an honest reason.
+     */
+    fun previewSharedPlaylist(input: String) {
+        val code = com.example.data.support.SharedPlaylistCodes.normalize(input)
+        if (!com.example.data.support.SharedPlaylistCodes.isValid(code)) {
+            _sharedPlaylistUi.value = SharedPlaylistUi.Error(
+                "Kode tidak dikenali. Tempel kode 6 karakter dari temanmu."
+            )
+            return
+        }
+        _sharedPlaylistUi.value = SharedPlaylistUi.Checking
+        safeScope.launch {
+            val remote = runCatching { backend.readSharedPlaylist(code) }.getOrNull()
+            if (remote == null) {
+                _sharedPlaylistUi.value = SharedPlaylistUi.Error(
+                    "Playlist \"$code\" tidak ditemukan atau server tidak terjangkau."
+                )
+            } else {
+                _sharedPlaylistUi.value = SharedPlaylistUi.Preview(remote)
+            }
+        }
+    }
+
+    /** Clones the previewed playlist into the local library, then links it. */
+    fun importSharedPlaylist() {
+        val preview = (_sharedPlaylistUi.value as? SharedPlaylistUi.Preview)?.playlist ?: return
+        _sharedPlaylistUi.value = SharedPlaylistUi.Importing
+        safeScope.launch {
+            val playlistId = runCatching {
+                val id = dao.insertPlaylist(
+                    PlaylistEntity(
+                        name = preview.name,
+                        description = "Kolaboratif • ${preview.code}"
+                    )
+                )
+                preview.songs.forEachIndexed { index, song ->
+                    dao.insertPlaylistSong(
+                        PlaylistSongEntity.fromSong(id, song.toSong(), index)
+                    )
+                }
+                id
+            }.getOrNull()
+            if (playlistId == null) {
+                _sharedPlaylistUi.value = SharedPlaylistUi.Error(
+                    "Gagal menyimpan playlist ke perangkat. Coba lagi."
+                )
+                return@launch
+            }
+            rememberLink(playlistId, preview.code, preview.updatedAt)
+            _sharedPlaylistUi.value = SharedPlaylistUi.Imported(
+                playlistId, preview.name, preview.songs.size
+            )
+        }
+    }
+
+    /** Pulls the remote list into the local playlist (manual sync button). */
+    fun syncSharedPlaylist(playlistId: Long) {
+        val code = sharedCodeFor(playlistId) ?: run {
+            _sharedNotice.value = "Playlist ini belum terhubung ke tautan kolaboratif."
+            return
+        }
+        safeScope.launch {
+            val remote = runCatching { backend.readSharedPlaylist(code) }.getOrNull()
+            if (remote == null) {
+                _sharedNotice.value = "Playlist kolaboratif tidak bisa diambil. Coba lagi nanti."
+                return@launch
+            }
+            val ok = runCatching {
+                dao.deletePlaylistSongs(playlistId)
+                remote.songs.forEachIndexed { index, song ->
+                    dao.insertPlaylistSong(
+                        PlaylistSongEntity.fromSong(playlistId, song.toSong(), index)
+                    )
+                }
+            }.isSuccess
+            if (!ok) {
+                _sharedNotice.value = "Gagal menyimpan hasil sinkron. Coba lagi."
+                return@launch
+            }
+            rememberLink(playlistId, code, remote.updatedAt)
+            _sharedNotice.value =
+                "Tersinkron • ${remote.songs.size} lagu dari ${remote.ownerName}"
+        }
+    }
+
+    /**
+     * Best-effort push after a local add/remove on a linked playlist. The
+     * remote is only overwritten while nobody else wrote since our last sync;
+     * otherwise a "pull to sync" notice appears instead of clobbering the
+     * friend's edit (see [SharedPlaylistSync]).
+     */
+    private fun pushSharedPlaylist(playlistId: Long) {
+        val code = sharedCodeFor(playlistId) ?: return
+        safeScope.launch {
+            val base = sharedPlaylistPrefs.getLong(baseKey(playlistId), 0L)
+            val remote = runCatching { backend.readSharedPlaylist(code) }.getOrNull()
+                ?: return@launch // offline: local edit stands; next sync reconciles
+            if (!com.example.data.support.SharedPlaylistSync.canPush(base, remote.updatedAt)) {
+                _sharedNotice.value =
+                    "Ada perubahan baru dari teman di playlist ini — buka lalu tekan Sinkron."
+                return@launch
+            }
+            val local = runCatching { dao.getPlaylistSongs(playlistId).first() }
+                .getOrNull() ?: return@launch
+            val published = runCatching {
+                backend.publishSharedPlaylist(
+                    remote.copy(
+                        songs = local.map {
+                            com.example.data.support.SharedPlaylistSong.fromSong(it.toSong())
+                        }
+                    )
+                )
+            }.getOrNull() ?: return@launch
+            rememberLink(playlistId, code, published.updatedAt)
         }
     }
 
@@ -1458,7 +2078,22 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 .getOrDefault(emptyList())
             val albums = runCatching { repository.artistAlbums(artistId) }
                 .getOrDefault(emptyList())
-            _artistUiState.value = ArtistUiState.Ready(profile, topSongs, albums)
+            // Enrichment is parallel and fails soft: a dead related-artist or
+            // Wikipedia endpoint only loses its own section, never the page.
+            val related = async {
+                runCatching { repository.relatedArtists(artistId, 12) }
+                    .getOrDefault(emptyList())
+            }
+            val bio = async {
+                runCatching { app.artistBioRepository.bioFor(profile.name) }.getOrNull()
+            }
+            _artistUiState.value = ArtistUiState.Ready(
+                profile = profile,
+                topSongs = topSongs,
+                albums = albums,
+                relatedArtists = related.await().filter { it.id != artistId },
+                bio = bio.await()
+            )
         }
     }
 

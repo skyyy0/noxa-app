@@ -13,7 +13,9 @@ import coil.memory.MemoryCache
 import coil.request.CachePolicy
 import com.example.data.local.AppSettingsStore
 import com.example.data.local.NoxaDatabase
+import com.example.data.local.PerfProfileStore
 import com.example.data.local.UsagePolicyStore
+import com.example.data.remote.ArtistBioRepository
 import com.example.data.remote.LyricsRepository
 import com.example.data.remote.MusicRepository
 import com.example.data.remote.StreamResolver
@@ -47,6 +49,28 @@ class NoxaApplication : Application(), ImageLoaderFactory {
     lateinit var appSettingsStore: AppSettingsStore
         private set
 
+    lateinit var perfProfileStore: PerfProfileStore
+        private set
+
+    lateinit var artistBioRepository: ArtistBioRepository
+        private set
+
+    /**
+     * **Sistem Pintar**: the one-time device profile (RAM, cores, chipset).
+     * Measured on first launch, then loaded from storage on every launch —
+     * [perfProfileStore] answers `isReady` synchronously so the app shell can
+     * decide whether to show the first-run scan before any coroutine exists.
+     */
+    val perfProfile: com.example.data.local.PerfProfile
+        get() = cachedPerfProfile ?: com.example.data.local.PerfProfile.from(
+            totalMemBytes = 0L,
+            cores = Runtime.getRuntime().availableProcessors(),
+            isLowRamDevice = isLowRamDevice
+        ).also { cachedPerfProfile = it }
+
+    @Volatile
+    private var cachedPerfProfile: com.example.data.local.PerfProfile? = null
+
     lateinit var player: NoxaAudioPlayer
         private set
 
@@ -77,6 +101,9 @@ class NoxaApplication : Application(), ImageLoaderFactory {
         youtubeSourceRepository = YouTubeSourceRepository()
         usagePolicyStore = UsagePolicyStore(this)
         appSettingsStore = AppSettingsStore(this)
+        perfProfileStore = PerfProfileStore(this)
+        cachedPerfProfile = perfProfileStore.load()
+        artistBioRepository = ArtistBioRepository()
         player = NoxaAudioPlayer(this)
         authManager = com.example.data.auth.AuthManager(this)
         connectMediaSession()

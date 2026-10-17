@@ -13,9 +13,12 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         HistorySongEntity::class,
         PlaylistEntity::class,
         PlaylistSongEntity::class,
-        PlayRecordEntity::class
+        PlayRecordEntity::class,
+        FollowedArtistEntity::class,
+        SongRatingEntity::class,
+        MutedEntryEntity::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class NoxaDatabase : RoomDatabase() {
@@ -73,6 +76,38 @@ abstract class NoxaDatabase : RoomDatabase() {
             }
         }
 
+/**
+ * Adds the v2.0.0 tables: `followed_artists` (artist follow + release radar),
+ * `song_ratings` (star ratings) and `muted_entries` ("jangan putar lagi").
+ * A real migration again — upgrading never discards listening data.
+ */
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `followed_artists` (" +
+                        "`artistId` INTEGER NOT NULL, " +
+                        "`name` TEXT NOT NULL, " +
+                        "`pictureUrl` TEXT NOT NULL, " +
+                        "`followedAt` INTEGER NOT NULL, " +
+                        "PRIMARY KEY(`artistId`))"
+                )
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `song_ratings` (" +
+                        "`songId` TEXT NOT NULL, " +
+                        "`rating` INTEGER NOT NULL, " +
+                        "`ratedAt` INTEGER NOT NULL, " +
+                        "PRIMARY KEY(`songId`))"
+                )
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `muted_entries` (" +
+                        "`kind` TEXT NOT NULL, " +
+                        "`value` TEXT NOT NULL, " +
+                        "`mutedAt` INTEGER NOT NULL, " +
+                        "PRIMARY KEY(`kind`, `value`))"
+                )
+            }
+        }
+
         fun getDatabase(context: Context): NoxaDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -80,7 +115,7 @@ abstract class NoxaDatabase : RoomDatabase() {
                     NoxaDatabase::class.java,
                     "noxa_music.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                     .fallbackToDestructiveMigration()
                     .build()
                 INSTANCE = instance

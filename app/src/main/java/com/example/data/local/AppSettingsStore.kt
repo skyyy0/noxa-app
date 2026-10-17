@@ -10,7 +10,8 @@ data class AppSettings(
     val mvQualityHeight: Int = AppSettingsStore.DEFAULT_MV_QUALITY,
     val autoplaySimilar: Boolean = true,
     val karaokeOverlay: Boolean = true,
-    val autoResumeOnOpen: Boolean = false
+    val autoResumeOnOpen: Boolean = false,
+    val crossfadeEnabled: Boolean = true
 )
 
 /**
@@ -54,12 +55,20 @@ class AppSettingsStore(context: Context) {
             prefs.edit().putBoolean(KEY_AUTO_RESUME, value).apply()
         }
 
+    /** Soft volume crossfade between consecutive tracks. */
+    var crossfadeEnabled: Boolean
+        get() = prefs.getBoolean(KEY_CROSSFADE, true)
+        set(value) {
+            prefs.edit().putBoolean(KEY_CROSSFADE, value).apply()
+        }
+
     companion object {
         private const val NAME = "noxa_app_settings"
         private const val KEY_MV_QUALITY = "mv_quality_height"
         private const val KEY_AUTOPLAY_SIMILAR = "autoplay_similar"
         private const val KEY_KARAOKE_OVERLAY = "karaoke_overlay"
         private const val KEY_AUTO_RESUME = "auto_resume_on_open"
+        private const val KEY_CROSSFADE = "crossfade_enabled"
 
         const val DEFAULT_MV_QUALITY = 360
 

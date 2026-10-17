@@ -46,6 +46,12 @@ data class PlayerUiState(
     val isShuffle: Boolean = false,
     val repeatMode: Int = Player.REPEAT_MODE_OFF,
     val sleepTimerMinutes: Int? = null,
+    /**
+     * True while the sleep timer is armed to stop **when the current song
+     * ends** instead of after a fixed number of minutes. Both modes report
+     * their countdown through [PlaybackProgress.sleepTimerRemainingSeconds].
+     */
+    val sleepTimerEndOfTrack: Boolean = false,
     /** Honest error surfaced to the UI (never hidden behind simulated playback). */
     val errorMessage: String? = null,
     val equalizerState: EqualizerState = EqualizerState()
@@ -136,6 +142,27 @@ class NoxaAudioPlayer(private val context: Context) {
     private var streamRetryCount = 0
     private var retryJob: Job? = null
 
+    /**
+     * Soft volume crossfade between consecutive tracks (v2.0.0). The volume
+     * curve is applied by the position updater via [CrossfadeRules]; it is
+     * suspended while a sleep timer owns the volume, so the timer's fade
+     * always wins.
+     */
+    var crossfadeEnabled: Boolean = true
+
+    /**
+     * **Sistem Pintar**: applies the measured device profile to everything
+     * this player controls — artwork crossfade length (the app-wide image
+     * pipeline reads it too) and crossfade availability on the weakest tier.
+     */
+    fun applyPerfProfile(profile: com.example.data.local.PerfProfile) {
+        if (!profile.crossfadeAllowed) crossfadeEnabled = false
+        perfTier = profile.tier.name
+    }
+
+    @Volatile
+    private var perfTier: String = com.example.data.local.PerfProfile.Tier.SEIMBANG.name
+
     init {
         setupPlayerListener()
         equalizerManager.init(exoPlayer.audioSessionId)
@@ -167,6 +194,17 @@ class NoxaAudioPlayer(private val context: Context) {
                 persistSession(force = true)
                 // A new track starts a fresh burst of error retries.
                 streamRetryCount = 0
+                // End-of-track safety net: the tick above pauses before the end,
+                // but a stream that reports its duration late can still race the
+                // transition. If a song auto-starts while the timer is armed,
+                // stop it right away — the timer's promise is "no more music
+                // after this song", and honouring it beats a perfect fade.
+                if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO &&
+                    _uiState.value.sleepTimerEndOfTrack
+                ) {
+                    exoPlayer.pause()
+                    cancelSleepTimer(restoreVolume = true)
+                }
                 if (song != null && reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) {
                     onAutoTransition?.invoke(song)
                 }
@@ -555,30 +593,89 @@ class NoxaAudioPlayer(private val context: Context) {
     }
 
     fun setSleepTimer(minutes: Int?) {
-        sleepTimer?.cancel()
-        sleepTimer = null
+        cancelSleepTimer(restoreVolume = true)
 
-        if (minutes == null || minutes <= 0) {
-            _uiState.update { it.copy(sleepTimerMinutes = null) }
-            _progress.update { it.copy(sleepTimerRemainingSeconds = null) }
-            return
-        }
+        if (minutes == null || minutes <= 0) return
 
         val totalMs = minutes * 60 * 1000L
-        _uiState.update { it.copy(sleepTimerMinutes = minutes) }
+        _uiState.update { it.copy(sleepTimerMinutes = minutes, sleepTimerEndOfTrack = false) }
         _progress.update { it.copy(sleepTimerRemainingSeconds = totalMs / 1000) }
 
-        sleepTimer = object : CountDownTimer(totalMs, 1000) {
+        sleepTimer = object : CountDownTimer(totalMs, 500L) {
             override fun onTick(millisUntilFinished: Long) {
                 _progress.update { it.copy(sleepTimerRemainingSeconds = millisUntilFinished / 1000) }
+                // The last [SleepTimerRules.FADE_MS] ramp the volume down so
+                // the music *fades* to sleep instead of being cut dead.
+                exoPlayer.volume = SleepTimerRules.fadeVolume(millisUntilFinished)
+                if (SleepTimerRules.shouldStop(millisUntilFinished)) finishSleepTimer()
             }
 
             override fun onFinish() {
-                exoPlayer.pause()
-                _uiState.update { it.copy(isPlaying = false, sleepTimerMinutes = null) }
-                _progress.update { it.copy(sleepTimerRemainingSeconds = null) }
+                finishSleepTimer()
             }
         }.start()
+    }
+
+    /**
+     * Arms (or disarms) the "stop when this song ends" timer. The countdown
+     * mirrors the real remaining track time and the audio fades over the last
+     * [SleepTimerRules.END_OF_TRACK_FADE_MS]; while the duration is still
+     * unknown the timer waits instead of firing blind.
+     */
+    fun setSleepTimerEndOfTrack(enabled: Boolean) {
+        cancelSleepTimer(restoreVolume = true)
+        if (!enabled) return
+        _uiState.update { it.copy(sleepTimerEndOfTrack = true, sleepTimerMinutes = null) }
+        _progress.update { it.copy(sleepTimerRemainingSeconds = null) }
+        updateEndOfTrackTick()
+    }
+
+    /** True while either sleep-timer mode is armed. */
+    fun hasSleepTimer(): Boolean =
+        _uiState.value.sleepTimerMinutes != null || _uiState.value.sleepTimerEndOfTrack
+
+    /**
+     * Called from the position updater (every ~500 ms) while the end-of-track
+     * timer is armed: publishes the honest remaining time, fades the volume in
+     * the final stretch and stops playback right at the end of the song.
+     */
+    private fun updateEndOfTrackTick() {
+        if (!_uiState.value.sleepTimerEndOfTrack) return
+        val duration = if (exoPlayer.duration > 0) {
+            exoPlayer.duration
+        } else {
+            _progress.value.durationMs
+        }
+        val remaining = SleepTimerRules.endOfTrackRemainingMs(exoPlayer.currentPosition, duration)
+        if (remaining == null) {
+            // Duration unknown — keep waiting rather than guessing.
+            _progress.update { it.copy(sleepTimerRemainingSeconds = null) }
+            return
+        }
+        _progress.update { it.copy(sleepTimerRemainingSeconds = remaining / 1000) }
+        if (remaining <= SleepTimerRules.END_OF_TRACK_FADE_MS) {
+            exoPlayer.volume = SleepTimerRules.fadeVolume(
+                remaining, SleepTimerRules.END_OF_TRACK_FADE_MS
+            )
+        }
+        if (SleepTimerRules.shouldStop(remaining)) finishSleepTimer()
+    }
+
+    /** Stops playback at zero, clears both timer modes and restores volume. */
+    private fun finishSleepTimer() {
+        if (exoPlayer.isPlaying) exoPlayer.pause()
+        cancelSleepTimer(restoreVolume = true)
+    }
+
+    /** Clears timer state; [restoreVolume] undoes a fade already in progress. */
+    private fun cancelSleepTimer(restoreVolume: Boolean) {
+        sleepTimer?.cancel()
+        sleepTimer = null
+        if (restoreVolume) exoPlayer.volume = 1f
+        if (_uiState.value.sleepTimerMinutes != null || _uiState.value.sleepTimerEndOfTrack) {
+            _uiState.update { it.copy(sleepTimerMinutes = null, sleepTimerEndOfTrack = false) }
+            _progress.update { it.copy(sleepTimerRemainingSeconds = null) }
+        }
     }
 
     fun setEqualizerPreset(presetName: String) {
@@ -684,6 +781,8 @@ class NoxaAudioPlayer(private val context: Context) {
                     _uiState.value.durationMs
                 }
                 _progress.update { it.copy(positionMs = current, durationMs = duration) }
+                applyCrossfadeVolume(current, duration)
+                updateEndOfTrackTick()
                 persistSession(force = false)
                 delay(POSITION_TICK_MS)
             }
@@ -695,12 +794,52 @@ class NoxaAudioPlayer(private val context: Context) {
         positionUpdateJob = null
     }
 
+    /**
+     * Drives the crossfade volume curve every tick. A sleep timer (which sets
+     * its own volume) takes priority; when crossfade is off the volume is
+     * restored to full exactly once instead of being written every tick.
+     */
+    private var lastCrossfadeApplied: Boolean? = null
+
+    private fun applyCrossfadeVolume(positionMs: Long, durationMs: Long) {
+        val timerOwnsVolume = hasSleepTimer()
+        val active = crossfadeEnabled && !timerOwnsVolume
+        if (!active) {
+            if (lastCrossfadeApplied != false && !timerOwnsVolume) {
+                exoPlayer.volume = 1f
+            }
+            lastCrossfadeApplied = false
+            return
+        }
+        exoPlayer.volume = CrossfadeRules.volumeAt(positionMs, durationMs, enabled = true)
+        lastCrossfadeApplied = true
+    }
+
+    /** Drops a song from the queue ("jangan putar lagi"); skips it if playing. */
+    fun removeFromQueue(song: Song) {
+        val index = (0 until exoPlayer.mediaItemCount)
+            .firstOrNull { exoPlayer.getMediaItemAt(it).mediaId == song.id } ?: return
+        if (index == exoPlayer.currentMediaItemIndex) {
+            if (exoPlayer.hasNextMediaItem()) {
+                exoPlayer.seekToNextMediaItem()
+            }
+        }
+        // Re-fetch after the possible skip: indices may have shifted.
+        val removeAt = (0 until exoPlayer.mediaItemCount)
+            .firstOrNull { exoPlayer.getMediaItemAt(it).mediaId == song.id }
+        if (removeAt != null) {
+            exoPlayer.removeMediaItem(removeAt)
+            syncQueueFromPlayer()
+            persistSession(force = true)
+        }
+    }
+
     private fun isPlayable(url: String): Boolean =
         url.startsWith("http://") || url.startsWith("https://")
 
     fun release() {
         stopPositionUpdater()
-        sleepTimer?.cancel()
+        cancelSleepTimer(restoreVolume = false)
         equalizerManager.release()
         exoPlayer.release()
     }

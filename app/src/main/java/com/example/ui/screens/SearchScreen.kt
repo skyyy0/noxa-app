@@ -30,6 +30,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Subject
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -49,6 +50,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -90,8 +92,20 @@ fun SearchScreen(
     onOpenArtist: (String, String) -> Unit = { _, _ -> },
     /** Card name → artwork URL (artist photos, chart covers) for the browse grid. */
     genreImages: Map<String, String> = emptyMap(),
+    /** v2.0.0 — hasil "Cari pakai lirik" (reverse lookup via LRCLIB). */
+    lyricSearch: com.example.ui.viewmodel.LyricSearchUi = com.example.ui.viewmodel.LyricSearchUi.EMPTY,
+    onSearchByLyrics: (String) -> Unit = {},
+    onClearLyricSearch: () -> Unit = {},
+    /** v2.0.0 — rating bintang & "jangan putar lagi". */
+    songRatings: Map<String, Int> = emptyMap(),
+    onRateSong: (Song, Int) -> Unit = { _, _ -> },
+    onMuteSong: (Song) -> Unit = {},
+    onMuteArtist: (Song) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    // "Cari pakai lirik" mode: type a line of lyrics, get the songs back.
+    var lyricMode by remember { mutableStateOf(false) }
+
     val genres = remember {
         listOf(
             BrowseGenre("Dewa 19", Color(0xFFE50914)),
@@ -129,10 +143,23 @@ fun SearchScreen(
         ) {
             TextField(
                 value = searchQuery,
-                onValueChange = onQueryChange,
+                onValueChange = { text ->
+                    if (lyricMode) {
+                        // In lyric mode every keystroke goes to the reverse
+                        // lookup instead of the catalogue search.
+                        onQueryChange(text)
+                        onSearchByLyrics(text)
+                    } else {
+                        onQueryChange(text)
+                    }
+                },
                 placeholder = {
                     Text(
-                        text = "Songs, artists, podcasts...",
+                        text = if (lyricMode) {
+                            "Ketik sepenggal lirik yang kamu ingat..."
+                        } else {
+                            "Songs, artists, podcasts..."
+                        },
                         color = NoxaTextTertiary,
                         fontSize = 14.sp
                     )
@@ -146,7 +173,12 @@ fun SearchScreen(
                 },
                 trailingIcon = {
                     if (searchQuery.isNotEmpty()) {
-                        IconButton(onClick = { onQueryChange("") }) {
+                        IconButton(
+                            onClick = {
+                                onQueryChange("")
+                                if (lyricMode) onClearLyricSearch()
+                            }
+                        ) {
                             Icon(
                                 imageVector = Icons.Default.Clear,
                                 contentDescription = "Clear",
@@ -172,15 +204,131 @@ fun SearchScreen(
             )
         }
 
-        Spacer(modifier = Modifier.height(10.dp))
+        // Mode chips: normal title/artist search vs "Cari pakai lirik".
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            SearchModeChip(
+                label = "Judul & artis",
+                selected = !lyricMode,
+                onClick = {
+                    if (lyricMode) {
+                        lyricMode = false
+                        onClearLyricSearch()
+                    }
+                },
+                testTag = "search_mode_titles"
+            )
+            SearchModeChip(
+                label = "Cari pakai lirik",
+                selected = lyricMode,
+                onClick = { lyricMode = true },
+                testTag = "search_mode_lyrics"
+            )
+        }
+
+        Spacer(modifier = Modifier.height(6.dp))
 
         // Provider filter chips were removed on purpose: showing "YouTube",
         // "Deezer" or "Audius" made NOXA look like a front for other music
         // apps. The merged result list now stands on its own, provider-neutral.
         val filteredResults = searchResults
 
-        // Body: Results or Browse Genres
-        if (isSearching) {
+        // Body: lyric mode shows the reverse-lookup results with the
+        // matched line quoted above each group of hits.
+        if (lyricMode && isSearching) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(top = 40.dp),
+                contentAlignment = Alignment.TopCenter
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(22.dp),
+                        color = NoxaLime,
+                        strokeWidth = 2.dp
+                    )
+                    Text(
+                        text = "Mencari lirik...",
+                        color = NoxaTextSecondary,
+                        fontSize = 14.sp
+                    )
+                }
+            }
+        } else if (lyricMode) {
+            if (lyricSearch.songs.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(32.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            imageVector = Icons.Default.Subject,
+                            contentDescription = null,
+                            tint = NoxaTextTertiary,
+                            modifier = Modifier.size(48.dp)
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = if (lyricSearch.query.isEmpty()) {
+                                "Ketik sepenggal lirik — misalnya\n\"kuingin kau tahu perasaanku\""
+                            } else {
+                                "Belum ada lagu yang cocok dengan lirik itu.\nCoba potongan lain yang lebih panjang."
+                            },
+                            color = NoxaTextSecondary,
+                            fontSize = 14.sp,
+                            textAlign = TextAlign.Center,
+                            lineHeight = 20.sp
+                        )
+                    }
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(bottom = 120.dp, start = 8.dp, end = 8.dp)
+                ) {
+                    item {
+                        // The matched lyric line, quoted — so the user sees
+                        // *why* each result came back.
+                        Text(
+                            text = "\"${lyricSearch.matchedLine}\"",
+                            color = NoxaLime,
+                            fontSize = 14.sp,
+                            fontStyle = FontStyle.Italic,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
+                        )
+                    }
+                    itemsIndexed(lyricSearch.songs, key = { _, song -> song.id }) { index, song ->
+                        SongListItem(
+                            song = song,
+                            isPlaying = song.id == currentPlayingSongId,
+                            isFavorite = favoriteIds.contains(song.id),
+                            onPlay = { onPlaySong(song, lyricSearch.songs, index) },
+                            onToggleFavorite = { onToggleFavorite(song) },
+                            onPlayNext = { onPlayNext(song) },
+                            onOpenArtist = onOpenArtist,
+                            onAddToQueue = { onAddToQueue(song) },
+                            onAddToPlaylist = { onAddToPlaylist(song) },
+                            onShare = { onShare(song) },
+                            rating = songRatings[song.id] ?: 0,
+                            onRate = onRateSong,
+                            onMuteSong = { onMuteSong(song) },
+                            onMuteArtist = { onMuteArtist(song) },
+                            modifier = Modifier.padding(horizontal = 4.dp)
+                        )
+                    }
+                }
+            }
+        } else if (isSearching) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -250,6 +398,10 @@ fun SearchScreen(
                         onAddToQueue = { onAddToQueue(song) },
                         onAddToPlaylist = { onAddToPlaylist(song) },
                         onShare = { onShare(song) },
+                        rating = songRatings[song.id] ?: 0,
+                        onRate = onRateSong,
+                        onMuteSong = { onMuteSong(song) },
+                        onMuteArtist = { onMuteArtist(song) },
                         modifier = Modifier.padding(horizontal = 4.dp)
                     )
                 }
@@ -328,5 +480,38 @@ fun SearchScreen(
                 }
             }
         }
+    }
+}
+
+/**
+ * One pill in the search-mode row (Judul & artis / Cari pakai lirik).
+ * Lime-filled when selected; hairline border when not.
+ */
+@Composable
+private fun SearchModeChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    testTag: String
+) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(20.dp))
+            .background(if (selected) NoxaLime else NoxaSurfaceElevated)
+            .border(
+                1.dp,
+                if (selected) NoxaLime else NoxaBorder,
+                RoundedCornerShape(20.dp)
+            )
+            .clickable { onClick() }
+            .padding(horizontal = 14.dp, vertical = 7.dp)
+            .testTag(testTag)
+    ) {
+        Text(
+            text = label,
+            color = if (selected) NoxaBlack else NoxaTextSecondary,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold
+        )
     }
 }

@@ -89,6 +89,49 @@ data class PlayRecordEntity(
     val playedAt: Long = System.currentTimeMillis()
 )
 
+/**
+ * An artist the user follows. Backs the "Ikuti" button on the artist page
+ * and the Home "Radar Rilis" shelf (new albums from followed artists).
+ */
+@Entity(tableName = "followed_artists")
+data class FollowedArtistEntity(
+    @PrimaryKey val artistId: Long,
+    val name: String,
+    val pictureUrl: String = "",
+    val followedAt: Long = System.currentTimeMillis()
+)
+
+/**
+ * A 1–5 star rating the user gave a song. Ratings steer Mix Sky and autoplay:
+ * higher-rated songs are picked more often.
+ */
+@Entity(tableName = "song_ratings")
+data class SongRatingEntity(
+    @PrimaryKey val songId: String,
+    val rating: Int,
+    val ratedAt: Long = System.currentTimeMillis()
+)
+
+/**
+ * A "jangan putar lagi" order: either one song (kind = `song`, value = song
+ * id) or a whole artist (kind = `artist`, value = artist name). Muted entries
+ * are filtered out of autoplay, Mix Sky and auto-appended similar tracks.
+ */
+@Entity(
+    tableName = "muted_entries",
+    primaryKeys = ["kind", "value"]
+)
+data class MutedEntryEntity(
+    val kind: String,
+    val value: String,
+    val mutedAt: Long = System.currentTimeMillis()
+) {
+    companion object {
+        const val KIND_SONG = "song"
+        const val KIND_ARTIST = "artist"
+    }
+}
+
 @Entity(tableName = "playlists")
 data class PlaylistEntity(
     @PrimaryKey(autoGenerate = true) val playlistId: Long = 0,

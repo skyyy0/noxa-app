@@ -306,7 +306,9 @@ class DeezerRepository {
             releaseYear = releaseDate?.take(4).orEmpty(),
             trackCount = nbTracks ?: 0,
             artistName = artist?.name?.trim().orEmpty(),
-            artistId = artist?.id ?: fallbackArtistId
+            artistId = artist?.id ?: fallbackArtistId,
+            type = recordType?.trim().orEmpty(),
+            releaseDate = releaseDate.orEmpty()
         )
     }
 

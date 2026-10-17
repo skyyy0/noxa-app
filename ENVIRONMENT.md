@@ -596,6 +596,46 @@ service cloud.firestore {
     `Log.v`/`Log.d` (URL stream, email) dari APK release; `i/w/e` tetap
     ada untuk diagnostik jujur.
 
+### v2.0.0 — Sistem Pintar, follow artis + radar rilis, cari pakai lirik
+
+Rilis besar pertama NOXA 2.x: aplikasi kini mengenali perangkatnya sendiri
+sebelum memutar apa pun, dan tiga alat baru untuk menemukan musik.
+
+* **Sistem Pintar (sekali di awal)** — saat pertama dibuka, NOXA memindai
+  RAM, jumlah inti prosesor, dan chipset, lalu memilih satu tier performa:
+  **Hemat** (≤ 2 GB / flag low-RAM), **Seimbang** (≤ 6 GB), atau **Ngebut**.
+  Tier ini menentukan berapa banyak lagu yang di-*warm* di depan (1/2/4),
+  jendela pra-muat stream (30/45/60 detik sebelum lagu habis), panjang
+  fade artwork, dan apakah crossfade diizinkan (HP kelas Hemat melewatkannya
+  demi kelancaran). Layar pemindaian tampil sekali, lengkap dengan daftar
+  probe yang menyala satu per satu; hasilnya bisa dilihat di Profile →
+  Sistem Pintar. Aturannya murni dan punya unit test (`PerfProfileTest`).
+* **Ikuti artis + Radar Rilis** — tombol **Ikuti** di halaman artis menyimpan
+  artis ke Room (`followed_artists`); Home kini punya shelf **Radar Rilis**
+  berisi album baru (≤ 90 hari) dari artis yang diikuti, lengkap dengan
+  tipe rilis (Album/Single/EP) dan tanggal rilisnya. Migrasi Room 3→4
+  menambah tabel tanpa menyentuh data lama.
+* **Cari pakai lirik** — di Search ada mode baru: ketik sepenggal lirik
+  (mis. "kuingin kau tahu perasaanku"), LRCLIB mencari lagu mana yang
+  membawa kata-kata itu, lalu NOXA mencocokkannya ke katalog yang benar-benar
+  bisa diputar. Baris lirik yang dicocokkan ditampilkan di atas hasil.
+* **Crossfade lembut** — transisi antar lagu kini punya kurva volume
+  (`CrossfadeRules`: fade-out 4 dtk di ekor lagu, fade-in 1,5 dtk di awal
+  berikutnya), bisa dimatikan di Pengaturan → Pemutar. Lagu yang durasinya
+  lebih pendek dari gabungan kedua fade tetap konstan 0,5 agar tetap
+  terdengar. Sleep timer tetap mendapat prioritas atas volume.
+* **Tema dinamis artwork** — latar pemutar penuh mengambil warna dominan
+  dari sampul lagu yang sedang diputar (kuantisasi 64 px, warna kelabu &
+  terlalu gelap diabaikan), jadi pemutar ikut "bernapas" mengikuti album.
+* **Gestur swipe-down di pemutar penuh** — gagang di atas bisa ditarik ke
+  bawah untuk menutup pemutar (iOS-style); sheet mengikuti jari, meredup
+  seiring jarak tarikan, lalu menutup atau memantul kembali.
+* **Beri bintang & "Jangan putar lagi"** — menu ⋮ di baris lagu mana pun
+  (Search, Artist, Library) kini punya rating 1–5 bintang serta pembisuan
+  per lagu dan per artis. Lagu/artis yang dibisukan dikeluarkan dari antrian
+  dan dilewati oleh autoplay; daftarnya bisa dibatalkan per item di
+  Profile → Jangan putar lagi.
+
 ## Variabel `.env` (semuanya opsional)
 
 | Variabel | Wajib | Keterangan |
