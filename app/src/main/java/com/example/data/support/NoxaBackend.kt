@@ -71,7 +71,9 @@ data class BackendLogin(
     val email: String,
     val username: String,
     val role: AccountRole,
-    val createdAt: Long = 0L
+    val createdAt: Long = 0L,
+    /** Presence stamp — drives "aktif hari ini" / "online" in the console. */
+    val lastSeenAt: Long = 0L
 )
 
 /** Outcome of a remote authentication attempt. */
@@ -365,6 +367,24 @@ class NoxaBackend {
             state.update = info
             true
         } == true
+
+    /**
+     * Presence heartbeat: stamps [uid]'s `lastSeenAt` so the dev console can
+     * answer "siapa yang aktif hari ini / sedang online". Deliberately
+     * throttled — the write is skipped entirely unless the stored stamp is
+     * older than [PRESENCE_THROTTLE_MS], so an open app writes the shared
+     * document at most once every few minutes no matter how often the
+     * caller ticks. Returns true when a write actually happened.
+     */
+    suspend fun heartbeat(uid: String): Boolean = withContext(Dispatchers.IO) {
+        val now = System.currentTimeMillis()
+        val state = readState() ?: return@withContext false
+        val account = state.accounts.values.firstOrNull { it.uid == uid }
+            ?: return@withContext false
+        if (now - account.lastSeenAt < PRESENCE_THROTTLE_MS) return@withContext false
+        state.accounts[account.email] = account.copy(lastSeenAt = now)
+        writeState(state)
+    }
 
     /** Changes an account's role (used by the dev console). */
     suspend fun updateRole(uid: String, role: AccountRole): Boolean {
@@ -711,7 +731,13 @@ class NoxaBackend {
         /** Last username change (ms) — drives the 7-day cooldown. */
         val lastUsernameChangeAt: Long = 0L,
         /** Last password change (ms) — drives the 14-day cooldown. */
-        val lastPasswordChangeAt: Long = 0L
+        val lastPasswordChangeAt: Long = 0L,
+        /**
+         * Presence stamp: the last time this account was seen using NOXA.
+         * Written by the client heartbeat (throttled server-side so a busy
+         * install can never flood the shared document with writes).
+         */
+        val lastSeenAt: Long = 0L
     )
 
     /**
@@ -797,7 +823,8 @@ class NoxaBackend {
                 role = AccountRole.from(obj.optString("role")),
                 createdAt = obj.optLong("createdAt"),
                 lastUsernameChangeAt = obj.optLong("lastUsernameChangeAt"),
-                lastPasswordChangeAt = obj.optLong("lastPasswordChangeAt")
+                lastPasswordChangeAt = obj.optLong("lastPasswordChangeAt"),
+                lastSeenAt = obj.optLong("lastSeenAt")
             )
         }
         val threads = json.optJSONObject("threads") ?: JSONObject()
@@ -916,6 +943,7 @@ class NoxaBackend {
                     .put("createdAt", account.createdAt)
                     .put("lastUsernameChangeAt", account.lastUsernameChangeAt)
                     .put("lastPasswordChangeAt", account.lastPasswordChangeAt)
+                    .put("lastSeenAt", account.lastSeenAt)
             )
         }
         val threads = JSONObject()
@@ -1188,6 +1216,13 @@ class NoxaBackend {
 
         /** How often a read is retried before giving up (slow/rate-limited CDN). */
         private const val READ_ATTEMPTS = 3
+
+        /**
+         * Presence writes are coalesced to one per window — the heartbeat
+         * exists only for the console's "active today / online" cards, so a
+         * stamp that fresh is not worth a whole-document write.
+         */
+        private const val PRESENCE_THROTTLE_MS = 3L * 60 * 1000
 
         /** Returned to callers when the backend itself is unreachable. */
         const val UNREACHABLE = "server_noxa_tidak_tersedia"

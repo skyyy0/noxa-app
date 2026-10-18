@@ -3,6 +3,7 @@ package com.example.ui.screens
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,6 +26,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material3.CircularProgressIndicator
@@ -55,6 +57,7 @@ import com.example.data.model.AlbumInfo
 import com.example.data.model.ArtistProfile
 import com.example.data.model.Song
 import com.example.ui.components.SongListItem
+import com.example.ui.i18n.string
 import com.example.ui.components.noxaAppear
 import com.example.ui.components.noxaTap
 import com.example.ui.theme.NoxaBlack
@@ -102,6 +105,9 @@ fun ArtistScreen(
     state: ArtistUiState,
     favoriteIds: Set<String>,
     currentPlayingSongId: String?,
+    /** Live playback state — "Putar semua" toggles to Jeda/Lanjutkan. */
+    isPlaying: Boolean = false,
+    onTogglePlayPause: () -> Unit = {},
     isFollowing: Boolean,
     onToggleFollow: () -> Unit,
     onBack: () -> Unit,
@@ -167,6 +173,8 @@ fun ArtistScreen(
 
             is ArtistUiState.Ready -> {
                 ArtistPageContent(
+                    isPlaying = isPlaying,
+                    onTogglePlayPause = onTogglePlayPause,
                     state = state,
                     favoriteIds = favoriteIds,
                     currentPlayingSongId = currentPlayingSongId,
@@ -196,6 +204,9 @@ private fun ArtistPageContent(
     state: ArtistUiState.Ready,
     favoriteIds: Set<String>,
     currentPlayingSongId: String?,
+    /** Live playback state — "Putar semua" toggles to Jeda/Lanjutkan. */
+    isPlaying: Boolean = false,
+    onTogglePlayPause: () -> Unit = {},
     isFollowing: Boolean,
     onToggleFollow: () -> Unit,
     onBack: () -> Unit,
@@ -218,6 +229,7 @@ private fun ArtistPageContent(
     val albums = state.albums
     val relatedArtists = state.relatedArtists
     val bio = state.bio
+    val insights = state.insights
 
     val scroll = rememberScrollState()
     // The hero photo drifts at half scroll speed — the parallax anchor.
@@ -311,23 +323,70 @@ private fun ArtistPageContent(
                     .padding(horizontal = 20.dp, vertical = 4.dp),
                 horizontalArrangement = Arrangement.spacedBy(18.dp)
             ) {
+                // Scraped YouTube subscribers beat Deezer's nb_fan as the
+                // headline "listeners" figure; Deezer fans stay as fallback.
+                val audience = insights?.youtubeSubscribers ?: profile.fanCount
                 StatBlock(
-                    value = FormatUtils.formatCount(profile.fanCount),
-                    label = "pendengar",
+                    value = FormatUtils.formatCount(audience),
+                    label = if (insights?.youtubeSubscribers != null) {
+                        "subscriber YouTube"
+                    } else {
+                        string("artist.fans")
+                    },
                     modifier = Modifier.weight(1f)
                 )
                 if (profile.albumCount > 0) {
                     StatBlock(
                         value = profile.albumCount.toString(),
-                        label = "rilisan",
+                        label = string("artist.releases"),
                         modifier = Modifier.weight(1f)
                     )
                 }
                 StatBlock(
                     value = topSongs.size.toString(),
-                    label = "lagu teratas",
+                    label = string("artist.topTracks"),
                     modifier = Modifier.weight(1f)
                 )
+            }
+
+            // Scraped facts: genre • origin • years active. Only what the
+            // sources actually answered — empty chips never render.
+            val factChips = remember(insights) {
+                buildList {
+                    insights?.genres?.takeIf { it.isNotEmpty() }
+                        ?.let { add(it.joinToString(" • ")) }
+                    listOfNotNull(
+                        insights?.country,
+                        insights?.activeSince?.let { "aktif sejak $it" }
+                    ).takeIf { it.isNotEmpty() }?.let { add(it.joinToString(" • ")) }
+                }
+            }
+            if (factChips.isNotEmpty()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 20.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    factChips.forEach { chip ->
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(20.dp))
+                                .background(NoxaSurfaceElevated)
+                                .border(1.dp, NoxaBorder, RoundedCornerShape(20.dp))
+                                .padding(horizontal = 12.dp, vertical = 6.dp)
+                        ) {
+                            Text(
+                                text = chip,
+                                color = NoxaTextSecondary,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 1
+                            )
+                        }
+                    }
+                }
             }
 
             // ------------------------------------------- action row + follow
@@ -339,23 +398,39 @@ private fun ArtistPageContent(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 if (topSongs.isNotEmpty()) {
+                    // Live toggle: while a top song of THIS artist is the
+                    // current song, the button pauses/resumes instead of
+                    // restarting the shelf from the top.
+                    val topActive = currentPlayingSongId != null &&
+                        topSongs.any { it.id == currentPlayingSongId }
                     Row(
                         modifier = Modifier
                             .clip(RoundedCornerShape(24.dp))
                             .background(NoxaLime)
-                            .noxaTap { onPlaySong(topSongs[0], topSongs, 0) }
+                            .noxaTap {
+                                if (topActive) onTogglePlayPause()
+                                else onPlaySong(topSongs[0], topSongs, 0)
+                            }
                             .padding(horizontal = 24.dp, vertical = 11.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
-                            imageVector = Icons.Default.PlayArrow,
+                            imageVector = if (topActive && isPlaying) {
+                                Icons.Default.Pause
+                            } else {
+                                Icons.Default.PlayArrow
+                            },
                             contentDescription = null,
                             tint = NoxaBlack,
                             modifier = Modifier.size(20.dp)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "Putar semua",
+                            text = when {
+                                topActive && isPlaying -> "Jeda"
+                                topActive -> "Lanjutkan"
+                                else -> "Putar semua"
+                            },
                             color = NoxaBlack,
                             fontSize = 14.sp,
                             fontWeight = FontWeight.Bold
@@ -379,7 +454,7 @@ private fun ArtistPageContent(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = if (isFollowing) "Diikuti" else "Ikuti",
+                        text = if (isFollowing) string("artist.following") else string("artist.follow"),
                         color = if (isFollowing) NoxaLime else NoxaTextPrimary,
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Bold

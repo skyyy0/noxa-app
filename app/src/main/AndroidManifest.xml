@@ -17,6 +17,13 @@
         jujur dan aplikasi tetap berjalan normal.
     -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!--
+        In-app update: without this manifest permission Android 8+ never
+        offers the system package installer for a downloaded APK — the share
+        sheet only shows file-handling apps (Termux, ShareIt, WPS) because
+        nothing claims "install packages" for us.
+    -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!--
         Security hardening (v1.15.8): backup & device-transfer are OFF.

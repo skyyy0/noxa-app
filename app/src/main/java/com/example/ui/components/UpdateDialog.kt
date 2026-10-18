@@ -33,6 +33,7 @@ import com.example.ui.theme.NoxaSurfaceElevated
 import com.example.ui.theme.NoxaTextPrimary
 import com.example.ui.theme.NoxaTextSecondary
 import com.example.ui.theme.NoxaTextTertiary
+import com.example.ui.i18n.string
 import com.example.ui.viewmodel.MusicViewModel
 
 /**
@@ -62,7 +63,7 @@ fun UpdateDialog(
         containerColor = NoxaSurfaceElevated,
         title = {
             Text(
-                if (mandatory) "Update Wajib Tersedia" else "Update Tersedia",
+                if (mandatory) string("update.mandatoryTitle") else string("update.optionalTitle"),
                 color = NoxaTextPrimary,
                 fontWeight = FontWeight.Black,
                 fontSize = 20.sp
@@ -91,12 +92,9 @@ fun UpdateDialog(
                 }
                 Text(
                     text = if (mandatory) {
-                        "Versi kamu (${com.example.BuildConfig.VERSION_NAME}) sudah usang. " +
-                            "Update diperlukan supaya semua fitur & perbaikan terbaru ikut terpasang."
+                        "${string("update.mandatoryDesc")} (kamu di ${com.example.BuildConfig.VERSION_NAME})"
                     } else {
-                        "Versi baru ${info.versionName} sudah keluar (kamu di " +
-                            "${com.example.BuildConfig.VERSION_NAME}). Update opsional — " +
-                            "bisa dilakukan kapan saja lewat Pengaturan."
+                        "${string("update.optionalDesc")} (kamu di ${com.example.BuildConfig.VERSION_NAME})"
                     },
                     color = NoxaTextTertiary,
                     fontSize = 11.sp,
@@ -162,16 +160,16 @@ fun UpdateDialog(
                             .padding(horizontal = 16.dp, vertical = 10.dp)
                             .testTag("update_later_btn")
                     ) {
-                        Text("Nanti Saja", color = NoxaTextSecondary, fontSize = 13.sp)
+                        Text(string("update.later"), color = NoxaTextSecondary, fontSize = 13.sp)
                     }
                     Spacer(modifier = Modifier.width(8.dp))
                 }
                 val label = when (phase) {
                     MusicViewModel.UpdatePhase.Resolving,
-                    MusicViewModel.UpdatePhase.Downloading -> "Mengunduh…"
+                    MusicViewModel.UpdatePhase.Downloading -> string("update.downloading")
 
-                    MusicViewModel.UpdatePhase.Failed -> "Coba Lagi"
-                    else -> "Update Sekarang"
+                    MusicViewModel.UpdatePhase.Failed -> string("action.retry")
+                    else -> string("update.now")
                 }
                 val enabled = phase != MusicViewModel.UpdatePhase.Resolving &&
                     phase != MusicViewModel.UpdatePhase.Downloading

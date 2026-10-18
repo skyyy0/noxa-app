@@ -52,7 +52,19 @@ class NoxaApplication : Application(), ImageLoaderFactory {
     lateinit var perfProfileStore: PerfProfileStore
         private set
 
+    /** Pengaturan → Bahasa (default Indonesia — salinan app hari ini). */
+    lateinit var languageStore: com.example.data.local.LanguageStore
+        private set
+
     lateinit var artistBioRepository: ArtistBioRepository
+        private set
+
+    /**
+     * **Halaman artis lebih lengkap**: subscriber YouTube (angka pendengar
+     * yang benar-benar dikenali orang) + genre/asal/tahun dari MusicBrainz,
+     * dua sumber publik tanpa kunci.
+     */
+    lateinit var artistInsightsScraper: com.example.data.remote.ArtistInsightsScraper
         private set
 
     /**
@@ -102,8 +114,10 @@ class NoxaApplication : Application(), ImageLoaderFactory {
         usagePolicyStore = UsagePolicyStore(this)
         appSettingsStore = AppSettingsStore(this)
         perfProfileStore = PerfProfileStore(this)
+        languageStore = com.example.data.local.LanguageStore(this)
         cachedPerfProfile = perfProfileStore.load()
         artistBioRepository = ArtistBioRepository()
+        artistInsightsScraper = com.example.data.remote.ArtistInsightsScraper()
         player = NoxaAudioPlayer(this)
         authManager = com.example.data.auth.AuthManager(this)
         connectMediaSession()

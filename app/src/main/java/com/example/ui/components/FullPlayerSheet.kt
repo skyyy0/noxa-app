@@ -48,6 +48,7 @@ import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.NightsStay
+import androidx.compose.material.icons.filled.ModeComment
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Image
@@ -157,6 +158,8 @@ fun FullPlayerSheet(
     onOpenEqualizer: () -> Unit,
     onSelectQueueItem: (Song, Int) -> Unit,
     onShare: () -> Unit,
+    /** Opens the per-song comment sheet (null hides the icon — callers without comments). */
+    onOpenComments: (() -> Unit)? = null,
     onRetryLyrics: () -> Unit,
     onSetVideoMode: (Boolean) -> Unit,
     onAttachVideoSurface: (SurfaceView?) -> Unit,
@@ -397,6 +400,19 @@ fun FullPlayerSheet(
                                 tint = if (spectrumOn) NoxaLime else NoxaTextPrimary,
                                 modifier = Modifier.size(22.dp)
                             )
+                        }
+                        if (onOpenComments != null) {
+                            IconButton(
+                                onClick = onOpenComments,
+                                modifier = Modifier.testTag("full_player_comments_btn")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.ModeComment,
+                                    contentDescription = "Komentar lagu",
+                                    tint = NoxaTextPrimary,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
                         }
                         IconButton(
                             onClick = onShare,

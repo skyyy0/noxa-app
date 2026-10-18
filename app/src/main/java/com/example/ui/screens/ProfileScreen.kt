@@ -26,6 +26,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Delete
@@ -87,6 +88,7 @@ import com.example.ui.theme.NoxaSurfaceSecondary
 import com.example.ui.theme.NoxaTextPrimary
 import com.example.ui.theme.NoxaTextSecondary
 import com.example.ui.theme.NoxaTextTertiary
+import com.example.ui.components.noxaTap
 import com.example.ui.viewmodel.WeeklyRecap
 import com.example.ui.viewmodel.YearListeningUi
 
@@ -122,6 +124,8 @@ fun ProfileScreen(
     onOpenDevPanel: () -> Unit,
     /** Opens the "Get Started" sign-in hub (Google / Email / Phone OTP). */
     onOpenGetStarted: () -> Unit,
+    /** Opens the full NOXA Wrapped tahunan screen. */
+    onOpenWrapped: () -> Unit = {},
     /** null = sukses, String = pesan error. */
     onChangeUsername: (String, (String?) -> Unit) -> Unit,
     /** null = sukses, String = pesan error. */
@@ -132,6 +136,9 @@ fun ProfileScreen(
     availableUpdate: com.example.data.support.NoxaBackend.UpdateInfo? = null,
     /** Reopens the update popup from Pengaturan → Pembaruan. */
     onOpenUpdate: () -> Unit = {},
+    /** Pengaturan → Bahasa. Default Indonesia (salinan app hari ini). */
+    language: com.example.data.local.AppLanguage = com.example.data.local.AppLanguage.ID,
+    onSetLanguage: (com.example.data.local.AppLanguage) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -142,6 +149,7 @@ fun ProfileScreen(
 
     // Account settings dialogs.
     var showUsernameDialog by remember { mutableStateOf(false) }
+    var showLanguagePicker by remember { mutableStateOf(false) }
     var showPasswordDialog by remember { mutableStateOf(false) }
     // Sign-out confirmation & permanent account deletion.
     var showSignOutDialog by remember { mutableStateOf(false) }
@@ -413,7 +421,7 @@ fun ProfileScreen(
         Spacer(modifier = Modifier.height(24.dp))
 
         // NOXA WRAPPED MINI — the deep recap.
-        WrappedMiniCard(yearListening = yearListening)
+        WrappedMiniCard(yearListening = yearListening, onOpenWrapped = onOpenWrapped)
 
         Spacer(modifier = Modifier.height(24.dp))
 
@@ -1172,6 +1180,76 @@ fun ProfileScreen(
                 )
             }
         }
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        // BAHASA — in-app language switcher. Indonesia is the untouched
+        // default; other languages are served by the in-app dictionary and
+        // fall back to the Indonesian copy wherever a key is untranslated.
+        Text(
+            text = "Bahasa",
+            color = NoxaTextPrimary,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
+        )
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .clickable { showLanguagePicker = true }
+                .testTag("settings_language_card"),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = NoxaSurfaceElevated),
+            border = androidx.compose.foundation.BorderStroke(1.dp, NoxaBorder)
+        ) {
+            Row(
+                modifier = Modifier.padding(16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Language,
+                        contentDescription = "Bahasa",
+                        tint = NoxaLime,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column {
+                        Text(
+                            "Bahasa",
+                            color = NoxaTextPrimary,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = language.endonym,
+                            color = NoxaTextSecondary,
+                            fontSize = 12.sp,
+                            modifier = Modifier.testTag("settings_language_value")
+                        )
+                    }
+                }
+                Icon(
+                    Icons.Default.ChevronRight,
+                    contentDescription = null,
+                    tint = NoxaTextTertiary,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+        }
+    }
+
+    if (showLanguagePicker) {
+        LanguagePickerDialog(
+            selected = language,
+            onSelect = {
+                onSetLanguage(it)
+                showLanguagePicker = false
+            },
+            onDismiss = { showLanguagePicker = false }
+        )
     }
 
     if (showUsernameDialog && currentUser != null) {
@@ -1614,7 +1692,10 @@ private fun HeatmapGrid(stats: HeatmapStats) {
  * you listen most. Same on-device data as the heatmap.
  */
 @Composable
-private fun WrappedMiniCard(yearListening: YearListeningUi) {
+private fun WrappedMiniCard(
+    yearListening: YearListeningUi,
+    onOpenWrapped: () -> Unit
+) {
     val stats = yearListening.stats ?: return
 
     Text(
@@ -1673,7 +1754,7 @@ private fun WrappedMiniCard(yearListening: YearListeningUi) {
                     fontWeight = FontWeight.Bold,
                     letterSpacing = 1.sp
                 )
-                yearListening.topArtists.forEachIndexed { index, taste ->
+                yearListening.topArtists.take(3).forEachIndexed { index, taste ->
                     WrappedRow(rank = "#${index + 1}", title = taste.name, meta = "${taste.plays}×")
                 }
             }
@@ -1701,6 +1782,33 @@ private fun WrappedMiniCard(yearListening: YearListeningUi) {
                     icon = Icons.Default.Schedule,
                     title = "Jam paling rajin dengar",
                     meta = String.format("%02d:00–%02d:00", hour, (hour + 1) % 24)
+                )
+            }
+
+            // Gateway to the full tahunan Wrapped (story-style, all stats).
+            Spacer(modifier = Modifier.height(14.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(NoxaLime.copy(alpha = 0.14f))
+                    .noxaTap { onOpenWrapped() }
+                    .padding(horizontal = 14.dp, vertical = 11.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
+            ) {
+                Text(
+                    text = "Buka NOXA Wrapped tahunan",
+                    color = NoxaLime,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Icon(
+                    imageVector = Icons.Default.ChevronRight,
+                    contentDescription = null,
+                    tint = NoxaLime,
+                    modifier = Modifier.size(16.dp)
                 )
             }
         }
@@ -2024,6 +2132,83 @@ private const val QRIS_IMAGE_URL =
  * Vector icons that Material does not ship — drawn here so cards never rely
  * on emoji glyphs (which render inconsistently on OEM launchers).
  */
+/**
+ * Pengaturan → Bahasa. Indonesia is the default and changes nothing (the
+ * app's copy ships in Indonesian on purpose); the other languages are served
+ * by the in-app dictionary and fall back to Indonesian for untranslated keys.
+ */
+@Composable
+private fun LanguagePickerDialog(
+    selected: com.example.data.local.AppLanguage,
+    onSelect: (com.example.data.local.AppLanguage) -> Unit,
+    onDismiss: () -> Unit
+) {
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = NoxaSurfaceElevated,
+        title = {
+            Text(
+                "Bahasa",
+                color = NoxaTextPrimary,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold
+            )
+        },
+        text = {
+            Column {
+                com.example.data.local.AppLanguage.entries.forEach { lang ->
+                    val isSelected = lang == selected
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(
+                                if (isSelected) NoxaLime.copy(alpha = 0.14f) else Color.Transparent
+                            )
+                            .clickable { onSelect(lang) }
+                            .padding(vertical = 11.dp, horizontal = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                lang.endonym,
+                                color = NoxaTextPrimary,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                lang.labelId,
+                                color = NoxaTextTertiary,
+                                fontSize = 11.sp
+                            )
+                        }
+                        if (isSelected) {
+                            Icon(
+                                Icons.Default.Check,
+                                contentDescription = "Dipilih",
+                                tint = NoxaLime,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Text(
+                "Tutup",
+                color = NoxaTextSecondary,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(10.dp))
+                    .clickable { onDismiss() }
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+            )
+        }
+    )
+}
+
 private object TelegramIcons {
     /** The Telegram paper plane. */
     val Plane: ImageVector by lazy {

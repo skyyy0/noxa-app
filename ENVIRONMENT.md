@@ -636,6 +636,39 @@ sebelum memutar apa pun, dan tiga alat baru untuk menemukan musik.
   dan dilewati oleh autoplay; daftarnya bisa dibatalkan per item di
   Profile → Jangan putar lagi.
 
+### v2.1.0 — Komentar per Lagu, NOXA Wrapped tahunan, statistik dev, detail pemutar
+
+* **Komentar per Lagu** — ikon komentar baru di bar atas pemutar penuh membuka
+  sheet komentar bersama per lagu. Dokumen Telegraph khusus
+  (`NOXA-Song-Comments-10-18`, satu halaman per aplikasi, tanpa API key)
+  menyimpan JSON `songs → [komentar]` — setiap instalasi membaca & menulis
+  thread yang sama. Batas jujur: teks maksimal 400 karakter, 40 komentar
+  terbaru per lagu, cooldown 10 detik per perangkat, dan tulis optimistis
+  ber-`seq` (retry singkat) supaya kiriman pengguna lain tidak tertimpa.
+  Komentar butuh akun masuk; tamun melihat prompt "Masuk untuk berkomentar".
+  Gagal jaringan = pesan jujur, draft tetap ada di kolom komentar.
+* **NOXA Wrapped Tahunan** — kartu "NOXA Wrapped Mini" di Profile kini punya
+  tombol ke layar Wrapped lengkap (route `wrapped`): total lagu setahun,
+  hari mendengar, artis berbeda, hari terbanyak, artis jiwamu, 5 artis & 5
+  lagu paling sering, jam paling rajin dengar + streak, peta panas 365 hari,
+  dan penutup privasi ("semua angka ini berasal dari HP-mu sendiri"). Sumber
+  datanya sama dengan peta panas (`Room.play_records`, retensi 365 hari,
+  agregat di SQLite) — tanpa data, layar mengatakan "Wrapped-mu belum
+  terbentuk" apa adanya. Bagian muncul bertahap ala story.
+* **Statistik developer (NOXA Admin)** — kartu kehadiran baru: "Aktif hari
+  ini", "Online sekarang", "Akun baru hari ini" + titik hijau per akun.
+  Backend kini menyimpan stempel `lastSeenAt` per akun; klien menulis
+  heartbeat **dibatasi 1 sekali per 3 menit** (dibaca-ditulis ulang, bukan
+  tulis membabi buta), "online" = stempel < 2 menit. Semua angka dihitung
+  dari dokumen bersama — 0 bila memang belum ada, tidak pernah dikarang.
+* **Tombol "Putar album" kini punya status** — saat lagu album sedang diputar,
+  tombol berubah jadi "Jeda" (ikon ❚❚), saat berhenti "Lanjutkan"; ikon
+  pop saat berganti, tekanan memantul lembut + haptic (noxaTap) seperti
+  tombol lain di NOXA.
+* **Multi-bahasa** — Pengaturan → Bahasa kini menerjemahkan label navigasi
+  bawah, dialog pembaruan, dan bagian profil/artis; tabel sumber kebenaran
+  di `ui/i18n/Strings.kt` (ID sebagai fallback untuk kunci yang belum ada).
+
 ## Variabel `.env` (semuanya opsional)
 
 | Variabel | Wajib | Keterangan |

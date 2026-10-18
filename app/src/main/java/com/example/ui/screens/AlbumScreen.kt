@@ -1,5 +1,12 @@
 package com.example.ui.screens
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -20,6 +27,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material3.CircularProgressIndicator
@@ -41,6 +49,7 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.example.data.model.Song
 import com.example.ui.components.SongListItem
+import com.example.ui.components.noxaTap
 import com.example.ui.theme.NoxaBlack
 import com.example.ui.theme.NoxaBorder
 import com.example.ui.theme.NoxaLime
@@ -60,6 +69,9 @@ fun AlbumScreen(
     state: AlbumUiState,
     favoriteIds: Set<String>,
     currentPlayingSongId: String?,
+    /** Playback state — turns the play button into a live toggle. */
+    isPlaying: Boolean = false,
+    onTogglePlayPause: () -> Unit = {},
     onBack: () -> Unit,
     onPlaySong: (Song, List<Song>, Int) -> Unit,
     onToggleFavorite: (Song) -> Unit,
@@ -215,6 +227,12 @@ fun AlbumScreen(
                     Spacer(modifier = Modifier.height(18.dp))
 
                     if (tracks.isNotEmpty()) {
+                        // The button is a live toggle while one of this
+                        // album's tracks is the current song: playing →
+                        // "Jeda", paused → "Lanjutkan", otherwise "Putar
+                        // album" starts the queue from the top.
+                        val albumIsActive = currentPlayingSongId != null &&
+                            tracks.any { it.id == currentPlayingSongId }
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -222,9 +240,17 @@ fun AlbumScreen(
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             AlbumAction(
-                                label = "Putar album",
+                                label = when {
+                                    albumIsActive && isPlaying -> "Jeda"
+                                    albumIsActive -> "Lanjutkan"
+                                    else -> "Putar album"
+                                },
                                 primary = true,
-                                onClick = { onPlaySong(tracks[0], tracks, 0) }
+                                playingIcon = albumIsActive && isPlaying,
+                                onClick = {
+                                    if (albumIsActive) onTogglePlayPause()
+                                    else onPlaySong(tracks[0], tracks, 0)
+                                }
                             )
                             AlbumAction(
                                 label = "Acak",
@@ -272,22 +298,43 @@ fun AlbumScreen(
 }
 
 @Composable
-private fun AlbumAction(label: String, primary: Boolean, onClick: () -> Unit) {
+private fun AlbumAction(
+    label: String,
+    primary: Boolean,
+    onClick: () -> Unit,
+    /** True while this button pauses the live queue — swaps icon to Pause. */
+    playingIcon: Boolean = false
+) {
     Row(
         modifier = Modifier
             .clip(RoundedCornerShape(24.dp))
             .background(if (primary) NoxaLime else NoxaSurfaceSecondary)
             .border(1.dp, if (primary) NoxaLime else NoxaBorder, RoundedCornerShape(24.dp))
-            .clickable { onClick() }
+            .noxaTap { onClick() }
             .padding(horizontal = 22.dp, vertical = 11.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Icon(
-            imageVector = if (primary) Icons.Default.PlayArrow else Icons.Default.Shuffle,
-            contentDescription = null,
-            tint = if (primary) NoxaBlack else NoxaLime,
-            modifier = Modifier.size(18.dp)
-        )
+        // Icon pops between ▶ / ❚❚ so the state change reads instantly.
+        AnimatedContent(
+            targetState = playingIcon,
+            transitionSpec = {
+                (scaleIn(initialScale = 0.55f) + fadeIn(tween(150))) togetherWith
+                    (scaleOut(targetScale = 0.55f) + fadeOut(tween(150)))
+            },
+            label = "albumPlayIcon",
+            contentAlignment = Alignment.Center
+        ) { isPause ->
+            Icon(
+                imageVector = when {
+                    isPause -> Icons.Default.Pause
+                    primary -> Icons.Default.PlayArrow
+                    else -> Icons.Default.Shuffle
+                },
+                contentDescription = null,
+                tint = if (primary) NoxaBlack else NoxaLime,
+                modifier = Modifier.size(18.dp)
+            )
+        }
         Spacer(modifier = Modifier.width(6.dp))
         Text(
             text = label,

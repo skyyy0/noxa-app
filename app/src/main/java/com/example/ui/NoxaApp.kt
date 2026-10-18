@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LibraryMusic
@@ -63,6 +64,8 @@ import com.example.ui.components.AddToPlaylistDialog
 import com.example.ui.components.FullPlayerSheet
 import com.example.ui.components.MiniPlayer
 import com.example.ui.components.ShareSheetDialog
+import com.example.ui.components.SongCommentsSheet
+import com.example.ui.i18n.string
 import com.example.ui.components.YouTubePolicyDialog
 import com.example.ui.components.NoxaMotion
 import com.example.ui.components.noxaTap
@@ -137,12 +140,31 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector)
 
     /** Sign-in hub: Google / Email / Phone (OTP). */
     object GetStarted : Screen("get_started", "Get Started", Icons.Default.Person)
+
+    /** NOXA Wrapped tahunan — the year in listening, story-style. */
+    object Wrapped : Screen("wrapped", "Wrapped", Icons.Default.BarChart)
 }
 
 @Composable
 fun NoxaApp(
     viewModel: MusicViewModel = viewModel(),
     navController: NavHostController = rememberNavController()
+) {
+    // Pengaturan → Bahasa: the whole tree reads translated strings through
+    // LocalStrings; Indonesia (default) serves the original hardcoded copy.
+    val appLanguage by viewModel.appLanguage.collectAsStateWithLifecycle()
+    androidx.compose.runtime.CompositionLocalProvider(
+        com.example.ui.i18n.LocalStrings provides
+            com.example.ui.i18n.Strings.forLanguage(appLanguage)
+    ) {
+        NoxaAppContent(viewModel = viewModel, navController = navController)
+    }
+}
+
+@Composable
+private fun NoxaAppContent(
+    viewModel: MusicViewModel,
+    navController: NavHostController
 ) {
     val playerState by viewModel.playerState.collectAsStateWithLifecycle()
     val heroSong by viewModel.heroSong.collectAsStateWithLifecycle()
@@ -152,6 +174,8 @@ fun NoxaApp(
     val resumableSong by viewModel.resumableSong.collectAsStateWithLifecycle()
     val currentUser by viewModel.currentUser.collectAsStateWithLifecycle()
     val isGuestMode by viewModel.isGuestMode.collectAsStateWithLifecycle()
+    // Komentar per Lagu: the shared thread under the current song (null = closed).
+    val songComments by viewModel.songComments.collectAsStateWithLifecycle()
     val isSigningIn by viewModel.isSigningIn.collectAsStateWithLifecycle()
 
     val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
@@ -252,6 +276,10 @@ fun NoxaApp(
 
     val isCurrentFavorite = playerState.currentSong?.id?.let { favoriteIds.contains(it) } ?: false
 
+    // Collected again here (cheap state read) so Pengaturan shows the active
+    // language; the tree itself is already wrapped in LocalStrings upstream.
+    val appLanguage by viewModel.appLanguage.collectAsStateWithLifecycle()
+
     // Hoisted tab navigation: tapping any bottom-nav tab always runs this,
     // from every route (home, search, library, equalizer, profile, artist,
     // album, playlist). Popping to the start destination keeps the stack flat.
@@ -341,7 +369,13 @@ fun NoxaApp(
                                     exit = fadeOut() + shrinkHorizontally(shrinkTowards = Alignment.Start)
                                 ) {
                                     Text(
-                                        text = screen.title,
+                                        text = when (screen.route) {
+                                            Screen.Home.route -> string("nav.home")
+                                            Screen.Search.route -> string("nav.search")
+                                            Screen.Library.route -> string("nav.library")
+                                            Screen.Profile.route -> string("nav.profile")
+                                            else -> screen.title
+                                        },
                                         color = NoxaBlack,
                                         fontSize = 12.sp,
                                         fontWeight = FontWeight.Bold,
@@ -491,6 +525,8 @@ fun NoxaApp(
                             songsFlow = songsFlow,
                             favoriteIds = favoriteIds,
                             currentPlayingSongId = playerState.currentSong?.id,
+                            isPlaying = playerState.isPlaying,
+                            onTogglePlayPause = { viewModel.togglePlayPause() },
                             onBack = { navController.popBackStack() },
                             onPlaySong = { song, queue, idx -> viewModel.playSong(song, queue, idx) },
                             onToggleFavorite = { viewModel.toggleFavorite(it) },
@@ -520,6 +556,8 @@ fun NoxaApp(
                             state = artistUiState,
                             favoriteIds = favoriteIds,
                             currentPlayingSongId = playerState.currentSong?.id,
+                            isPlaying = playerState.isPlaying,
+                            onTogglePlayPause = { viewModel.togglePlayPause() },
                             onBack = { navController.popBackStack() },
                             onPlaySong = { song, queue, idx -> viewModel.playSong(song, queue, idx) },
                             onToggleFavorite = { viewModel.toggleFavorite(it) },
@@ -556,6 +594,8 @@ fun NoxaApp(
                             state = albumUiState,
                             favoriteIds = favoriteIds,
                             currentPlayingSongId = playerState.currentSong?.id,
+                            isPlaying = playerState.isPlaying,
+                            onTogglePlayPause = { viewModel.togglePlayPause() },
                             onBack = { navController.popBackStack() },
                             onPlaySong = { song, queue, idx -> viewModel.playSong(song, queue, idx) },
                             onToggleFavorite = { viewModel.toggleFavorite(it) },
@@ -622,6 +662,11 @@ fun NoxaApp(
                             navController.navigate(Screen.Room.route)
                         },
                         onOpenGetStarted = { navController.navigate(Screen.GetStarted.route) },
+                        onOpenWrapped = {
+                            navController.navigate(Screen.Wrapped.route) {
+                                launchSingleTop = true
+                            }
+                        },
                         onChangeUsername = { name, onResult ->
                             viewModel.changeUsername(name, onResult)
                         },
@@ -633,6 +678,8 @@ fun NoxaApp(
                         },
                         availableUpdate = updateInfo,
                         onOpenUpdate = { viewModel.openUpdateFromSettings() },
+                        language = appLanguage,
+                        onSetLanguage = { viewModel.setLanguage(it) },
                         onSetCrossfade = { viewModel.setCrossfadeEnabled(it) },
                         perfProfile = devicePerf,
                         mutedArtists = mutedArtists,
@@ -740,6 +787,13 @@ fun NoxaApp(
                     )
                 }
 
+                composable(Screen.Wrapped.route) {
+                    com.example.ui.screens.WrappedScreen(
+                        yearListening = yearListening,
+                        onBack = { navController.popBackStack() }
+                    )
+                }
+
                 composable(Screen.DevPanel.route) {
                     val devState by viewModel.devState.collectAsStateWithLifecycle()
                     LaunchedEffect(Unit) { viewModel.openDevPanel() }
@@ -816,6 +870,9 @@ fun NoxaApp(
             onShare = {
                 playerState.currentSong?.let { songPendingShare = it }
             },
+            onOpenComments = {
+                playerState.currentSong?.let { viewModel.openSongComments(it) }
+            },
             onRetryLyrics = { viewModel.retryLyrics() },
             onSetVideoMode = { enabled -> viewModel.setVideoMode(enabled) },
             onAttachVideoSurface = { surface -> viewModel.attachMvSurface(surface) },
@@ -861,6 +918,21 @@ fun NoxaApp(
             ShareSheetDialog(
                 song = song,
                 onDismiss = { songPendingShare = null }
+            )
+        }
+
+        // Komentar per Lagu — shared thread keyed by the song id.
+        songComments?.let { commentsUi ->
+            SongCommentsSheet(
+                ui = commentsUi,
+                isSignedIn = currentUser != null && !isGuestMode,
+                onDismiss = { viewModel.closeSongComments() },
+                onPost = { text -> viewModel.postSongComment(text) },
+                onSignIn = {
+                    viewModel.closeSongComments()
+                    viewModel.closeFullPlayer()
+                    navController.navigate(Screen.GetStarted.route) { launchSingleTop = true }
+                }
             )
         }
     }

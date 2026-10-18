@@ -86,6 +86,9 @@ import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.launch
 
+/** "Online" window: a presence stamp younger than this = listening now. */
+private const val PRESENCE_ONLINE_MS = 2L * 60 * 1000
+
 /** State of the NOXA Admin console. */
 sealed interface DevUiState {
     data object Loading : DevUiState
@@ -96,7 +99,13 @@ sealed interface DevUiState {
     data class Ready(
         val accounts: List<BackendLogin>,
         val threads: List<SupportThread>,
-        val busy: Boolean = false
+        val busy: Boolean = false,
+        /** Accounts whose presence stamp falls on today. */
+        val activeToday: Int = 0,
+        /** Stamped within the last couple of minutes — "sedang online". */
+        val onlineNow: Int = 0,
+        /** Accounts registered today. */
+        val newToday: Int = 0
     ) : DevUiState
 }
 
@@ -220,7 +229,13 @@ fun DevPanelScreen(
                     )
 
                     else -> {
-                        DevStatsRow(accounts = s.accounts, threads = s.threads)
+                        DevStatsRow(
+                            accounts = s.accounts,
+                            threads = s.threads,
+                            activeToday = s.activeToday,
+                            onlineNow = s.onlineNow,
+                            newToday = s.newToday
+                        )
                         DevTabRow(
                             current = tab,
                             onSelect = { tab = it },
@@ -294,17 +309,32 @@ private fun DevHeader(showCreateForm: Boolean, onBack: () -> Unit, onRefresh: ()
 }
 
 @Composable
-private fun DevStatsRow(accounts: List<BackendLogin>, threads: List<SupportThread>) {
+private fun DevStatsRow(
+    accounts: List<BackendLogin>,
+    threads: List<SupportThread>,
+    activeToday: Int,
+    onlineNow: Int,
+    newToday: Int
+) {
     val unread = threads.count { it.unreadForSupport }
-    Row(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 12.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp)
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        StatCard("Akun terdaftar", accounts.size.toString(), NoxaLime, Modifier.weight(1f))
-        StatCard("Total laporan", threads.size.toString(), NoxaTextPrimary, Modifier.weight(1f))
-        StatCard("Menunggu balasan", unread.toString(), NoxaPurple, Modifier.weight(1f))
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            StatCard("Akun terdaftar", accounts.size.toString(), NoxaLime, Modifier.weight(1f))
+            StatCard("Total laporan", threads.size.toString(), NoxaTextPrimary, Modifier.weight(1f))
+            StatCard("Menunggu balasan", unread.toString(), NoxaPurple, Modifier.weight(1f))
+        }
+        // Presence row: answered from the throttled client heartbeat
+        // (lastSeenAt per account) + createdAt — never invented.
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            StatCard("Aktif hari ini", activeToday.toString(), NoxaSuccess, Modifier.weight(1f))
+            StatCard("Online sekarang", onlineNow.toString(), NoxaLime, Modifier.weight(1f))
+            StatCard("Akun baru hari ini", newToday.toString(), NoxaPurple, Modifier.weight(1f))
+        }
     }
 }
 
@@ -885,6 +915,19 @@ private fun AccountsList(
                             fontSize = 12.sp,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    // Presence dot: green while the throttled heartbeat
+                    // stamp is younger than 2 minutes.
+                    if (account.lastSeenAt > 0 &&
+                        System.currentTimeMillis() - account.lastSeenAt < PRESENCE_ONLINE_MS
+                    ) {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(NoxaSuccess)
                         )
                     }
                     RoleChip(account.role)

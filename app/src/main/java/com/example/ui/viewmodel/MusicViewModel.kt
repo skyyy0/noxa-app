@@ -51,18 +51,28 @@ import kotlinx.coroutines.launch
 
 private const val TAG = "MusicViewModel"
 
+/** The MIME the system package installer matches when opening a downloaded APK. */
+private const val APK_MIME_TYPE = "application/vnd.android.package-archive"
+
 /** SharedPreferences key: the versionCode an optional update was skipped on. */
 private const val KEY_SKIPPED_UPDATE = "skipped_update_version"
 
 /** How many preview tracks in a queue get warmed for full audio ahead of time. */
 private const val PREVIEW_WARM_LIMIT = 3
 
+/**
+ * "Online" window for the dev console: an account whose presence stamp is
+ * younger than this counts as actively listening right now. The client
+ * heartbeat refreshes the stamp every few minutes while the app is open.
+ */
+private const val ONLINE_WINDOW_MS = 2L * 60 * 1000
+
 /** Autoplay-similar: trigger window before the end of the queue's last song. */
 private const val AUTOPLAY_NEAR_END_MS = 15_000L
 
-/** Wrapped mini: how many top artists / songs the card lists. */
-private const val WRAPPED_ARTIST_LIMIT = 3
-private const val WRAPPED_SONG_LIMIT = 1
+/** Wrapped: how many top artists / songs the mini card & full screen list. */
+private const val WRAPPED_ARTIST_LIMIT = 5
+private const val WRAPPED_SONG_LIMIT = 5
 
 /** How many similar tracks get appended when autoplay kicks in. */
 private const val AUTOPLAY_APPEND_LIMIT = 5
@@ -117,6 +127,9 @@ data class WeeklyRecap(
 /** One artist counted from the user's own listening history. */
 data class TopArtistTaste(val name: String, val plays: Int)
 
+/** One song counted from the user's own listening history (full Wrapped). */
+data class TopSongTaste(val title: String, val plays: Int)
+
 /**
  * Profile's **Peta Panas Dengar** + **NOXA Wrapped Mini**: one year of
  * listening, aggregated on-device from Room's `play_records`.
@@ -127,6 +140,8 @@ data class YearListeningUi(
     val topArtists: List<TopArtistTaste> = emptyList(),
     val topSongTitle: String = "",
     val topSongPlays: Int = 0,
+    /** Top songs for the full Wrapped screen (mini card uses the first). */
+    val topSongs: List<TopSongTaste> = emptyList(),
     val distinctArtists: Int = 0,
     /** Busiest hour of day (0–23), or -1 when unknown. */
     val busiestHour: Int = -1
@@ -185,7 +200,9 @@ sealed interface ArtistUiState {
         /** Musically adjacent artists — the "penggemar juga mendengar" shelf. */
         val relatedArtists: List<ArtistProfile> = emptyList(),
         /** Short Wikipedia bio; null when unavailable (section hides). */
-        val bio: String? = null
+        val bio: String? = null,
+        /** Scraped extras (YouTube subscribers, genre/origin/debut) or null. */
+        val insights: com.example.data.remote.ArtistInsights? = null
     ) : ArtistUiState
     data class Error(val message: String) : ArtistUiState
 }
@@ -270,6 +287,18 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
 
     /** MV quality, autoplay-similar, karaoke overlay and auto-resume. */
     val appSettings: StateFlow<AppSettings> = _appSettings.asStateFlow()
+
+    // ------------------------------------------------------- bahasa (i18n)
+
+    private val languageStore = app.languageStore
+
+    /** Pengaturan → Bahasa. Default Indonesia (salinan app hari ini). */
+    val appLanguage: StateFlow<com.example.data.local.AppLanguage> =
+        languageStore.language
+
+    fun setLanguage(language: com.example.data.local.AppLanguage) {
+        languageStore.set(language)
+    }
 
     fun setMvQualityHeight(height: Int) {
         settingsStore.mvQualityHeight = height
@@ -918,6 +947,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                         topArtists = artists.map { TopArtistTaste(it.artist, it.plays) },
                         topSongTitle = titles.firstOrNull()?.title.orEmpty(),
                         topSongPlays = titles.firstOrNull()?.plays ?: 0,
+                        topSongs = titles.map { TopSongTaste(it.title, it.plays) },
                         distinctArtists = distinct,
                         busiestHour = hours.maxByOrNull { it.plays }?.hour ?: -1
                     )
@@ -2087,12 +2117,17 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             val bio = async {
                 runCatching { app.artistBioRepository.bioFor(profile.name) }.getOrNull()
             }
+            val insights = async {
+                runCatching { app.artistInsightsScraper.insightsFor(profile.name) }
+                    .getOrNull()
+            }
             _artistUiState.value = ArtistUiState.Ready(
                 profile = profile,
                 topSongs = topSongs,
                 albums = albums,
                 relatedArtists = related.await().filter { it.id != artistId },
-                bio = bio.await()
+                bio = bio.await(),
+                insights = insights.await()?.takeUnless { it.isEmpty }
             )
         }
     }
@@ -2123,6 +2158,76 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     /** Keyless shared backend: accounts, roles, support threads. */
     private val backend = com.example.data.support.NoxaBackend()
 
+    // ------------------------------------------------------ per-song comments
+
+    /** Keyless shared comment threads — one Telegraph document, keyed by song id. */
+    private val commentRepo = com.example.data.support.SongCommentsRepository()
+
+    /** Everything the comment sheet renders; `null` = sheet closed. */
+    data class SongCommentsUi(
+        val song: Song,
+        val comments: List<com.example.data.support.SongComment> = emptyList(),
+        val loading: Boolean = true,
+        val posting: Boolean = false,
+        /** Last failure message (post stayed in the composer). */
+        val error: String? = null
+    )
+
+    private val _songComments = MutableStateFlow<SongCommentsUi?>(null)
+    val songComments: StateFlow<SongCommentsUi?> = _songComments.asStateFlow()
+
+    /** Opens the comment sheet for [song] and starts fetching its thread. */
+    fun openSongComments(song: Song) {
+        _songComments.value = SongCommentsUi(song)
+        safeScope.launch {
+            val list = runCatching { commentRepo.commentsFor(song.id) }
+                .getOrDefault(emptyList())
+            _songComments.update { ui ->
+                if (ui?.song?.id == song.id) ui.copy(comments = list, loading = false) else ui
+            }
+        }
+    }
+
+    fun closeSongComments() {
+        _songComments.value = null
+    }
+
+    /**
+     * Posts [text] as the signed-in user. `onDone` receives `null` on success
+     * or a user-facing Indonesian refusal; on success the sheet refreshes
+     * straight from the repository cache, so the new comment appears without
+     * a second round-trip.
+     */
+    fun postSongComment(text: String, onDone: ((String?) -> Unit)? = null) {
+        val ui = _songComments.value ?: return
+        val user = authManager.currentUser.value
+        if (user == null) {
+            onDone?.invoke("Masuk dulu untuk berkomentar.")
+            return
+        }
+        val name = user.displayName?.takeIf { it.isNotBlank() }
+            ?: user.email?.substringBefore('@')
+            ?: "Pendengar"
+        safeScope.launch {
+            _songComments.update { it?.copy(posting = true, error = null) }
+            val err = runCatching {
+                commentRepo.post(ui.song.id, user.uid, name, text)
+            }.getOrDefault(com.example.data.support.SongCommentsRepository.UNREACHABLE)
+            if (err == null) {
+                val list = runCatching { commentRepo.commentsFor(ui.song.id) }
+                    .getOrDefault(ui.comments)
+                _songComments.update { it?.copy(comments = list, posting = false, error = null) }
+                onDone?.invoke(null)
+            } else {
+                val friendly = if (
+                    err == com.example.data.support.SongCommentsRepository.UNREACHABLE
+                ) "Server komentar tidak bisa dijangkau. Coba lagi nanti." else err
+                _songComments.update { it?.copy(posting = false, error = friendly) }
+                onDone?.invoke(friendly)
+            }
+        }
+    }
+
     // ------------------------------------------------------------- updates
 
     /** Latest update published by the developer, when this build is older. */
@@ -2146,6 +2251,18 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             authManager.currentUser.collect { user ->
                 if (user?.role == com.example.data.support.AccountRole.DEVELOPER) {
                     _updateInfo.value = null
+                }
+            }
+        }
+        // Presence heartbeat: while a user is signed in, mark this device
+        // online (throttled inside repoState — a sparkle no more often than
+        // every 60s). Signed-out dev panel keeps stats visible without an
+        // identity — heartbeat from there is skipped to avoid ghost "online"
+        // listeners with no name.
+        viewModelScope.launch {
+            authManager.currentUser.collect { user ->
+                if (user != null) {
+                    backend.heartbeat(user.uid)
                 }
             }
         }
@@ -2244,6 +2361,27 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         val info = _updateInfo.value ?: return
         val phase = _updatePhase.value
         if (phase == UpdatePhase.Resolving || phase == UpdatePhase.Downloading) return
+        // Android 8+: install-from-this-source must be granted for OUR package
+        // or the system installer refuses to open. Ask FIRST so the user is
+        // never sent through a full download just to hit the settings wall.
+        val app = getApplication<Application>()
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O &&
+            !app.packageManager.canRequestPackageInstalls()
+        ) {
+            runCatching {
+                app.startActivity(
+                    android.content.Intent(
+                        android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                        android.net.Uri.parse("package:${app.packageName}")
+                    ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            }
+            _updatePhase.value = UpdatePhase.Failed
+            _updateError.value =
+                "Izinkan \"Install dari sumber ini\" untuk NOXA, lalu ketuk " +
+                "Update Sekarang lagi — panel instalasi Android akan terbuka otomatis."
+            return
+        }
         safeScope.launch {
             _updatePhase.value = UpdatePhase.Resolving
             _updateError.value = null
@@ -2287,7 +2425,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                             android.app.DownloadManager.Request.VISIBILITY_VISIBLE
                         )
                         .setDestinationUri(android.net.Uri.fromFile(target))
-                        .setMimeType("application/vnd.android.package")
+                        .setMimeType(APK_MIME_TYPE)
                 )
             } catch (e: Exception) {
                 Log.w(TAG, "Update download failed to start: ${e.message}")
@@ -2394,7 +2532,11 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 app, "${app.packageName}.fileprovider", file
             )
             val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
-                setDataAndType(uri, "application/vnd.android.package")
+                // The archive MIME (not the obsolete "application/vnd.android"
+                // guess) is what the system package installer matches on —
+                // with the wrong type Android offered only file-handling apps
+                // (Termux, ShareIt, WPS) instead of "Pasang".
+                setDataAndType(uri, APK_MIME_TYPE)
                 addFlags(
                     android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
                         android.content.Intent.FLAG_ACTIVITY_NEW_TASK
@@ -2427,10 +2569,22 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 onResult("Link APK harus diawali http/https (file langsung atau link MediaFire).")
                 return@launch
             }
-            if (versionCode <= com.example.BuildConfig.VERSION_CODE) {
+            if (versionCode <= 0L) {
+                onResult("Version code harus angka lebih dari 0.")
+                return@launch
+            }
+            // The baseline is the update already PUBLISHED on the server, never
+            // the build installed on this phone: the developer always holds the
+            // highest versionCode, so validating against BuildConfig made it
+            // impossible to push the build she is currently running (e.g. 19).
+            // Users on anything below the published code are the audience.
+            val published = runCatching { backend.readState()?.update?.versionCode }
+                .getOrNull()
+            if (published != null && versionCode <= published) {
                 onResult(
-                    "Version code harus lebih besar dari versi sekarang " +
-                        "(${com.example.BuildConfig.VERSION_CODE})."
+                    "Version code harus lebih besar dari update yang sudah " +
+                        "dipublish ($published). User di bawah versi itu sudah " +
+                        "bisa update ke $published."
                 )
                 return@launch
             }
@@ -2896,18 +3050,36 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         }
         val state = runCatching { backend.readState() }.getOrNull()
             ?: return com.example.ui.screens.DevUiState.Offline
+        val now = System.currentTimeMillis()
+        // "Aktif hari ini": every account whose presence stamp (written by
+        // the throttled client heartbeat) falls on today's calendar date.
+        // "Online": stamped within the last 2 minutes. "Baru": registered
+        // today. All fall back to 0 when nothing has ever heartbeat — the
+        // panel shows an honest 0, never a fabricated number.
+        val today = java.time.LocalDate.now()
+        fun sameDay(ms: Long): Boolean = ms > 0 && runCatching {
+            java.time.Instant.ofEpochMilli(ms)
+                .atZone(java.time.ZoneId.systemDefault()).toLocalDate() == today
+        }.getOrDefault(false)
+        val logins = state.accounts.values
+            .map {
+                com.example.data.support.BackendLogin(
+                    uid = it.uid,
+                    email = it.email,
+                    username = it.username,
+                    role = it.role,
+                    createdAt = it.createdAt,
+                    lastSeenAt = it.lastSeenAt
+                )
+            }
+            .sortedByDescending { it.createdAt }
         return com.example.ui.screens.DevUiState.Ready(
-            accounts = state.accounts.values
-                .map {
-                    com.example.data.support.BackendLogin(
-                        uid = it.uid,
-                        email = it.email,
-                        username = it.username,
-                        role = it.role,
-                        createdAt = it.createdAt
-                    )
-                }
-                .sortedByDescending { it.createdAt },
+            accounts = logins,
+            activeToday = logins.count { sameDay(it.lastSeenAt) },
+            onlineNow = logins.count {
+                it.lastSeenAt > 0 && now - it.lastSeenAt < ONLINE_WINDOW_MS
+            },
+            newToday = logins.count { sameDay(it.createdAt) },
             threads = state.threads.values
                 .sortedByDescending { it.lastUserAt.coerceAtLeast(it.lastSupportAt) }
         )

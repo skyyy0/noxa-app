@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PlaylistPlay
 import androidx.compose.material.icons.filled.Shuffle
@@ -104,6 +105,9 @@ fun PlaylistDetailScreen(
     songsFlow: Flow<List<Song>>,
     favoriteIds: Set<String>,
     currentPlayingSongId: String?,
+    /** Live playback state — the play button toggles to Jeda/Lanjutkan. */
+    isPlaying: Boolean = false,
+    onTogglePlayPause: () -> Unit = {},
     onBack: () -> Unit,
     onPlaySong: (Song, List<Song>, Int) -> Unit,
     onToggleFavorite: (Song) -> Unit,
@@ -306,8 +310,13 @@ fun PlaylistDetailScreen(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
+                            val playlistIsActive = currentPlayingSongId != null &&
+                                songs.any { it.id == currentPlayingSongId }
                             Button(
-                                onClick = { onPlaySong(songs[0], songs, 0) },
+                                onClick = {
+                                    if (playlistIsActive) onTogglePlayPause()
+                                    else onPlaySong(songs[0], songs, 0)
+                                },
                                 colors = ButtonDefaults.buttonColors(
                                     containerColor = NoxaLime,
                                     contentColor = NoxaBlack
@@ -316,12 +325,23 @@ fun PlaylistDetailScreen(
                                 modifier = Modifier.weight(1f)
                             ) {
                                 Icon(
-                                    imageVector = Icons.Default.PlayArrow,
+                                    imageVector = if (playlistIsActive && isPlaying) {
+                                        Icons.Default.Pause
+                                    } else {
+                                        Icons.Default.PlayArrow
+                                    },
                                     contentDescription = "Putar semua",
                                     modifier = Modifier.size(18.dp)
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("Putar", fontWeight = FontWeight.Bold)
+                                Text(
+                                    when {
+                                        playlistIsActive && isPlaying -> "Jeda"
+                                        playlistIsActive -> "Lanjutkan"
+                                        else -> "Putar"
+                                    },
+                                    fontWeight = FontWeight.Bold
+                                )
                             }
 
                             Button(
