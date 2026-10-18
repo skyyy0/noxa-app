@@ -105,7 +105,9 @@ sealed interface DevUiState {
         /** Stamped within the last couple of minutes — "sedang online". */
         val onlineNow: Int = 0,
         /** Accounts registered today. */
-        val newToday: Int = 0
+        val newToday: Int = 0,
+        /** versionCode of the update entry already published (null = belum ada). */
+        val publishedVersionCode: Long? = null
     ) : DevUiState
 }
 
@@ -256,6 +258,7 @@ fun DevPanelScreen(
                             DevTab.UPDATE -> UpdatePushSection(
                                 currentVersionCode = currentVersionCode,
                                 currentVersionName = currentVersionName,
+                                publishedVersionCode = s.publishedVersionCode,
                                 onPush = onPushUpdate
                             )
                         }
@@ -401,11 +404,20 @@ private fun DevTabRow(current: DevTab, onSelect: (DevTab) -> Unit, modifier: Mod
 private fun UpdatePushSection(
     currentVersionCode: Long,
     currentVersionName: String,
+    /** The update entry already on the server — the form must never default
+     *  below it (that would be refused) nor a phantom +1 above both. */
+    publishedVersionCode: Long? = null,
     onPush: (url: String, versionName: String, versionCode: Long, note: String, mandatory: Boolean, (String?) -> Unit) -> Unit
 ) {
     var url by remember { mutableStateOf("") }
     var versionName by remember { mutableStateOf("") }
-    var versionCode by remember { mutableStateOf((currentVersionCode + 1).toString()) }
+    // Default = the newest code that is actually publishable: the build this
+    // device runs, or whatever is already published — whichever is higher.
+    // The old `current + 1` defaulted to a versionCode no APK carries, which
+    // would nag users forever (the downloaded APK could never reach it).
+    var versionCode by remember(publishedVersionCode, currentVersionCode) {
+        mutableStateOf(maxOf(currentVersionCode, publishedVersionCode ?: 0L).toString())
+    }
     var note by remember { mutableStateOf("") }
     var mandatory by remember { mutableStateOf(true) }
     var result by remember { mutableStateOf<String?>(null) }

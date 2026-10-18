@@ -2574,17 +2574,18 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 return@launch
             }
             // The baseline is the update already PUBLISHED on the server, never
-            // the build installed on this phone: the developer always holds the
-            // highest versionCode, so validating against BuildConfig made it
-            // impossible to push the build she is currently running (e.g. 19).
-            // Users on anything below the published code are the audience.
+            // the build installed on this phone (see UpdateGate.publishAllowed).
+            // Equal is a legal republish — Sky re-pushes the same versionCode
+            // whenever the APK URL/note changes; only a strictly lower code is
+            // a downgrade and gets refused.
             val published = runCatching { backend.readState()?.update?.versionCode }
                 .getOrNull()
-            if (published != null && versionCode <= published) {
+            if (!com.example.data.remote.UpdateGate.publishAllowed(versionCode, published)) {
                 onResult(
-                    "Version code harus lebih besar dari update yang sudah " +
-                        "dipublish ($published). User di bawah versi itu sudah " +
-                        "bisa update ke $published."
+                    "Version code $versionCode lebih kecil dari update yang sudah " +
+                        "dipublish ($published) — itu menurunkan versi. Isi minimal " +
+                        "$published (republish) atau lebih besar; yang ditawari update " +
+                        "adalah user di bawahnya."
                 )
                 return@launch
             }
@@ -3080,6 +3081,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 it.lastSeenAt > 0 && now - it.lastSeenAt < ONLINE_WINDOW_MS
             },
             newToday = logins.count { sameDay(it.createdAt) },
+            publishedVersionCode = state.update?.versionCode,
             threads = state.threads.values
                 .sortedByDescending { it.lastUserAt.coerceAtLeast(it.lastSupportAt) }
         )

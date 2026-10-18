@@ -128,4 +128,31 @@ class UpdateGateTest {
         assertFalse(UpdateGate.isNewer(17L, 17L))
         assertFalse(UpdateGate.isNewer(17L, 16L))
     }
+
+    // ------------------------------------------------ publishAllowed
+
+    @Test
+    fun `first publish accepts any version code`() {
+        assertTrue(UpdateGate.publishAllowed(1L, null))
+        assertTrue(UpdateGate.publishAllowed(20L, null))
+    }
+
+    @Test
+    fun `republishing the same version code is allowed`() {
+        // Sky's build is 20, the published entry is 20 (new APK URL / note):
+        // forcing >20 would demand a build that does not exist yet.
+        assertTrue(UpdateGate.publishAllowed(20L, 20L))
+    }
+
+    @Test
+    fun `higher version code is allowed`() {
+        assertTrue(UpdateGate.publishAllowed(21L, 20L))
+        assertTrue(UpdateGate.publishAllowed(20L, 19L))
+    }
+
+    @Test
+    fun `lower version code is refused as a downgrade`() {
+        assertFalse(UpdateGate.publishAllowed(19L, 20L))
+        assertFalse(UpdateGate.publishAllowed(0L, 20L))
+    }
 }

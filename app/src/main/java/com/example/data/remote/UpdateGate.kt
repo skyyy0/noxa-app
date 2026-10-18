@@ -45,4 +45,22 @@ object UpdateGate {
     /** True when [publishedVersionCode] is strictly newer than this build. */
     fun isNewer(currentVersionCode: Long, publishedVersionCode: Long): Boolean =
         publishedVersionCode > currentVersionCode
+
+    /**
+     * Whether the dev console may publish [versionCode] over the update entry
+     * already on the server.
+     *
+     * The baseline is the **published** entry, never `BuildConfig` — the
+     * developer pushes the very build she is holding, so "must be higher than
+     * what runs on this phone" would make publishing her own build impossible.
+     *
+     * * `publishedVersionCode == null` → anything positive passes (first push);
+     * * `versionCode == published` → **allowed**: republishing the same build
+     *   with a new URL / note / mandatory flag is a legitimate correction;
+     * * `versionCode > published` → the normal new-version push;
+     * * `versionCode < published` → refused: that would walk the update
+     *   channel backwards for everyone below it.
+     */
+    fun publishAllowed(versionCode: Long, publishedVersionCode: Long?): Boolean =
+        publishedVersionCode == null || versionCode >= publishedVersionCode
 }
