@@ -55,6 +55,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -91,6 +92,9 @@ import com.example.ui.theme.NoxaTextTertiary
 import com.example.ui.components.noxaTap
 import com.example.ui.viewmodel.WeeklyRecap
 import com.example.ui.viewmodel.YearListeningUi
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable
 fun ProfileScreen(
@@ -422,6 +426,11 @@ fun ProfileScreen(
 
         // NOXA WRAPPED MINI — the deep recap.
         WrappedMiniCard(yearListening = yearListening, onOpenWrapped = onOpenWrapped)
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        // KARTU PROFIL NOXA — the shareable identity card.
+        NoxaProfileCard(currentUser = currentUser, yearListening = yearListening)
 
         Spacer(modifier = Modifier.height(24.dp))
 
@@ -1570,6 +1579,133 @@ private fun heatColor(level: Float): Color = when {
  * means more plays that day. Purely decorative data from Room — nothing
  * leaves the phone.
  */
+
+/**
+ * KARTU PROFIL NOXA — a preview of the shareable profile card (avatar, name,
+ * role and the year's stats in one image). Tapping the button renders it via
+ * [com.example.ui.util.ShareCardRenderer] and opens the system share sheet.
+ */
+@Composable
+private fun NoxaProfileCard(
+    currentUser: com.example.data.auth.NoxaUser?,
+    yearListening: YearListeningUi
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var busy by remember { mutableStateOf(false) }
+
+    val stats = yearListening.stats
+    val cardData = remember(currentUser, yearListening) {
+        com.example.ui.util.ShareCardRenderer.ProfileCardData(
+            displayName = currentUser?.displayName ?: "Pendengar NOXA",
+            subtitle = currentUser?.email ?: "Mode tamu",
+            photoUrl = currentUser?.photoUrl,
+            isDeveloper = currentUser?.role == com.example.data.support.AccountRole.DEVELOPER,
+            totalPlays = stats?.totalPlays ?: 0,
+            distinctArtists = yearListening.distinctArtists,
+            topArtist = yearListening.topArtists.firstOrNull()?.name,
+            topSong = yearListening.topSongTitle
+                .takeIf { it.isNotBlank() }
+                ?.let { title ->
+                    if (yearListening.topSongPlays > 0) "$title (${yearListening.topSongPlays}×)" else title
+                },
+            longestStreakDays = stats?.longestStreak ?: 0L
+        )
+    }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp)
+            .testTag("profile_card_section"),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = NoxaSurfaceElevated),
+        border = androidx.compose.foundation.BorderStroke(1.dp, NoxaBorder)
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .clip(CircleShape)
+                        .background(NoxaLime.copy(alpha = 0.15f))
+                        .border(1.5.dp, NoxaLime, CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = cardData.displayName.take(1).uppercase(),
+                        color = NoxaLime,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Black
+                    )
+                }
+                Column {
+                    Text(
+                        text = "Kartu Profil NOXA",
+                        color = NoxaTextPrimary,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "${cardData.displayName} • " +
+                            if (cardData.totalPlays > 0) "${cardData.totalPlays} lagu tahun ini" else "belum ada stat",
+                        color = NoxaTextSecondary,
+                        fontSize = 12.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+
+            Text(
+                text = "Kartu siap dibagikan ke story atau chat — avatar, nama, dan statistik " +
+                    "dengarmu dalam satu gambar. Tersimpan juga di galeri (Pictures/NOXA).",
+                color = NoxaTextSecondary,
+                fontSize = 12.sp,
+                lineHeight = 18.sp
+            )
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(if (busy) NoxaSurfaceSecondary else NoxaLime)
+                    .clickable(enabled = !busy) {
+                        busy = true
+                        scope.launch {
+                            val ok = withContext(Dispatchers.IO) {
+                                com.example.ui.util.ShareCardRenderer.shareProfileCard(context, cardData)
+                            }
+                            busy = false
+                            if (!ok) {
+                                Toast.makeText(
+                                    context,
+                                    "Gagal membuat kartu profil. Coba lagi.",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            }
+                        }
+                    }
+                    .padding(vertical = 12.dp),
+                horizontalArrangement = Arrangement.Center
+            ) {
+                Text(
+                    text = if (busy) "Membuat gambar..." else "Bagikan Kartu Profil",
+                    color = if (busy) NoxaTextSecondary else NoxaBlack,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun ListeningHeatmapCard(yearListening: YearListeningUi) {
     val stats = yearListening.stats

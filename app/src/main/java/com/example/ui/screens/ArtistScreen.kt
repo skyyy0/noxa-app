@@ -353,6 +353,16 @@ private fun ArtistPageContent(
             // sources actually answered — empty chips never render.
             val factChips = remember(insights) {
                 buildList {
+                    // Spotify's own numbers: monthly listeners + followers.
+                    val spotify = buildList {
+                        insights?.spotifyMonthlyListeners
+                            ?.let { add("${FormatUtils.formatCount(it)} pendengar bulanan") }
+                        insights?.spotifyFollowers
+                            ?.let { add("${FormatUtils.formatCount(it)} followers") }
+                    }
+                    if (spotify.isNotEmpty()) {
+                        add("Spotify: ${spotify.joinToString(" • ")}")
+                    }
                     insights?.genres?.takeIf { it.isNotEmpty() }
                         ?.let { add(it.joinToString(" • ")) }
                     listOfNotNull(

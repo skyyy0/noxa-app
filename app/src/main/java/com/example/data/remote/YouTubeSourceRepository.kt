@@ -6,6 +6,9 @@ import com.example.data.model.Song
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -324,15 +327,13 @@ class YouTubeSourceRepository {
         }
 
         // Audio: device extractor first (no instance dependency). Video (MV):
-        // instances only — the device path is audio-focused.
-        val deviceAudio = runCatching { deviceStreams(videoId) }.getOrNull()
+        // instances only, raced in parallel — the device path is audio-focused
+        // and can never satisfy a video request, so it used to burn seconds of
+        // scraping before the MV even started resolving.
         val fresh = if (requireVideo) {
-            pipedStreams(videoId, videoHeight)
-                ?: invidiousStreams(videoId, videoHeight)
-                ?: deviceAudio
-                ?: return null
+            videoStreamsRacing(videoId, videoHeight) ?: return null
         } else {
-            deviceAudio
+            runCatching { deviceStreams(videoId) }.getOrNull()
                 ?: pipedStreams(videoId, videoHeight)
                 ?: invidiousStreams(videoId, videoHeight)
                 ?: return null
@@ -356,27 +357,53 @@ class YouTubeSourceRepository {
 
     private fun pipedStreams(videoId: String, videoHeight: Int): CachedStreams? =
         firstInstanceResultSync(pipedInstances) { base ->
-            val body = getBody("$base/streams/${encode(videoId)}")
-                ?: return@firstInstanceResultSync null
-            val response = moshi.adapter(PipedStreamsResponse::class.java)
-                .fromJson(body) ?: return@firstInstanceResultSync null
-            val audio = pickPipedAudioStream(response.audioStreams)?.url
-            val video = pickPipedVideoStream(response.videoStreams, videoHeight)?.url
-            if (audio == null && video == null) return@firstInstanceResultSync null
-            CachedStreams(audioUrl = audio, videoUrl = video, fetchedAtMs = System.currentTimeMillis())
+            pipedStreamsFrom(base, videoId, videoHeight)
         }
+
+    private fun pipedStreamsFrom(base: String, videoId: String, videoHeight: Int): CachedStreams? {
+        val body = getBody("$base/streams/${encode(videoId)}") ?: return null
+        val response = moshi.adapter(PipedStreamsResponse::class.java)
+            .fromJson(body) ?: return null
+        val audio = pickPipedAudioStream(response.audioStreams)?.url
+        val video = pickPipedVideoStream(response.videoStreams, videoHeight)?.url
+        if (audio == null && video == null) return null
+        return CachedStreams(audioUrl = audio, videoUrl = video, fetchedAtMs = System.currentTimeMillis())
+    }
 
     private fun invidiousStreams(videoId: String, videoHeight: Int): CachedStreams? =
         firstInstanceResultSync(invidiousInstances) { base ->
-            val body = getBody("$base/api/v1/videos/${encode(videoId)}")
-                ?: return@firstInstanceResultSync null
-            val response = moshi.adapter(InvidiousVideoResponse::class.java)
-                .fromJson(body) ?: return@firstInstanceResultSync null
-            val audio = pickInvidiousAudioFormat(response.adaptiveFormats)?.url
-            val video = pickInvidiousVideoFormat(response.adaptiveFormats, response.formatStreams, videoHeight)
-            if (audio == null && video == null) return@firstInstanceResultSync null
-            CachedStreams(audioUrl = audio, videoUrl = video, fetchedAtMs = System.currentTimeMillis())
+            invidiousStreamsFrom(base, videoId, videoHeight)
         }
+
+    private fun invidiousStreamsFrom(base: String, videoId: String, videoHeight: Int): CachedStreams? {
+        val body = getBody("$base/api/v1/videos/${encode(videoId)}") ?: return null
+        val response = moshi.adapter(InvidiousVideoResponse::class.java)
+            .fromJson(body) ?: return null
+        val audio = pickInvidiousAudioFormat(response.adaptiveFormats)?.url
+        val video = pickInvidiousVideoFormat(response.adaptiveFormats, response.formatStreams, videoHeight)
+        if (audio == null && video == null) return null
+        return CachedStreams(audioUrl = audio, videoUrl = video, fetchedAtMs = System.currentTimeMillis())
+    }
+
+    /**
+     * MV path: every Piped/Invidious instance is asked **at the same time** and
+     * the first real video answer wins. Walking them one by one meant each
+     * dead instance added its full 6–12 s timeout to the spinner; racing turns
+     * that sum into a single attempt's worth of waiting. Requests are few (one
+     * per quality, cached 4 h per height), so parallel is polite enough here.
+     */
+    private suspend fun videoStreamsRacing(
+        videoId: String,
+        videoHeight: Int
+    ): CachedStreams? = coroutineScope {
+        val answers =
+            pipedInstances.map { base ->
+                async { runCatching { pipedStreamsFrom(base, videoId, videoHeight) }.getOrNull() }
+            } + invidiousInstances.map { base ->
+                async { runCatching { invidiousStreamsFrom(base, videoId, videoHeight) }.getOrNull() }
+            }
+        answers.awaitAll().firstNotNullOfOrNull { it }
+    }
 
     // ------------------------------------------------------------------ HTTP
 

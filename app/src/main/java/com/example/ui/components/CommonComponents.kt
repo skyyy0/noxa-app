@@ -1,5 +1,6 @@
 package com.example.ui.components
 
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -276,15 +277,26 @@ fun SongListItem(
             )
         }
 
-        AsyncImage(
-            model = song.artworkUrl,
-            contentDescription = "Track Artwork",
-            contentScale = ContentScale.Crop,
-            modifier = Modifier
-                .size(48.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .border(0.5.dp, NoxaBorder, RoundedCornerShape(8.dp))
-        )
+        Box {
+            AsyncImage(
+                model = song.artworkUrl,
+                contentDescription = "Track Artwork",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .border(0.5.dp, NoxaBorder, RoundedCornerShape(8.dp))
+            )
+            // Spotify-style "now playing" bars over the artwork corner — the
+            // glanceable sign that THIS row is what you are hearing.
+            if (isPlaying) {
+                NowPlayingBars(
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(3.dp)
+                )
+            }
+        }
 
         Spacer(modifier = Modifier.width(12.dp))
 
@@ -603,6 +615,67 @@ fun SupportIdentityRow(
                 color = NoxaTextTertiary,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Medium
+            )
+        }
+    }
+}
+
+/**
+ * The three little dancing lime bars Spotify paints on whatever is currently
+ * playing — a glanceable "this is what you are hearing" mark for song rows
+ * and shelves. Each bar breathes at its own pace; heights are animated once
+ * and only rendered while [isPlaying] is true upstream.
+ */
+@Composable
+fun NowPlayingBars(
+    modifier: Modifier = Modifier,
+    barColor: Color = NoxaLime,
+    barWidth: Dp = 2.5.dp,
+    maxHeight: Dp = 12.dp
+) {
+    val transition = rememberInfiniteTransition(label = "now_playing_bars")
+    val height1 by transition.animateFloat(
+        initialValue = 0.3f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(560, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "bar1"
+    )
+    val height2 by transition.animateFloat(
+        initialValue = 0.75f,
+        targetValue = 0.35f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(420, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "bar2"
+    )
+    val height3 by transition.animateFloat(
+        initialValue = 0.45f,
+        targetValue = 0.95f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(700, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "bar3"
+    )
+
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(2.dp))
+            .background(NoxaBlack.copy(alpha = 0.72f))
+            .padding(horizontal = 3.dp, vertical = 2.5.dp),
+        verticalAlignment = Alignment.Bottom,
+        horizontalArrangement = Arrangement.spacedBy(1.5.dp)
+    ) {
+        listOf(height1, height2, height3).forEach { fraction ->
+            Box(
+                modifier = Modifier
+                    .width(barWidth)
+                    .height(maxHeight * fraction)
+                    .background(barColor, RoundedCornerShape(1.dp))
             )
         }
     }

@@ -33,6 +33,7 @@ import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -69,6 +70,13 @@ private const val ONLINE_WINDOW_MS = 2L * 60 * 1000
 
 /** Autoplay-similar: trigger window before the end of the queue's last song. */
 private const val AUTOPLAY_NEAR_END_MS = 15_000L
+
+/**
+ * Cari pakai lirik: one quiet beat after the last keystroke before the
+ * network fires. Without this, every letter cost a request and the free
+ * lyric APIs answered 503 — the feature looked broken.
+ */
+private const val SEARCH_DEBOUNCE_MS = 450L
 
 /** Wrapped: how many top artists / songs the mini card & full screen list. */
 private const val WRAPPED_ARTIST_LIMIT = 5
@@ -211,7 +219,9 @@ sealed interface ArtistUiState {
 data class LyricSearchUi(
     val query: String,
     val songs: List<Song>,
-    val matchedLine: String
+    val matchedLine: String,
+    /** Non-null when no lyric source could be reached (honest, not "no match"). */
+    val error: String? = null
 ) {
     companion object {
         val EMPTY = LyricSearchUi("", emptyList(), "")
@@ -531,43 +541,70 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * **Cari pakai lirik** — reverse lookup: a line of lyrics becomes the
-     * tracks those words belong to. LRCLIB identifies the song; the NOXA
-     * catalogue then resolves each hit into something actually playable.
+     * tracks those words belong to. LRCLIB/songsear.ch identify the song; the
+     * NOXA catalogue then resolves each hit into something actually playable.
+     *
+     * Requests are debounced (one quiet beat before the network fires) so
+     * typing does not hammer the sources with a request per keystroke — that
+     * was what made the free lyric APIs answer 503 and the feature look dead.
+     * Catalogue resolution runs in parallel: eight hits no longer wait in a
+     * line.
      */
     fun searchByLyrics(fragment: String) {
         lyricSearchJob?.cancel()
         val trimmed = fragment.trim()
         if (trimmed.length < com.example.data.remote.LyricsRepository.MIN_LYRIC_QUERY) {
             _lyricSearch.value = LyricSearchUi.EMPTY
+            _isSearching.value = false
             return
         }
         lyricSearchJob = safeScope.launch {
+            delay(SEARCH_DEBOUNCE_MS)
             _isSearching.value = true
             _lyricSearch.value = LyricSearchUi.EMPTY
-            val hits = runCatching { lyricsRepository.searchByLyricText(trimmed) }
-                .getOrDefault(emptyList())
-            val songs = hits.mapNotNull { hit ->
-                // "Artist - Title" is the most reliable catalogue query shape.
-                val found = runCatching {
-                    repository.search("${hit.artistName} ${hit.trackName}").take(5)
-                }.getOrDefault(emptyList())
-                found.firstOrNull { song ->
-                    song.title.contains(hit.trackName, ignoreCase = true) ||
-                        hit.trackName.contains(song.title, ignoreCase = true)
+            try {
+                val result = runCatching { lyricsRepository.searchByLyricText(trimmed) }
+                val error = result.exceptionOrNull()
+                val hits = result.getOrDefault(emptyList())
+                val songs = if (hits.isEmpty()) {
+                    emptyList()
+                } else {
+                    coroutineScope {
+                        hits.map { hit ->
+                            async {
+                                // "Artist Title" is the most reliable query shape.
+                                runCatching {
+                                    repository.search("${hit.artistName} ${hit.trackName}").take(5)
+                                }.getOrDefault(emptyList()).firstOrNull { song ->
+                                    song.title.contains(hit.trackName, ignoreCase = true) ||
+                                        hit.trackName.contains(song.title, ignoreCase = true)
+                                }
+                            }
+                        }.awaitAll().filterNotNull().distinctBy { it.id }
+                    }
                 }
-            }.distinctBy { it.id }
-            _lyricSearch.value = LyricSearchUi(
-                query = trimmed,
-                songs = songs,
-                matchedLine = trimmed
-            )
-            _isSearching.value = false
+                _lyricSearch.value = LyricSearchUi(
+                    query = trimmed,
+                    songs = songs,
+                    matchedLine = trimmed,
+                    // Reaching this point with no hits AND a thrown source means
+                    // the network failed — say that instead of "no match".
+                    error = if (songs.isEmpty() && error != null) {
+                        "Layanan lirik tidak bisa dijangkau. Coba lagi sebentar lagi."
+                    } else {
+                        null
+                    }
+                )
+            } finally {
+                _isSearching.value = false
+            }
         }
     }
 
     /** Clears the lyric-search result (leaving the Search tab). */
     fun clearLyricSearch() {
         lyricSearchJob?.cancel()
+        _isSearching.value = false
         _lyricSearch.value = LyricSearchUi.EMPTY
     }
 

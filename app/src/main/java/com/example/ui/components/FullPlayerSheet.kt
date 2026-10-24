@@ -874,7 +874,8 @@ fun FullPlayerSheet(
                         lyricsState = lyricsState,
                         progressFlow = progressFlow,
                         onSeekTo = onSeekTo,
-                        onRetry = onRetryLyrics
+                        onRetry = onRetryLyrics,
+                        song = playerState.currentSong
                     )
                     Spacer(modifier = Modifier.height(24.dp))
                 }

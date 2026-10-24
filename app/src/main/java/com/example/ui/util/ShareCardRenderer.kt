@@ -46,7 +46,25 @@ import androidx.core.content.FileProvider
  */
 object ShareCardRenderer {
 
+    /**
+     * Everything the Kartu Profil NOXA shows — assembled by the profile screen
+     * from the signed-in user and the on-device Wrapped stats.
+     */
+    data class ProfileCardData(
+        val displayName: String,
+        val subtitle: String?,
+        val photoUrl: String?,
+        val isDeveloper: Boolean,
+        val totalPlays: Int,
+        val distinctArtists: Int,
+        val topArtist: String?,
+        val topSong: String?,
+        val longestStreakDays: Long
+    )
+
     private const val CARD_SIZE = 1080
+    private const val LYRIC_CARD_HEIGHT = 1350
+    private const val LYRIC_CARD_MAX_LINES = 7
     private const val FILE_PROVIDER_SUFFIX = ".fileprovider"
     private const val TAG = "ShareCard"
 
@@ -64,8 +82,8 @@ object ShareCardRenderer {
     suspend fun share(context: Context, song: Song): Boolean {
         val file = try {
             val bitmap = render(context, song) ?: return false
-            saveToGallery(context, bitmap, song)
-            writeToCache(context, bitmap, song)
+            saveToGallery(context, bitmap, safeName(song.title, "share"))
+            writeToCache(context, bitmap, "song-${song.id.hashCode()}")
         } catch (e: Exception) {
             Log.e(TAG, "Rendering/saving the share card failed", e)
             return false
@@ -98,20 +116,64 @@ object ShareCardRenderer {
         }
     }
 
+    /**
+     * **Bagikan lirik jadi gambar** — a tall story card with the verse around
+     * the line being sung; the highlighted line lands in lime. Same flow as
+     * the canvas card: render → gallery → system share sheet.
+     * [highlightIndex] < 0 means "no highlight" (plain, unsynced lyrics).
+     */
+    suspend fun shareLyrics(
+        context: Context,
+        song: Song?,
+        lines: List<String>,
+        highlightIndex: Int
+    ): Boolean {
+        val file = try {
+            val bitmap = renderLyricsCard(context, song, lines, highlightIndex) ?: return false
+            saveToGallery(context, bitmap, safeName(song?.title ?: "lirik", "lyrics"))
+            writeToCache(context, bitmap, "lyrics-${(song?.id ?: "card").hashCode()}")
+        } catch (e: Exception) {
+            Log.e(TAG, "Rendering/saving the lyric card failed", e)
+            return false
+        }
+        return try {
+            val uri = FileProvider.getUriForFile(
+                context,
+                context.packageName + FILE_PROVIDER_SUFFIX,
+                file
+            )
+            val text = buildString {
+                if (song != null) {
+                    append('"').append(song.title).append('"').append(" — ").append(song.artist)
+                    append('\n')
+                    append(NoxaLinks.songLink(song))
+                    append("\n\n")
+                }
+                append(lines.joinToString("\n"))
+                append("\n\nDidengarkan lewat NOXA Music")
+            }
+            val send = Intent(Intent.ACTION_SEND).apply {
+                type = "image/png"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                putExtra(Intent.EXTRA_TEXT, text)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                clipData = ClipData.newUri(context.contentResolver, "NOXA lyric card", uri)
+            }
+            val chooser = Intent.createChooser(send, "Bagikan lirik").apply {
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                if (context !is Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(chooser)
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Opening the lyric share sheet failed", e)
+            false
+        }
+    }
+
     /** Draws the 1080×1080 card. Returns null when nothing could be drawn. */
     internal suspend fun render(context: Context, song: Song): Bitmap? {
-        val artwork: Bitmap? = try {
-            val loader: ImageLoader = context.imageLoader
-            val drawable = loader.execute(
-                ImageRequest.Builder(context)
-                    .data(song.artworkUrl)
-                    .crossfade(false)
-                    .build()
-            ).drawable
-            drawable?.toBitmap()
-        } catch (e: Exception) {
-            null
-        }
+        val artwork = loadArtwork(context, song.artworkUrl)
         val bitmap = Bitmap.createBitmap(CARD_SIZE, CARD_SIZE, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
 
@@ -204,6 +266,318 @@ object ShareCardRenderer {
         return bitmap
     }
 
+    /**
+     * Draws the 1080×1350 lyric card: compact song header, the verse in the
+     * middle (highlighted line in lime and bold), NOXA footer. Every line is
+     * ellipsized to one row — lyric lines are short by nature, and a wrapped
+     * wall of text kills the card.
+     */
+    internal suspend fun renderLyricsCard(
+        context: Context,
+        song: Song?,
+        lines: List<String>,
+        highlightIndex: Int
+    ): Bitmap? {
+        val visible = lines.map { it.trim() }.filter { it.isNotBlank() }.take(LYRIC_CARD_MAX_LINES)
+        if (visible.isEmpty()) return null
+        val artwork = loadArtwork(context, song?.artworkUrl)
+        val bitmap = Bitmap.createBitmap(CARD_SIZE, LYRIC_CARD_HEIGHT, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+
+        val bgPaint = Paint().apply {
+            shader = LinearGradient(
+                0f, 0f, 0f, LYRIC_CARD_HEIGHT.toFloat(),
+                BG_TOP, BG_BOTTOM, Shader.TileMode.CLAMP
+            )
+        }
+        canvas.drawRect(0f, 0f, CARD_SIZE.toFloat(), LYRIC_CARD_HEIGHT.toFloat(), bgPaint)
+
+        // Header: small rounded artwork + title/artist to its right.
+        val artRect = RectF(64f, 64f, 214f, 214f)
+        if (artwork != null) {
+            val side = artRect.width().toInt()
+            val scaled = Bitmap.createScaledBitmap(artwork, side, side, true)
+            val path = Path().apply { addRoundRect(artRect, 26f, 26f, Path.Direction.CW) }
+            canvas.save()
+            canvas.clipPath(path)
+            canvas.drawBitmap(scaled, artRect.left, artRect.top, Paint(Paint.ANTI_ALIAS_FLAG))
+            canvas.restore()
+        } else {
+            canvas.drawRoundRect(artRect, 26f, 26f, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = BG_TOP })
+        }
+
+        val maxTextWidth = CARD_SIZE - artRect.right - 128f
+        val titlePaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = TEXT_PRIMARY
+            textSize = 52f
+            textAlign = Paint.Align.LEFT
+            typeface = Typeface.DEFAULT_BOLD
+        }
+        val title = TextUtils.ellipsize(
+            song?.title ?: "Lirik", titlePaint, maxTextWidth, TextUtils.TruncateAt.END
+        )
+        canvas.drawText(title, 0, title.length, artRect.right + 40f, 150f, titlePaint)
+
+        val artistPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = TEXT_SECONDARY
+            textSize = 36f
+            textAlign = Paint.Align.LEFT
+        }
+        val artist = TextUtils.ellipsize(
+            song?.artist?.takeIf { it.isNotBlank() } ?: "NOXA Music",
+            artistPaint,
+            maxTextWidth,
+            TextUtils.TruncateAt.END
+        )
+        canvas.drawText(artist, 0, artist.length, artRect.right + 40f, 206f, artistPaint)
+
+        // The verse: highlighted line in lime & bold, the rest calm white.
+        val highlight = if (highlightIndex in visible.indices) highlightIndex else -1
+        var y = 430f
+        for ((index, raw) in visible.withIndex()) {
+            val isHighlight = index == highlight
+            val paint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = if (isHighlight) LIME else TEXT_PRIMARY
+                if (!isHighlight) alpha = 190
+                textSize = if (isHighlight) 58f else 42f
+                textAlign = Paint.Align.CENTER
+                typeface = if (isHighlight) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
+            }
+            val line = TextUtils.ellipsize(raw, paint, CARD_SIZE - 140f, TextUtils.TruncateAt.END)
+            canvas.drawText(line, 0, line.length, CARD_SIZE / 2f, y, paint)
+            y += if (isHighlight) 98f else 80f
+        }
+
+        // Lime divider + NOXA branding footer (same language as the canvas card).
+        val footerTop = LYRIC_CARD_HEIGHT - 190f
+        val linePaint = Paint().apply { color = LIME }
+        canvas.drawRect(CARD_SIZE / 2f - 60f, footerTop, CARD_SIZE / 2f + 60f, footerTop + 6f, linePaint)
+
+        val brandPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = TEXT_PRIMARY
+            textSize = 40f
+            textAlign = Paint.Align.CENTER
+            typeface = Typeface.DEFAULT_BOLD
+            letterSpacing = 0.12f
+        }
+        canvas.drawText("NOXA MUSIC", CARD_SIZE / 2f, footerTop + 64f, brandPaint)
+
+        val linkPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = TEXT_SECONDARY
+            textSize = 30f
+            textAlign = Paint.Align.CENTER
+        }
+        canvas.drawText("skyvibes.my.id", CARD_SIZE / 2f, footerTop + 110f, linkPaint)
+
+        return bitmap
+    }
+
+    /**
+     * **Kartu Profil NOXA** — the shareable identity card: avatar (photo or
+     * drawn initial), name, role badge and the year's on-device listening
+     * stats. Same render → gallery → share-sheet flow as the other cards.
+     */
+    suspend fun shareProfileCard(context: Context, data: ProfileCardData): Boolean {
+        val file = try {
+            val bitmap = renderProfileCard(context, data) ?: return false
+            saveToGallery(context, bitmap, safeName(data.displayName, "profil"))
+            writeToCache(context, bitmap, "profile-${data.displayName.hashCode()}")
+        } catch (e: Exception) {
+            Log.e(TAG, "Rendering/saving the profile card failed", e)
+            return false
+        }
+        return try {
+            val uri = FileProvider.getUriForFile(
+                context,
+                context.packageName + FILE_PROVIDER_SUFFIX,
+                file
+            )
+            val send = Intent(Intent.ACTION_SEND).apply {
+                type = "image/png"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                putExtra(
+                    Intent.EXTRA_TEXT,
+                    "Kartu profil NOXA ${data.displayName} — ${data.totalPlays} lagu diputar. " +
+                        "Didengarkan lewat NOXA Music"
+                )
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                clipData = ClipData.newUri(context.contentResolver, "NOXA profile card", uri)
+            }
+            val chooser = Intent.createChooser(send, "Bagikan kartu profil").apply {
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                if (context !is Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(chooser)
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Opening the profile share sheet failed", e)
+            false
+        }
+    }
+
+    /** Draws the 1080×1350 profile card. Avatar photo degrades to an initial. */
+    internal suspend fun renderProfileCard(context: Context, data: ProfileCardData): Bitmap? {
+        if (data.displayName.isBlank()) return null
+        val photo: Bitmap? = if (data.photoUrl.isNullOrBlank()) {
+            null
+        } else {
+            loadArtwork(context, data.photoUrl)
+        }
+        val bitmap = Bitmap.createBitmap(CARD_SIZE, LYRIC_CARD_HEIGHT, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+
+        val bgPaint = Paint().apply {
+            shader = LinearGradient(
+                0f, 0f, 0f, LYRIC_CARD_HEIGHT.toFloat(),
+                BG_TOP, BG_BOTTOM, Shader.TileMode.CLAMP
+            )
+        }
+        canvas.drawRect(0f, 0f, CARD_SIZE.toFloat(), LYRIC_CARD_HEIGHT.toFloat(), bgPaint)
+
+        // Avatar: lime-ringed circle with the photo, or a drawn initial.
+        val avatarCx = CARD_SIZE / 2f
+        val avatarTop = 150f
+        val avatarRadius = 150f
+        val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = LIME
+            style = Paint.Style.STROKE
+            strokeWidth = 10f
+        }
+        val avatarCenterY = avatarTop + avatarRadius
+        if (photo != null) {
+            val scaled = Bitmap.createScaledBitmap(
+                photo, (avatarRadius * 2).toInt(), (avatarRadius * 2).toInt(), true
+            )
+            val path = Path().apply {
+                addCircle(avatarCx, avatarCenterY, avatarRadius, Path.Direction.CW)
+            }
+            canvas.save()
+            canvas.clipPath(path)
+            canvas.drawBitmap(scaled, avatarCx - avatarRadius, avatarCenterY - avatarRadius, Paint(Paint.ANTI_ALIAS_FLAG))
+            canvas.restore()
+        } else {
+            val fallbackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = BG_TOP }
+            canvas.drawCircle(avatarCx, avatarCenterY, avatarRadius, fallbackPaint)
+            val initialPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = LIME
+                textSize = 150f
+                textAlign = Paint.Align.CENTER
+                typeface = Typeface.DEFAULT_BOLD
+            }
+            val initial = data.displayName.trim().take(1).uppercase()
+            canvas.drawText(initial, avatarCx, avatarCenterY + 52f, initialPaint)
+        }
+        canvas.drawCircle(avatarCx, avatarCenterY, avatarRadius, ringPaint)
+
+        // Name + subtitle.
+        val namePaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = TEXT_PRIMARY
+            textSize = 60f
+            textAlign = Paint.Align.CENTER
+            typeface = Typeface.DEFAULT_BOLD
+        }
+        val name = TextUtils.ellipsize(data.displayName, namePaint, CARD_SIZE - 160f, TextUtils.TruncateAt.END)
+        canvas.drawText(name, 0, name.length, avatarCx, avatarTop + avatarRadius * 2 + 92f, namePaint)
+
+        val subtitlePaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = TEXT_SECONDARY
+            textSize = 34f
+            textAlign = Paint.Align.CENTER
+        }
+        if (!data.subtitle.isNullOrBlank()) {
+            val subtitle = TextUtils.ellipsize(
+                data.subtitle, subtitlePaint, CARD_SIZE - 200f, TextUtils.TruncateAt.END
+            )
+            canvas.drawText(subtitle, 0, subtitle.length, avatarCx, avatarTop + avatarRadius * 2 + 148f, subtitlePaint)
+        }
+
+        // DEVELOPER pill (vector-only, lime on black).
+        var statsTop = avatarTop + avatarRadius * 2 + 210f
+        if (data.isDeveloper) {
+            val pillWidth = 320f
+            val pillHeight = 66f
+            val pill = RectF(
+                avatarCx - pillWidth / 2f, statsTop,
+                avatarCx + pillWidth / 2f, statsTop + pillHeight
+            )
+            canvas.drawRoundRect(pill, 33f, 33f, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = LIME })
+            val pillTextPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.BLACK
+                textSize = 34f
+                textAlign = Paint.Align.CENTER
+                typeface = Typeface.DEFAULT_BOLD
+                letterSpacing = 0.1f
+            }
+            canvas.drawText("DEVELOPER", avatarCx, pill.centerY() + 12f, pillTextPaint)
+            statsTop += pillHeight + 56f
+        }
+
+        // Stats rows — only what actually exists; empty stats shrink the card
+        // content instead of showing zeros.
+        val rowPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = TEXT_PRIMARY
+            textSize = 40f
+            textAlign = Paint.Align.CENTER
+        }
+        val accentPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = LIME
+            textSize = 44f
+            textAlign = Paint.Align.CENTER
+            typeface = Typeface.DEFAULT_BOLD
+        }
+        var y = statsTop
+        fun drawRow(text: String, accent: Boolean) {
+            val paint = if (accent) accentPaint else rowPaint
+            val line = TextUtils.ellipsize(text, paint, CARD_SIZE - 140f, TextUtils.TruncateAt.END)
+            canvas.drawText(line, 0, line.length, avatarCx, y, paint)
+            y += 84f
+        }
+        if (data.totalPlays > 0) drawRow("${data.totalPlays} lagu diputar tahun ini", accent = true)
+        data.topArtist?.let { drawRow("Artis teratas: $it", accent = false) }
+        data.topSong?.let { drawRow("Lagu paling sering: $it", accent = false) }
+        if (data.distinctArtists > 0) drawRow("${data.distinctArtists} artis berbeda", accent = false)
+        if (data.longestStreakDays > 0) {
+            drawRow("Streak terpanjang: ${data.longestStreakDays} hari", accent = false)
+        }
+
+        // Lime divider + NOXA branding footer (shared language with the cards).
+        val footerTop = LYRIC_CARD_HEIGHT - 190f
+        val linePaint = Paint().apply { color = LIME }
+        canvas.drawRect(CARD_SIZE / 2f - 60f, footerTop, CARD_SIZE / 2f + 60f, footerTop + 6f, linePaint)
+
+        val brandPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = TEXT_PRIMARY
+            textSize = 40f
+            textAlign = Paint.Align.CENTER
+            typeface = Typeface.DEFAULT_BOLD
+            letterSpacing = 0.12f
+        }
+        canvas.drawText("NOXA MUSIC", CARD_SIZE / 2f, footerTop + 64f, brandPaint)
+
+        val linkPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = TEXT_SECONDARY
+            textSize = 30f
+            textAlign = Paint.Align.CENTER
+        }
+        canvas.drawText("skyvibes.my.id", CARD_SIZE / 2f, footerTop + 110f, linkPaint)
+
+        return bitmap
+    }
+
+    /** Artwork via Coil; any failure degrades to the drawn placeholder. */
+    private suspend fun loadArtwork(context: Context, url: String?): Bitmap? = try {
+        val loader: ImageLoader = context.imageLoader
+        val drawable = loader.execute(
+            ImageRequest.Builder(context)
+                .data(url)
+                .crossfade(false)
+                .build()
+        ).drawable
+        drawable?.toBitmap()
+    } catch (e: Exception) {
+        null
+    }
+
     /** Draws a clean five-point star (vector-style, not an emoji glyph). */
     private fun drawStar(canvas: Canvas, cx: Float, cy: Float, outerRadius: Float, paint: Paint) {
         val path = Path()
@@ -224,14 +598,8 @@ object ShareCardRenderer {
      * permission; below that it needs WRITE_EXTERNAL_STORAGE, so failures are
      * swallowed — the share sheet still works through the FileProvider copy.
      */
-    private fun saveToGallery(context: Context, bitmap: Bitmap, song: Song): Uri? {
-        val safeName = song.title
-            .replace(Regex("[^A-Za-z0-9 _-]"), "")
-            .trim()
-            .replace(' ', '-')
-            .take(40)
-            .ifBlank { "share" }
-        val name = "NOXA-$safeName.png"
+    private fun saveToGallery(context: Context, bitmap: Bitmap, baseName: String): Uri? {
+        val name = "NOXA-$baseName.png"
         return try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 val values = ContentValues().apply {
@@ -271,12 +639,20 @@ object ShareCardRenderer {
     }
 
     /** The FileProvider copy the share sheet actually hands out. */
-    private fun writeToCache(context: Context, bitmap: Bitmap, song: Song): File {
+    private fun writeToCache(context: Context, bitmap: Bitmap, key: String): File {
         val dir = File(context.cacheDir, "share").apply { mkdirs() }
-        val file = File(dir, "noxa-share-${song.id.hashCode()}.png")
+        val file = File(dir, "noxa-share-$key.png")
         file.outputStream().use { stream ->
             bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)
         }
         return file
     }
+
+    /** Filesystem-safe display name for a card title. */
+    private fun safeName(title: String, fallback: String): String = title
+        .replace(Regex("[^A-Za-z0-9 _-]"), "")
+        .trim()
+        .replace(' ', '-')
+        .take(40)
+        .ifBlank { fallback }
 }

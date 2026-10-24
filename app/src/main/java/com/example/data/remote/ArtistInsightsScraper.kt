@@ -34,14 +34,22 @@ class ArtistInsightsScraper {
 
     private val cache = HashMap<String, ArtistInsights>()
 
+    /** Spotify's own web metadata — monthly listeners & follower count. */
+    private val spotify = SpotifyArtistScraper()
+
     suspend fun insightsFor(artistName: String): ArtistInsights = withContext(Dispatchers.IO) {
         val key = artistName.trim().lowercase()
         cache[key]?.let { return@withContext it }
+        val spotifyMeta = runCatching { spotify.metaFor(artistName) }.getOrDefault(
+            com.example.data.remote.SpotifyArtistMeta()
+        )
         val merged = ArtistInsights(
             youtubeSubscribers = scrapeYouTubeSubscribers(artistName),
             genres = scrapeMusicBrainzGenres(artistName),
             country = scrapeMusicBrainzCountry(artistName),
-            activeSince = scrapeMusicBrainzSince(artistName)
+            activeSince = scrapeMusicBrainzSince(artistName),
+            spotifyMonthlyListeners = spotifyMeta.monthlyListeners,
+            spotifyFollowers = spotifyMeta.followers
         )
         if (cache.size >= CACHE_LIMIT) cache.clear()
         cache[key] = merged
@@ -202,10 +210,15 @@ data class ArtistInsights(
     /** Country of origin, e.g. "Indonesia". */
     val country: String? = null,
     /** The year the act started (MusicBrainz `life-span.begin`). */
-    val activeSince: Int? = null
+    val activeSince: Int? = null,
+    /** Spotify monthly listeners — scraped from the open web player. */
+    val spotifyMonthlyListeners: Long? = null,
+    /** Spotify follower count — the second audience figure. */
+    val spotifyFollowers: Long? = null
 ) {
     /** True when nothing came back — the caller can skip the whole section. */
     val isEmpty: Boolean
         get() = youtubeSubscribers == null && genres.isEmpty() &&
-            country == null && activeSince == null
+            country == null && activeSince == null &&
+            spotifyMonthlyListeners == null && spotifyFollowers == null
 }
