@@ -249,6 +249,13 @@ fun SongListItem(
     onMuteSong: (() -> Unit)? = null,
     /** v2.0.0 — "Jangan putar lagi (artis)"; null hides it. */
     onMuteArtist: (() -> Unit)? = null,
+    /**
+     * Optional third line beneath artist • duration (e.g. the artist's total
+     * audience on the artist page). When [metaHighlight] is true the number is
+     * drawn in lime, otherwise as quiet secondary text. Empty/blank hides it.
+     */
+    metaText: String? = null,
+    metaHighlight: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     var menuOpen by remember { mutableStateOf(false) }
@@ -334,6 +341,17 @@ fun SongListItem(
                     text = " • " + FormatUtils.formatDuration(song.durationMs),
                     color = NoxaTextSecondary,
                     fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            if (!metaText.isNullOrBlank()) {
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = metaText,
+                    color = if (metaHighlight) NoxaLime.copy(alpha = 0.85f) else NoxaTextTertiary,
+                    fontSize = 11.sp,
+                    fontWeight = if (metaHighlight) FontWeight.SemiBold else FontWeight.Normal,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )

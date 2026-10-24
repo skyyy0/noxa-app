@@ -21,6 +21,18 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import com.example.ui.theme.NoxaAmbientLime
+import com.example.ui.theme.NoxaAmbientWarm
+
 /**
  * Motion helpers tuned to feel like iOS: soft springs, short travel distances
  * and gentle press feedback instead of harsh linear moves.
@@ -104,5 +116,49 @@ fun Modifier.noxaAppear(delayMillis: Int = 0): Modifier = composed {
     this.graphicsLayer {
         this.alpha = alpha.value
         translationY = rise.value * density.density
+    }
+}
+
+/**
+ * Ambient backdrop behind a screen — the fix for a flat black canvas.
+ *
+ * Two very low-alpha radial glows (brand lime anchored top-start, a warm
+ * ember bottom-end) bloom over pure black so the background has depth and a
+ * sense of light source, the way Spotify/iOS dark modes breathe. It stays
+ * subtle enough that text and album art keep full contrast; [content] draws
+ * on top. Purely decorative and infinitely cheap (two static gradients).
+ */
+@Composable
+fun NoxAmbientBackdrop(
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit = {}
+) {
+    Box(modifier = modifier.fillMaxSize()) {
+        // Lime bloom anchored top-start: the gradient centres inside its own
+        // sub-box, so the glow sits near the header instead of mid-screen.
+        Box(
+            modifier = Modifier
+                .fillMaxWidth(0.95f)
+                .fillMaxHeight(0.55f)
+                .align(Alignment.TopStart)
+                .background(
+                    Brush.radialGradient(
+                        colors = listOf(NoxaAmbientLime, Color.Transparent)
+                    )
+                )
+        )
+        // Warm ember bottom-end, same trick anchored to the far corner.
+        Box(
+            modifier = Modifier
+                .fillMaxWidth(0.85f)
+                .fillMaxHeight(0.5f)
+                .align(Alignment.BottomEnd)
+                .background(
+                    Brush.radialGradient(
+                        colors = listOf(NoxaAmbientWarm, Color.Transparent)
+                    )
+                )
+        )
+        content()
     }
 }
