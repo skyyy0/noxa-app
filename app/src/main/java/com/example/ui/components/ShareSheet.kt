@@ -18,6 +18,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CardGiftcard
 import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.QrCode
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -113,6 +114,36 @@ fun ShareSheetDialog(
                             Toast.makeText(
                                 context,
                                 "Gagal membuat gambar share. Coba lagi.",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        } else {
+                            onDismiss()
+                        }
+                    }
+                }
+            )
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            ShareOptionRow(
+                icon = Icons.Default.QrCode,
+                title = "Bagikan QR",
+                subtitle = "Kode QR link lagu ini — pindai pakai kamera, langsung terbuka di NOXA.",
+                tag = "share_as_qr",
+                enabled = !busy,
+                onClick = {
+                    busy = true
+                    scope.launch {
+                        val ok = withContext(Dispatchers.IO) {
+                            ShareCardRenderer.shareQr(context, song)
+                        }
+                        busy = false
+                        if (!ok) {
+                            Toast.makeText(
+                                context,
+                                "Gagal membuat QR. Coba lagi.",
                                 Toast.LENGTH_SHORT
                             ).show()
                         } else {

@@ -44,6 +44,8 @@ media3 = "1.5.1"
 
 
 [libraries]
+# QR encoding for the "Bagikan QR" share card (single, small artifact).
+zxing = { group = "com.google.zxing", name = "core", version = "3.5.3" }
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }

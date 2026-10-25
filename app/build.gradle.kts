@@ -243,6 +243,8 @@ dependencies {
   coreLibraryDesugaring("com.android.tools:desugar_jdk_libs_nio:2.0.1")
   implementation(libs.moshi.kotlin)
   implementation(libs.okhttp)
+  // "Bagikan QR": encoding the NOXA deep link into a scannable code.
+  implementation(libs.zxing)
   // implementation(libs.play.services.location)
   implementation(libs.retrofit)
   testImplementation(libs.androidx.compose.ui.test.junit4)

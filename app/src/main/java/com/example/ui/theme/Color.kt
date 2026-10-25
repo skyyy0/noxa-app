@@ -32,3 +32,13 @@ val NoxaSuccess = Color(0xFF30D158)
 val NoxaPurple = Color(0xFFA855F7)
 val NoxaPurpleDeep = Color(0xFF7C3AED)
 val NoxaPurpleGlow = 0x40A855F7
+
+// Warm brand secondary — a deeper, moodier lime that lets cards, bars and
+// ambient glows sit *behind* the bright NoxaLime accent instead of competing
+// with it. This is what keeps the dark UI from reading as flat black+lime.
+val NoxaLimeDeep = Color(0xFF6F8F0A)
+val NoxaLimeMist = Color(0x14C6FF00)
+
+// Ambient wash anchors — low-alpha glows the app layers behind its content.
+val NoxaAmbientLime = Color(0x1AC6FF00)
+val NoxaAmbientWarm = Color(0x14FF8A3D)

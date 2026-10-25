@@ -23,6 +23,10 @@ import android.text.TextUtils
 import android.util.Log
 import androidx.core.graphics.drawable.toBitmap
 import coil.ImageLoader
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.EncodeHintType
+import com.google.zxing.qrcode.QRCodeWriter
+import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
 import coil.imageLoader
 import coil.request.ImageRequest
 import com.example.data.model.PinnedTracks
@@ -63,6 +67,8 @@ object ShareCardRenderer {
     )
 
     private const val CARD_SIZE = 1080
+    /** Edge length, in pixels, the QR modules are encoded at before scaling. */
+    private const val QR_PX = 560
     private const val LYRIC_CARD_HEIGHT = 1350
     private const val LYRIC_CARD_MAX_LINES = 7
     private const val FILE_PROVIDER_SUFFIX = ".fileprovider"
@@ -114,6 +120,150 @@ object ShareCardRenderer {
             Log.e(TAG, "Opening the share sheet failed", e)
             false
         }
+    }
+
+    /**
+     * **Bagikan QR** — the NOXA deep link as a scannable code on a themed
+     * card, so a friend only has to point a camera at it. Same flow as the
+     * canvas card: render → gallery → system share sheet.
+     */
+    suspend fun shareQr(context: Context, song: Song): Boolean {
+        val file = try {
+            val bitmap = renderQrCard(song) ?: return false
+            saveToGallery(context, bitmap, safeName(song.title, "qr"))
+            writeToCache(context, bitmap, "qr-${song.id.hashCode()}")
+        } catch (e: Exception) {
+            Log.e(TAG, "Rendering/saving the QR card failed", e)
+            return false
+        }
+        return try {
+            val uri = FileProvider.getUriForFile(
+                context,
+                context.packageName + FILE_PROVIDER_SUFFIX,
+                file
+            )
+            val send = Intent(Intent.ACTION_SEND).apply {
+                type = "image/png"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                putExtra(Intent.EXTRA_TEXT, NoxaLinks.shareText(song))
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                clipData = ClipData.newUri(context.contentResolver, "NOXA QR", uri)
+            }
+            val chooser = Intent.createChooser(send, "Bagikan QR \"${song.title}\"").apply {
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                if (context !is Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(chooser)
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Opening the QR share sheet failed", e)
+            false
+        }
+    }
+
+    /**
+     * Draws the 1080×1080 QR card: title and artist up top, the code on a
+     * white quiet-zone plate, and the scan hint below.
+     *
+     * The modules are painted near-black on white rather than lime-on-black:
+     * camera pipelines are far less forgiving than the theme is, and a code
+     * that only sometimes scans is worse than no code at all. The lime lives
+     * in the surrounding chrome.
+     */
+    internal fun renderQrCard(song: Song): Bitmap? {
+        val link = NoxaLinks.songLink(song)
+        if (link.isBlank()) return null
+
+        val hints = mapOf(
+            EncodeHintType.ERROR_CORRECTION to ErrorCorrectionLevel.M,
+            EncodeHintType.CHARACTER_SET to "UTF-8",
+            EncodeHintType.MARGIN to 1
+        )
+        val matrix = try {
+            QRCodeWriter().encode(link, BarcodeFormat.QR_CODE, QR_PX, QR_PX, hints)
+        } catch (e: Exception) {
+            Log.e(TAG, "QR encoding failed", e)
+            return null
+        }
+
+        val modules = Bitmap.createBitmap(matrix.width, matrix.height, Bitmap.Config.ARGB_8888)
+        val pixels = IntArray(matrix.width * matrix.height) { i ->
+            val x = i % matrix.width
+            val y = i / matrix.width
+            if (matrix.get(x, y)) Color.rgb(10, 11, 7) else Color.WHITE
+        }
+        modules.setPixels(pixels, 0, matrix.width, 0, 0, matrix.width, matrix.height)
+
+        val bitmap = Bitmap.createBitmap(CARD_SIZE, CARD_SIZE, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+
+        val bgPaint = Paint().apply {
+            shader = LinearGradient(
+                0f, 0f, 0f, CARD_SIZE.toFloat(),
+                BG_TOP, BG_BOTTOM, Shader.TileMode.CLAMP
+            )
+        }
+        canvas.drawRect(0f, 0f, CARD_SIZE.toFloat(), CARD_SIZE.toFloat(), bgPaint)
+
+        val titlePaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = TEXT_PRIMARY
+            textSize = 58f
+            textAlign = Paint.Align.CENTER
+            typeface = Typeface.DEFAULT_BOLD
+        }
+        val title = TextUtils.ellipsize(song.title, titlePaint, CARD_SIZE - 160f, TextUtils.TruncateAt.END)
+        canvas.drawText(title, 0, title.length, CARD_SIZE / 2f, 175f, titlePaint)
+
+        val artistPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = TEXT_SECONDARY
+            textSize = 40f
+            textAlign = Paint.Align.CENTER
+        }
+        val artist = TextUtils.ellipsize(song.artist, artistPaint, CARD_SIZE - 200f, TextUtils.TruncateAt.END)
+        canvas.drawText(artist, 0, artist.length, CARD_SIZE / 2f, 238f, artistPaint)
+
+        // White quiet-zone plate so the code has the contrast it needs.
+        val plate = QR_PX + 96f
+        val plateLeft = (CARD_SIZE - plate) / 2f
+        val plateTop = 330f
+        val plateRect = RectF(plateLeft, plateTop, plateLeft + plate, plateTop + plate)
+        canvas.drawRoundRect(plateRect, 44f, 44f, Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+        })
+        canvas.drawBitmap(
+            modules,
+            null,
+            RectF(
+                plateLeft + 48f,
+                plateTop + 48f,
+                plateLeft + 48f + QR_PX,
+                plateTop + 48f + QR_PX
+            ),
+            Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+        )
+
+        val hintPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = TEXT_SECONDARY
+            textSize = 38f
+            textAlign = Paint.Align.CENTER
+        }
+        canvas.drawText(
+            "Pindai untuk buka di NOXA",
+            CARD_SIZE / 2f,
+            plateTop + plate + 90f,
+            hintPaint
+        )
+
+        val brandPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = LIME
+            textSize = 40f
+            textAlign = Paint.Align.CENTER
+            typeface = Typeface.DEFAULT_BOLD
+            letterSpacing = 0.12f
+        }
+        canvas.drawText("NOXA MUSIC", CARD_SIZE / 2f, CARD_SIZE - 90f, brandPaint)
+
+        return bitmap
     }
 
     /**

@@ -58,6 +58,7 @@ import com.example.data.model.PinnedTracks
 import com.example.data.model.Song
 import com.example.data.remote.HomeMusicSection
 import com.example.ui.components.HeroSpotlightCard
+import com.example.ui.components.NoxAmbientBackdrop
 import com.example.ui.components.noxaAppear
 import com.example.ui.components.noxaClickable
 import com.example.ui.theme.NoxaBlack
@@ -124,10 +125,15 @@ fun HomeScreen(
     // Flattened once per feed load instead of on every hero tap.
     val heroQueue = remember(sections) { sections.firstOrNull()?.songs.orEmpty() }
 
+    Box(modifier = modifier.fillMaxSize().background(NoxaBlack)) {
+        // Ambient depth: soft lime (top) and warm ember (bottom) glows over
+        // pure black so the home feed feels lit, not flat. Decorative only —
+        // the feed scrolls on top at full contrast.
+        NoxAmbientBackdrop(modifier = Modifier.matchParentSize())
     LazyColumn(
-        modifier = modifier
+        modifier = Modifier
             .fillMaxSize()
-            .background(NoxaBlack)
+            .background(Color.Transparent)
             // The screens below the status bar start here; without this the header
             // slid under the clock and the guest card looked cut off.
             .statusBarsPadding()
@@ -1155,6 +1161,7 @@ fun HomeScreen(
                 }
             }
         }
+    }
     }
 }
 

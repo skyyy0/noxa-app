@@ -129,6 +129,61 @@ class MusicRepository(
     suspend fun relatedArtists(artistId: Long, limit: Int = 8): List<ArtistProfile> =
         deezer.relatedArtists(artistId, limit)
 
+    // ----------------------------------------------------------------- radio
+
+    /**
+     * **Radio dari artis** — an endless-feeling queue built around one seed
+     * artist: their own top tracks plus the top tracks of the artists Deezer
+     * reports as related, shuffled, de-duplicated and trimmed to [limit].
+     *
+     * [seedSong], when given, is placed first so "Putar radio dari lagu ini"
+     * starts with the song the user actually tapped. Every provider failure
+     * degrades to whatever was already collected — a radio that comes back
+     * short is still a radio; it never throws to the caller.
+     */
+    suspend fun radioFromArtist(
+        artistId: Long,
+        seedSong: Song? = null,
+        limit: Int = RADIO_LIMIT
+    ): List<Song> = coroutineScope {
+        val ownTop = async {
+            runCatching { deezer.topTracksForArtist(artistId, limit) }.getOrDefault(emptyList())
+        }
+        val related = runCatching { deezer.relatedArtists(artistId, RADIO_ARTISTS) }
+            .getOrDefault(emptyList())
+
+        val relatedTop = related.map { profile ->
+            async {
+                runCatching { deezer.topTracksForArtist(profile.id, limit) }
+                    .getOrDefault(emptyList())
+            }
+        }.awaitAll()
+
+        val pool = (ownTop.await() + relatedTop.flatten()).distinctBy { it.id }
+        val shuffled = pool.shuffled()
+        // The seed leads; the rest is a stable-but-mixed follow-up so two
+        // consecutive radio starts are not the same queue in the same order.
+        val ordered = if (seedSong != null) {
+            listOfNotNull(pool.firstOrNull { it.id == seedSong.id } ?: seedSong) +
+                (shuffled.filter { it.id != seedSong.id })
+        } else {
+            shuffled
+        }
+        ordered.distinctBy { it.id }.filter { it.streamUrl.isNotBlank() }.take(limit)
+    }
+
+    /**
+     * **Radio dari lagu** — the same engine, seeded by the song's artist. When
+     * the artist cannot be resolved (a YouTube-only track, say) the track's
+     * own catalogue neighbours are not available, so this returns an empty
+     * list and the caller says so honestly instead of pretending.
+     */
+    suspend fun radioFromSong(seed: Song, limit: Int = RADIO_LIMIT): List<Song> {
+        val artistId = seed.artistId.toLongOrNull() ?: findArtistId(seed.artist)
+            ?: return emptyList()
+        return radioFromArtist(artistId, seedSong = seed, limit = limit)
+    }
+
     /** Discography of an artist. */
     suspend fun artistAlbums(artistId: Long): List<AlbumInfo> = deezer.artistAlbums(artistId)
 
@@ -259,6 +314,11 @@ class MusicRepository(
         const val HERO_ARTIST = "The Weeknd"
         private const val HERO_QUERY = "Blinding Lights The Weeknd"
         private const val SHELF_SIZE = 12
+
+        /** Radio: how long a generated queue gets, and how many related
+         *  artists feed it. */
+        private const val RADIO_LIMIT = 30
+        private const val RADIO_ARTISTS = 6
 
         private val ARTIST_SHELVES = listOf(
             ArtistShelf("Dewa 19", "Dewa 19", "Balada & rock legendaris Indonesia"),

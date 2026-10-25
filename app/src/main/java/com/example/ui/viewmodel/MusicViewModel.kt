@@ -881,6 +881,116 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         loadSharedLinks()
         // Restore the NOXA AI transcript so the assistant keeps continuity.
         _aiMessages.value = aiRepository.loadHistory()
+        observeOfflineDownloads()
+    }
+
+    // ------------------------------------------------------- mode offline
+
+    /** songId → stored row; swapped into the queue when a track plays. */
+    private var offlineById: Map<String, com.example.data.local.OfflineTrackEntity> = emptyMap()
+
+    /** Downloaded songs, newest first — the Library "Unduhan" tab. */
+    private val _offlineSongs = MutableStateFlow<List<Song>>(emptyList())
+    val offlineSongs: StateFlow<List<Song>> = _offlineSongs.asStateFlow()
+
+    /** Ids already on disk — the menu switches to "Hapus unduhan". */
+    private val _downloadedIds = MutableStateFlow<Set<String>>(emptySet())
+    val downloadedIds: StateFlow<Set<String>> = _downloadedIds.asStateFlow()
+
+    /** Ids currently being fetched — the menu shows "Mengunduh…". */
+    private val _downloadingIds = MutableStateFlow<Set<String>>(emptySet())
+    val downloadingIds: StateFlow<Set<String>> = _downloadingIds.asStateFlow()
+
+    /** One-line feedback after a download/remove; consumed by NoxaApp's toast. */
+    private val _downloadNotice = MutableStateFlow<String?>(null)
+    val downloadNotice: StateFlow<String?> = _downloadNotice.asStateFlow()
+
+    fun consumeDownloadNotice() {
+        _downloadNotice.value = null
+    }
+
+    private fun observeOfflineDownloads() {
+        safeScope.launch {
+            dao.observeOfflineTracks().collect { rows ->
+                // A row whose file the system cleared (storage purge, clear
+                // data) is dropped instead of being listed as playable.
+                val alive = rows.filter { it.audioExists() }
+                offlineById = alive.associateBy { it.songId }
+                _downloadedIds.value = alive.map { it.songId }.toSet()
+                _offlineSongs.value = alive.map { it.toSong() }
+            }
+        }
+    }
+
+    /** The local copy of a song (playable from disk), or null when streaming. */
+    private fun offlineVersion(song: Song): Song? =
+        offlineById[song.id]?.takeIf { it.audioExists() }?.toSong()
+
+    /** Menu action: download a fresh track, or delete the stored one. */
+    fun toggleDownload(song: Song) {
+        if (_downloadingIds.value.contains(song.id)) return
+        if (offlineById[song.id] != null) {
+            removeDownload(song)
+        } else {
+            downloadSong(song)
+        }
+    }
+
+    private fun removeDownload(song: Song) {
+        val row = offlineById[song.id] ?: return
+        safeScope.launch {
+            com.example.data.offline.OfflineFileStore.delete(
+                listOf(row.audioPath, row.artworkPath)
+            )
+            dao.deleteOfflineTrack(song.id)
+            _downloadNotice.value = "Unduhan \"${song.title}\" dihapus."
+        }
+    }
+
+    /**
+     * Downloads the best available audio for [song] (same resolution ladder
+     * as playback, so a Deezer preview becomes the full track when the
+     * matcher finds it) plus its artwork, then records the row in Room.
+     */
+    private fun downloadSong(song: Song) {
+        safeScope.launch {
+            _downloadingIds.update { it + song.id }
+            try {
+                val source = resolvePlaybackSource(song) ?: song
+                if (!source.streamUrl.startsWith("http")) {
+                    throw IllegalStateException("sumber audio tidak bisa diunduh")
+                }
+                val base = com.example.data.offline.OfflineFileStore.baseNameFor(song.id)
+                val store = com.example.data.offline.OfflineFileStore
+                val audio = store.fetch(app, source.streamUrl, base)
+                    ?: throw IllegalStateException("unduhan kosong")
+                val artwork = runCatching {
+                    if (song.artworkUrl.startsWith("http")) {
+                        store.fetch(app, song.artworkUrl, "${base}_art")?.path
+                    } else {
+                        null
+                    }
+                }.getOrDefault(null).orEmpty()
+
+                dao.upsertOfflineTrack(
+                    com.example.data.local.OfflineTrackEntity.fromSong(
+                        song = song,
+                        audioPath = audio.path,
+                        sizeBytes = audio.sizeBytes,
+                        artworkPath = artwork
+                    )
+                )
+                _downloadNotice.value = "\"${song.title}\" siap diputar offline."
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "Download failed: ${e.javaClass.simpleName}: ${e.message}")
+                _downloadNotice.value =
+                    "Mengunduh \"${song.title}\" gagal — periksa koneksi lalu coba lagi."
+            } finally {
+                _downloadingIds.update { it - song.id }
+            }
+        }
     }
 
     /**
@@ -1136,6 +1246,9 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     /** Resolves the next track's stream and swaps it into the timeline. */
     private fun preloadStream(song: Song) {
         safeScope.launch {
+            // Offline tracks are already local — resolving them would only
+            // swap the file back onto the network.
+            if (offlineById.containsKey(song.id)) return@launch
             val resolved = runCatching { resolvePlaybackSource(song) }.getOrNull()
                 ?: return@launch
             if (resolved.streamUrl.isNotBlank() && resolved.streamUrl != song.streamUrl) {
@@ -1159,17 +1272,20 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                     candidate.id != song.id && playedQueue.none { it.id == candidate.id } &&
                         !isMuted(candidate)
                 }
-                .take(AUTOPLAY_APPEND_LIMIT)
-                .forEach { candidate ->
+                .take(AUTOPLAY_APPEND_LIMIT)                .forEach { candidate ->
                     val resolved = if (
                         candidate.source == MusicSource.DEEZER && candidate.isPreview &&
-                        usagePolicyStore.isYouTubePolicyAccepted
+                            usagePolicyStore.isYouTubePolicyAccepted
                     ) {
                         runCatching { youtubeRepository.findFullAudio(candidate) }.getOrNull()
                     } else {
                         candidate
                     }
-                    player.addToQueue(resolved ?: candidate)
+                    // Downloaded tracks keep their local file even when they
+                    // come back in an auto-appended batch.
+                    player.addToQueue(
+                        offlineVersion(candidate) ?: resolved ?: candidate
+                    )
                 }
         }
     }
@@ -1420,6 +1536,61 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         pool.firstOrNull()?.let { playSong(it, pool, 0) }
     }
 
+    // ----------------------------------------------------------------- radio
+
+    /** True while a radio queue is being built — spins the buttons. */
+    private val _isBuildingRadio = MutableStateFlow(false)
+    val isBuildingRadio: StateFlow<Boolean> = _isBuildingRadio.asStateFlow()
+
+    /**
+     * **Radio dari lagu** — builds a shuffled queue around the song's artist
+     * (their top tracks plus related artists') and starts it at the seed song.
+     * The player shows "menyiapkan" while the queue is fetched, and a failed
+     * build surfaces as an honest player error instead of a silent no-op.
+     */
+    fun startSongRadio(song: Song) {
+        startRadio { repository.radioFromSong(song) }
+    }
+
+    /**
+     * **Radio dari artis** — same engine, seeded by the artist page. The id is
+     * resolved from the name when the caller only knows the name.
+     */
+    fun startArtistRadio(artistId: String, artistName: String) {
+        startRadio {
+            val id = artistId.toLongOrNull()
+                ?: repository.findArtistId(artistName)
+                ?: return@startRadio emptyList()
+            repository.radioFromArtist(id)
+        }
+    }
+
+    private fun startRadio(build: suspend () -> List<Song>) {
+        if (_isBuildingRadio.value) return
+        safeScope.launch {
+            _isBuildingRadio.value = true
+            player.showResolving()
+            val queue = try {
+                build()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "Radio failed: ${e.javaClass.simpleName}: ${e.message}")
+                emptyList()
+            }
+            _isBuildingRadio.value = false
+            val playable = queue.filter { it.streamUrl.isNotBlank() && !isMuted(it) }
+            if (playable.isEmpty()) {
+                player.showError(
+                    "Radio belum bisa dibuat dari sumber ini. " +
+                        "Periksa koneksi internet lalu coba lagi."
+                )
+                return@launch
+            }
+            playSong(playable.first(), playable, 0)
+        }
+    }
+
     fun playSong(song: Song, queue: List<Song> = listOf(song), index: Int = 0) {
         _resumableSong.value = null
         autoplayAppendedFor = null
@@ -1429,7 +1600,11 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         // dialog is asked once: accepted -> full audio attempted, declined ->
         // the 30s preview plays quietly from then on without nagging again.
         val policyAccepted = usagePolicyStore.isYouTubePolicyAccepted
+        // An offline copy plays its own bytes: no stream is resolved, so the
+        // YouTube usage policy has nothing to disclose and must not gate it.
+        val isOffline = offlineById.containsKey(song.id)
         val needsPolicy = when {
+            isOffline -> false
             song.source == MusicSource.YOUTUBE -> !policyAccepted
             song.source == MusicSource.DEEZER && song.isPreview ->
                 !policyAccepted && !usagePolicyStore.isYouTubePolicyDeclined
@@ -1484,6 +1659,14 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun resolveAndPlay(song: Song, queue: List<Song>, index: Int) {
+        // Mode offline: the bytes are on disk, so nothing is resolved and the
+        // whole queue is re-pointed at its local copies (order and indices are
+        // untouched — a downloaded song simply plays from another URI).
+        val localSong = offlineVersion(song)
+        if (localSong != null) {
+            player.playSong(localSong, queue.map { offlineVersion(it) ?: it }, index)
+            return
+        }
         val needsYoutubeResolve = song.source == MusicSource.YOUTUBE && song.streamUrl.isBlank()
         // Full audio for a preview track: match it on YouTube and resolve the
         // audio through instances — only after the user accepted the policy.
@@ -1581,6 +1764,9 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             if (usagePolicyStore.isYouTubePolicyAccepted) {
                 queue
                     .filter { it.source == MusicSource.DEEZER && it.isPreview }
+                    // Offline rows already hold their bytes; warming them would
+                    // replace the local file with a network URL.
+                    .filter { !offlineById.containsKey(it.id) }
                     // Low-RAM phones warm fewer upcoming tracks: each warm
                     // is a YouTube resolve + buffered stream, the priciest
                     // background work the player does.
@@ -1604,6 +1790,12 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Resolves audio first so queued items are playable when reached. */
     private fun enqueue(song: Song, play: (Song) -> Unit) {
+        // An offline copy plays its own bytes — queue it directly instead of
+        // resolving a network stream it will never use.
+        offlineVersion(song)?.let { local ->
+            play(local)
+            return
+        }
         val needsYoutube = song.source == MusicSource.YOUTUBE && song.streamUrl.isBlank()
         val wantsFullAudio = song.source == MusicSource.DEEZER && song.isPreview &&
             usagePolicyStore.isYouTubePolicyAccepted
@@ -1703,6 +1895,9 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     private fun handleAutoAdvance(song: Song) {
         val policyAccepted = usagePolicyStore.isYouTubePolicyAccepted
         val needsFullAudio = when {
+            // Mode offline: the bytes are already local — never hold playback
+            // to go look for a network stream.
+            offlineById.containsKey(song.id) -> false
             song.source == MusicSource.DEEZER && song.isPreview -> policyAccepted
             song.source == MusicSource.YOUTUBE && song.streamUrl.isBlank() -> true
             else -> false

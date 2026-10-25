@@ -28,6 +28,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Radio
 import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -60,6 +61,7 @@ import com.example.ui.components.SongListItem
 import com.example.ui.i18n.string
 import com.example.ui.components.noxaAppear
 import com.example.ui.components.noxaTap
+import com.example.ui.components.NoxAmbientBackdrop
 import com.example.ui.theme.NoxaBlack
 import com.example.ui.theme.NoxaBorder
 import com.example.ui.theme.NoxaLime
@@ -125,6 +127,13 @@ fun ArtistScreen(
     onRateSong: (Song, Int) -> Unit = { _, _ -> },
     onMuteSong: (Song) -> Unit = {},
     onMuteArtist: (Song) -> Unit = {},
+    // ------------------------------------------- v2.1: radio & unduhan
+    downloadedIds: Set<String> = emptySet(),
+    downloadingIds: Set<String> = emptySet(),
+    onToggleDownload: (Song) -> Unit = {},
+    onStartRadio: (Song) -> Unit = {},
+    /** True while the radio queue for this artist is being built. */
+    isBuildingRadio: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     Box(
@@ -132,6 +141,9 @@ fun ArtistScreen(
             .fillMaxSize()
             .background(NoxaBlack)
     ) {
+        // Ambient depth behind the page: lime bloom over black so the hero
+        // photo and stats feel lit rather than pasted on a flat void.
+        NoxAmbientBackdrop(modifier = Modifier.matchParentSize())
         when (state) {
             is ArtistUiState.Loading -> {
                 CircularProgressIndicator(
@@ -192,7 +204,12 @@ fun ArtistScreen(
                     songRatings = songRatings,
                     onRateSong = onRateSong,
                     onMuteSong = onMuteSong,
-                    onMuteArtist = onMuteArtist
+                    onMuteArtist = onMuteArtist,
+                    downloadedIds = downloadedIds,
+                    downloadingIds = downloadingIds,
+                    onToggleDownload = onToggleDownload,
+                    onStartRadio = onStartRadio,
+                    isBuildingRadio = isBuildingRadio
                 )
             }
         }
@@ -222,7 +239,14 @@ private fun ArtistPageContent(
     songRatings: Map<String, Int> = emptyMap(),
     onRateSong: (Song, Int) -> Unit = { _, _ -> },
     onMuteSong: (Song) -> Unit = {},
-    onMuteArtist: (Song) -> Unit = {}
+    onMuteArtist: (Song) -> Unit = {},
+    // ------------------------------------------- v2.1: radio & unduhan
+    downloadedIds: Set<String> = emptySet(),
+    downloadingIds: Set<String> = emptySet(),
+    onToggleDownload: (Song) -> Unit = {},
+    onStartRadio: (Song) -> Unit = {},
+    /** True while the radio queue for this artist is being built. */
+    isBuildingRadio: Boolean = false
 ) {
     val profile = state.profile
     val topSongs = state.topSongs
@@ -470,6 +494,42 @@ private fun ArtistPageContent(
                         fontWeight = FontWeight.Bold
                     )
                 }
+
+                // Radio: an endless queue seeded by this artist (their top
+                // tracks plus the artists Deezer calls related).
+                if (topSongs.isNotEmpty()) {
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(24.dp))
+                            .background(Color.Transparent)
+                            .border(1.dp, NoxaBorder, RoundedCornerShape(24.dp))
+                            .noxaTap { if (!isBuildingRadio) onStartRadio(topSongs[0]) }
+                            .padding(horizontal = 18.dp, vertical = 11.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (isBuildingRadio) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                color = NoxaLime,
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.Default.Radio,
+                                contentDescription = null,
+                                tint = NoxaLime,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Radio",
+                            color = NoxaTextPrimary,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
             }
 
             // ------------------------------------------------------------ bio
@@ -517,6 +577,18 @@ private fun ArtistPageContent(
                 Spacer(modifier = Modifier.height(20.dp))
                 SectionTitle("Populer")
                 Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)) {
+                    // The one honest "total audience" figure we can show per
+                    // row: the artist's own monthly listeners, repeated as a
+                    // quiet lime line. It is the artist-level number (not a
+                    // per-track play count), so it reads as context, not a
+                    // fabricated per-song stat.
+                    val audienceLine = insights?.spotifyMonthlyListeners?.let {
+                        "${FormatUtils.formatCount(it)} pendengar bulanan"
+                    } ?: if (profile.fanCount > 0L) {
+                        "${FormatUtils.formatCount(profile.fanCount)} pendengar"
+                    } else {
+                        null
+                    }
                     topSongs.forEachIndexed { index, song ->
                         SongListItem(
                             song = song,
@@ -533,7 +605,13 @@ private fun ArtistPageContent(
                             rating = songRatings[song.id] ?: 0,
                             onRate = onRateSong,
                             onMuteSong = { onMuteSong(song) },
-                            onMuteArtist = { onMuteArtist(song) }
+                            onMuteArtist = { onMuteArtist(song) },
+                            onStartRadio = { onStartRadio(song) },
+                            onToggleDownload = { onToggleDownload(song) },
+                            isDownloaded = downloadedIds.contains(song.id),
+                            isDownloading = downloadingIds.contains(song.id),
+                            metaText = audienceLine,
+                            metaHighlight = index == 0
                         )
                         // Popularity bar (Deezer rank 0–100) — the honest
                         // per-track signal; no invented play counts.

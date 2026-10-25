@@ -35,6 +35,8 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -69,8 +71,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -84,6 +84,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
@@ -93,8 +94,12 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.progressBarRangeInfo
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
+import kotlin.random.Random
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -645,6 +650,7 @@ fun FullPlayerSheet(
                 PlayerProgressSection(
                     progressFlow = progressFlow,
                     fallbackDurationMs = song.durationMs,
+                    songId = song.id,
                     onSeekTo = onSeekTo
                 )
 
@@ -1275,36 +1281,31 @@ private fun SleepCountdownRing(
  *
  * Deliberately its own composable: the playback position changes twice a second,
  * and only this subtree re-reads it while the rest of the sheet stays still.
+ *
+ * The bar itself is a **waveform** ([WaveformSeekbar]) instead of the stock
+ * Material slider: lime bars for the part already heard, quiet ones ahead.
  */
 @Composable
 private fun PlayerProgressSection(
     progressFlow: StateFlow<PlaybackProgress>,
     fallbackDurationMs: Long,
+    songId: String,
     onSeekTo: (Long) -> Unit
 ) {
     val progress by progressFlow.collectAsState()
-    var dragValue by remember { mutableStateOf<Float?>(null) }
 
     val totalDuration = when {
         progress.durationMs > 0 -> progress.durationMs
         else -> fallbackDurationMs
     }
-    val position = dragValue?.toLong() ?: progress.positionMs
+    val position = progress.positionMs.coerceIn(0L, totalDuration.coerceAtLeast(0L))
 
     Column(modifier = Modifier.fillMaxWidth()) {
-        Slider(
-            value = position.toFloat().coerceIn(0f, totalDuration.toFloat().coerceAtLeast(1f)),
-            onValueChange = { dragValue = it },
-            onValueChangeFinished = {
-                dragValue?.let { onSeekTo(it.toLong()) }
-                dragValue = null
-            },
-            valueRange = 0f..totalDuration.toFloat().coerceAtLeast(1f),
-            colors = SliderDefaults.colors(
-                thumbColor = NoxaLime,
-                activeTrackColor = NoxaLime,
-                inactiveTrackColor = NoxaSurfaceSecondary
-            ),
+        WaveformSeekbar(
+            songId = songId,
+            positionMs = position,
+            durationMs = totalDuration,
+            onSeekTo = onSeekTo,
             modifier = Modifier.testTag("full_player_slider")
         )
 
@@ -1323,6 +1324,102 @@ private fun PlayerProgressSection(
                 text = FormatUtils.formatDuration(totalDuration),
                 color = NoxaTextTertiary,
                 fontSize = 12.sp
+            )
+        }
+    }
+}
+
+/** How many bars the waveform draws — dense enough to read as an envelope. */
+private const val WAVE_BAR_COUNT = 56
+
+/**
+ * The waveform shape for one song: a smoothed pseudo-random envelope seeded by
+ * the song id, so a track always draws the same silhouette (no flicker on
+ * recomposition) while different tracks look different. A real decoded
+ * waveform would mean decoding every file just to draw a scrubber — this is
+ * the honest stylised stand-in, not a claim about the actual audio.
+ */
+private fun waveformBars(seed: String, count: Int): FloatArray {
+    val rnd = Random(seed.hashCode())
+    val raw = FloatArray(count) { 0.28f + rnd.nextFloat() * 0.72f }
+    return FloatArray(count) { i ->
+        val prev = raw[(i - 1).coerceAtLeast(0)]
+        val next = raw[(i + 1).coerceAtMost(count - 1)]
+        ((prev + raw[i] * 2f + next) / 4f).coerceIn(0.18f, 1f)
+    }
+}
+
+/**
+ * Draggable waveform scrubber: tap anywhere to jump, drag to scrub with a live
+ * preview, release to seek. Reports its position as a progress bar to
+ * accessibility services.
+ */
+@Composable
+private fun WaveformSeekbar(
+    songId: String,
+    positionMs: Long,
+    durationMs: Long,
+    onSeekTo: (Long) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val bars = remember(songId) { waveformBars(songId, WAVE_BAR_COUNT) }
+    var previewFraction by remember(songId) { mutableStateOf<Float?>(null) }
+
+    val total = durationMs.coerceAtLeast(1L)
+    val fraction = previewFraction
+        ?: (positionMs.toFloat() / total.toFloat()).coerceIn(0f, 1f)
+
+    Canvas(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(46.dp)
+            .semantics {
+                progressBarRangeInfo = ProgressBarRangeInfo(fraction, 0f..1f)
+            }
+            .pointerInput(songId, durationMs) {
+                detectTapGestures { offset ->
+                    if (durationMs <= 0L) return@detectTapGestures
+                    val f = (offset.x / size.width).coerceIn(0f, 1f)
+                    onSeekTo((f * durationMs).toLong())
+                }
+            }
+            .pointerInput(songId, durationMs) {
+                detectDragGestures(
+                    onDragStart = { pos ->
+                        if (durationMs > 0L) {
+                            previewFraction = (pos.x / size.width).coerceIn(0f, 1f)
+                        }
+                    },
+                    onDrag = { change, _ ->
+                        change.consume()
+                        if (durationMs > 0L) {
+                            previewFraction =
+                                (change.position.x / size.width).coerceIn(0f, 1f)
+                        }
+                    },
+                    onDragEnd = {
+                        previewFraction?.let { onSeekTo((it * durationMs).toLong()) }
+                        previewFraction = null
+                    },
+                    onDragCancel = { previewFraction = null }
+                )
+            }
+    ) {
+        val gap = size.width / (bars.size * 3f)
+        val barWidth = (size.width / bars.size) - gap
+        if (barWidth <= 0f) return@Canvas
+
+        bars.forEachIndexed { i, amplitude ->
+            val played = ((i + 1f) / bars.size) <= fraction
+            val barHeight = (size.height * amplitude).coerceAtLeast(barWidth)
+            drawRoundRect(
+                color = if (played) NoxaLime else NoxaSurfaceSecondary,
+                topLeft = Offset(
+                    x = i * (barWidth + gap),
+                    y = (size.height - barHeight) / 2f
+                ),
+                size = Size(barWidth, barHeight),
+                cornerRadius = CornerRadius(barWidth / 2f, barWidth / 2f)
             )
         }
     }

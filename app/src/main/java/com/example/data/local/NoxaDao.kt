@@ -181,4 +181,19 @@ interface NoxaDao {
 
     @Query("DELETE FROM muted_entries WHERE kind = :kind AND value = :value")
     suspend fun deleteMuted(kind: String, value: String)
+
+    // ----------------------------------------------- offline downloads (v5)
+
+    @Query("SELECT * FROM offline_tracks ORDER BY downloadedAt DESC")
+    fun observeOfflineTracks(): Flow<List<OfflineTrackEntity>>
+
+    /** Read once for the playback substitution map built at start-up. */
+    @Query("SELECT * FROM offline_tracks")
+    suspend fun offlineTracksOnce(): List<OfflineTrackEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertOfflineTrack(track: OfflineTrackEntity)
+
+    @Query("DELETE FROM offline_tracks WHERE songId = :songId")
+    suspend fun deleteOfflineTrack(songId: String)
 }
