@@ -6,6 +6,19 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <!--
+        NOXA Wake (v3.0.0): layanan mikrofon yang mendengarkan kata bangun
+        “Hi NOXA” selama NOXA di-background. Android 14+ mewajibkan izin
+        khusus per tipe FGS — tanpa ini, startForeground(tipe microphone)
+        dilempar SecurityException.
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <!--
+        Bubble orb gradien muter tampil DI ATAS aplikasi lain (game,
+        WhatsApp) saat wake word terdeteksi. Izin special app-op yang diminta
+        lewat layar Pengaturan sistem — tidak bisa lewat dialog runtime biasa.
+    -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
@@ -110,6 +123,18 @@
                 <action android:name="androidx.media3.session.MediaSessionService" />
             </intent-filter>
         </service>
+
+        <!--
+            NOXA Wake — FGS tipe microphone. stopWithTask=false: saat user
+            menyapukan NOXA dari recents, layanan (dan mendengarkan wake word)
+            tetap hidup — itu memang gunanya fitur ini. Berhenti hanya lewat
+            tombol “Berhenti” di notifikasi / toggle Pengaturan.
+        -->
+        <service
+            android:name=".voice.NoxaWakeService"
+            android:exported="false"
+            android:stopWithTask="false"
+            android:foregroundServiceType="microphone" />
 
         <!--
             Lets the system hand media-button events (headsets, car units, and the
