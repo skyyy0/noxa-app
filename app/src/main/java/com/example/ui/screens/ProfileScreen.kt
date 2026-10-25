@@ -1,8 +1,13 @@
 package com.example.ui.screens
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.provider.Settings
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -52,6 +57,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -75,6 +81,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import com.example.data.local.AppSettings
 import com.example.data.local.AppSettingsStore
 import com.example.data.local.HeatmapStats
@@ -147,6 +154,89 @@ fun ProfileScreen(
 ) {
     val context = LocalContext.current
     val scrollState = rememberScrollState()
+
+    // ------------------------------------------------- v3.0.0: NOXA Wake
+    // Status layanan dibaca langsung dari state global service — mati karena
+    // apa pun (sistem, tombol Berhenti, swipe) switch-nya ikut balik sendiri.
+    val wakeRunning by com.example.voice.NoxaWakeService.isRunning.collectAsState()
+    var wakeOverlayAttempted by remember { mutableStateOf(false) }
+
+    // Var kosong yang diisi ulang di bawah: callback izin (yang dibuat
+    // sebelum baris ini dievaluasi ulang) memanggil lewat referensi ini,
+    // jadi selalu menunjuk versi terbaru — urutan deklarasi lokal tidak saling
+    // mengunci.
+    var startNoxaWake: () -> Unit = {}
+
+    val wakeMicLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            startNoxaWake()
+        } else {
+            Toast.makeText(
+                context,
+                "Izin mikrofon dibutuhkan NOXA Wake untuk mendengarkan \u201cHi NOXA\u201d.",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
+
+    val wakeOverlayLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        // Kembali dari Pengaturan sistem: cek ulang. wakeOverlayAttempted
+        // mencegah loop kalau izinnya tidak juga diberikan.
+        startNoxaWake()
+    }
+
+    startNoxaWake = {
+        when {
+            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) !=
+                PackageManager.PERMISSION_GRANTED -> {
+                wakeMicLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            }
+
+            !Settings.canDrawOverlays(context) -> {
+                if (wakeOverlayAttempted) {
+                    Toast.makeText(
+                        context,
+                        "Izin \u201cGambar di atas aplikasi lain\u201d belum diberikan — " +
+                            "bubble NOXA Wake butuh izin itu.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                } else {
+                    wakeOverlayAttempted = true
+                    wakeOverlayLauncher.launch(
+                        Intent(
+                            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                            Uri.parse("package:${context.packageName}")
+                        )
+                    )
+                }
+            }
+
+            else -> {
+                try {
+                    ContextCompat.startForegroundService(
+                        context,
+                        Intent(context, com.example.voice.NoxaWakeService::class.java)
+                    )
+                    wakeOverlayAttempted = false
+                    Toast.makeText(
+                        context,
+                        "NOXA Wake menyala — bilang \u201cHi NOXA\u201d kapan saja.",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                } catch (e: Exception) {
+                    Toast.makeText(
+                        context,
+                        "NOXA Wake gagal menyala: ${e.message}",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        }
+    }
 
     var selectedQuality by remember { mutableStateOf("Hi-Res Lossless (24-bit/96kHz)") }
     var cacheCleared by remember { mutableStateOf(false) }
@@ -977,6 +1067,23 @@ fun ProfileScreen(
                     checked = appSettings.crossfadeEnabled && perfProfile?.crossfadeAllowed != false,
                     onCheckedChange = onSetCrossfade,
                     tag = "setting_crossfade"
+                )
+                SettingsToggleRow(
+                    title = "NOXA Wake \u2014 \u201cHi NOXA\u201d",
+                    subtitle =
+                        "Dengarkan perintah suara (mis. \u201cputarkan Dewa 19\u201d) walau NOXA " +
+                        "sudah ditutup — layar menyala, izin mikrofon & overlay",
+                    checked = wakeRunning,
+                    onCheckedChange = { enabled ->
+                        if (enabled) {
+                            startNoxaWake()
+                        } else {
+                            context.stopService(
+                                Intent(context, com.example.voice.NoxaWakeService::class.java)
+                            )
+                        }
+                    },
+                    tag = "setting_noxa_wake"
                 )
             }
         }

@@ -840,6 +840,16 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         _sharedLinks.value = links
     }
 
+    /**
+     * Referensi stabil untuk [com.example.voice.NoxaWakeBus.handler] — properti
+     * (bukan `::method` baru tiap akses) supaya bisa dicocokkan saat dilepas
+     * di [onCleared] tanpa takut salah melepas handler milik instance lain.
+     * Dideklarasikan sebelum `init` karena ikut dipasang di sana.
+     */
+    private val voiceCommandHandler: suspend (String) -> String = { transcript ->
+        handleVoiceCommand(transcript)
+    }
+
     init {
         authManager.attemptSilentAutoSignIn(viewModelScope)
         restoreLastSession()
@@ -882,6 +892,65 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         // Restore the NOXA AI transcript so the assistant keeps continuity.
         _aiMessages.value = aiRepository.loadHistory()
         observeOfflineDownloads()
+        // NOXA Wake (v3.0.0): layanan di background mengirim transcript ke
+        // sini selama UI hidup, supaya jalur pemutaran penuh (kebijakan
+        // YouTube, salinan offline, ladder resolusi audio) yang dipakai —
+        // sama persis dengan mengetuk lagu di layar.
+        com.example.voice.NoxaWakeBus.handler = voiceCommandHandler
+    }
+
+    /**
+     * Satu perintah suara dari NOXA Wake → aksi + pesan hasil untuk bubble.
+     * Penerjemahan teks ada di [com.example.voice.WakeCommandParser]; sini
+     * hanya menjalankannya lewat jalur play yang sudah ada.
+     */
+    private suspend fun handleVoiceCommand(transcript: String): String {
+        return when (val cmd = com.example.voice.WakeCommandParser.parse(transcript)) {
+            is com.example.voice.WakeCommand.Play -> {
+                val query = cmd.query.trim()
+                val results = if (query.isEmpty()) emptyList() else searchAll(query)
+                if (results.isEmpty()) {
+                    "Lagu \u201c$query\u201d tidak ditemukan."
+                } else {
+                    val target = results.first()
+                    playSong(target, results, 0)
+                    if (_pendingYouTubePlay.value != null) {
+                        "Butuh sekali persetujuan kebijakan YouTube di dalam NOXA."
+                    } else {
+                        "Memutar \u201c${target.title}\u201d \u2014 ${target.artist}"
+                    }
+                }
+            }
+
+            com.example.voice.WakeCommand.Pause ->
+                if (player.uiState.value.isPlaying) {
+                    player.togglePlayPause()
+                    "Dijeda."
+                } else {
+                    "Sudah dalam keadaan jeda."
+                }
+
+            com.example.voice.WakeCommand.Resume ->
+                if (player.uiState.value.isPlaying) {
+                    "Sudah diputar."
+                } else {
+                    player.togglePlayPause()
+                    "Dilanjutkan."
+                }
+
+            com.example.voice.WakeCommand.Next -> {
+                next()
+                "Lagu berikutnya."
+            }
+
+            com.example.voice.WakeCommand.Previous -> {
+                previous()
+                "Lagu sebelumnya."
+            }
+
+            is com.example.voice.WakeCommand.Unknown ->
+                if (cmd.text.isBlank()) "" else com.example.voice.WakeCommandParser.HINT
+        }
     }
 
     // ------------------------------------------------------- mode offline
@@ -2382,6 +2451,11 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         mvPlayer.release()
+        // Lepas handler suara: setelah UI mati, NOXA Wake jatuh ke engine
+        // lokal (WakeCommandEngine) — perintah tetap jalan saat app ditutup.
+        if (com.example.voice.NoxaWakeBus.handler === voiceCommandHandler) {
+            com.example.voice.NoxaWakeBus.handler = null
+        }
         super.onCleared()
     }
 
