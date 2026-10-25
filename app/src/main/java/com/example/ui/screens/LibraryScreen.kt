@@ -24,6 +24,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Link
@@ -112,6 +113,12 @@ fun LibraryScreen(
     onRateSong: (Song, Int) -> Unit = { _, _ -> },
     onMuteSong: (Song) -> Unit = {},
     onMuteArtist: (Song) -> Unit = {},
+    // --------------------------------------------- v2.1: radio & unduhan
+    offlineSongs: List<Song> = emptyList(),
+    downloadedIds: Set<String> = emptySet(),
+    downloadingIds: Set<String> = emptySet(),
+    onToggleDownload: (Song) -> Unit = {},
+    onStartRadio: (Song) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var selectedTab by remember { mutableIntStateOf(0) }
@@ -130,7 +137,12 @@ fun LibraryScreen(
         }
     }
 
-    val tabs = listOf("Favorit (${favorites.size})", "Playlist (${playlistSummaries.size})", "Riwayat")
+    val tabs = listOf(
+        "Favorit (${favorites.size})",
+        "Playlist (${playlistSummaries.size})",
+        "Riwayat",
+        "Unduhan (${offlineSongs.size})"
+    )
 
     Box(
         modifier = modifier
@@ -333,6 +345,10 @@ fun LibraryScreen(
                                 onRate = onRateSong,
                                 onMuteSong = { onMuteSong(song) },
                                 onMuteArtist = { onMuteArtist(song) },
+                                onStartRadio = { onStartRadio(song) },
+                                onToggleDownload = { onToggleDownload(song) },
+                                isDownloaded = downloadedIds.contains(song.id),
+                                isDownloading = downloadingIds.contains(song.id),
                                 modifier = Modifier.padding(horizontal = 4.dp)
                             )
                         }
@@ -456,6 +472,95 @@ fun LibraryScreen(
                                 onRate = onRateSong,
                                 onMuteSong = { onMuteSong(song) },
                                 onMuteArtist = { onMuteArtist(song) },
+                                onStartRadio = { onStartRadio(song) },
+                                onToggleDownload = { onToggleDownload(song) },
+                                isDownloaded = downloadedIds.contains(song.id),
+                                isDownloading = downloadingIds.contains(song.id),
+                                modifier = Modifier.padding(horizontal = 4.dp)
+                            )
+                        }
+                    }
+                }
+            }
+            3 -> {
+                // Mode offline: everything the user chose to keep on disk.
+                if (offlineSongs.isEmpty()) {
+                    EmptyState(
+                        icon = Icons.Default.FileDownload,
+                        title = "Belum ada unduhan",
+                        subtitle = "Buka menu ⋮ pada lagu mana pun lalu pilih \"Unduh lagu\" — lagunya tetap bisa diputar tanpa internet"
+                    )
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(bottom = 24.dp, top = 8.dp, start = 8.dp, end = 8.dp)
+                    ) {
+                        item(key = "offline_actions") {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Button(
+                                    onClick = { onPlaySong(offlineSongs[0], offlineSongs, 0) },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = NoxaLime,
+                                        contentColor = NoxaBlack
+                                    ),
+                                    shape = RoundedCornerShape(20.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.PlayArrow,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Putar semua", fontWeight = FontWeight.Bold)
+                                }
+                                Button(
+                                    onClick = {
+                                        val shuffled = offlineSongs.shuffled()
+                                        onPlaySong(shuffled[0], shuffled, 0)
+                                    },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = NoxaSurfaceSecondary,
+                                        contentColor = NoxaTextPrimary
+                                    ),
+                                    shape = RoundedCornerShape(20.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Shuffle,
+                                        contentDescription = null,
+                                        tint = NoxaLime,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Acak", fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+
+                        itemsIndexed(offlineSongs, key = { _, song -> song.id }) { index, song ->
+                            SongListItem(
+                                song = song,
+                                isPlaying = song.id == currentPlayingSongId,
+                                isFavorite = favoriteIds.contains(song.id),
+                                onPlay = { onPlaySong(song, offlineSongs, index) },
+                                onToggleFavorite = { onToggleFavorite(song) },
+                                onPlayNext = { onPlayNext(song) },
+                                onAddToQueue = { onAddToQueue(song) },
+                                onAddToPlaylist = { onAddToPlaylist(song) },
+                                onShare = { onShare(song) },
+                                onOpenArtist = onOpenArtist,
+                                onStartRadio = { onStartRadio(song) },
+                                onToggleDownload = { onToggleDownload(song) },
+                                isDownloaded = true,
+                                isDownloading = downloadingIds.contains(song.id),
+                                rating = songRatings[song.id] ?: 0,
+                                onRate = onRateSong,
                                 modifier = Modifier.padding(horizontal = 4.dp)
                             )
                         }

@@ -207,6 +207,12 @@ private fun NoxaAppContent(
     val mutedArtists by viewModel.mutedArtists.collectAsStateWithLifecycle()
     val songRatings by viewModel.songRatings.collectAsStateWithLifecycle()
 
+    // ------------------------------------------- v2.1: radio & mode offline
+    val downloadedIds by viewModel.downloadedIds.collectAsStateWithLifecycle()
+    val downloadingIds by viewModel.downloadingIds.collectAsStateWithLifecycle()
+    val offlineSongs by viewModel.offlineSongs.collectAsStateWithLifecycle()
+    val isBuildingRadio by viewModel.isBuildingRadio.collectAsStateWithLifecycle()
+
     val sharedPlaylistUi by viewModel.sharedPlaylistUi.collectAsStateWithLifecycle()
     val sharedNotice by viewModel.sharedNotice.collectAsStateWithLifecycle()
     val sharedLinks by viewModel.sharedLinks.collectAsStateWithLifecycle()
@@ -252,6 +258,14 @@ private fun NoxaAppContent(
             Toast.makeText(context, message, Toast.LENGTH_LONG).show()
             viewModel.clearPlayerError()
         }
+    }
+
+    // Mode offline: one toast per download/remove result, consumed right away.
+    val downloadNotice by viewModel.downloadNotice.collectAsStateWithLifecycle()
+    LaunchedEffect(downloadNotice) {
+        val notice = downloadNotice ?: return@LaunchedEffect
+        Toast.makeText(context, notice, Toast.LENGTH_SHORT).show()
+        viewModel.consumeDownloadNotice()
     }
 
     val navBackStackEntry by navController.currentBackStackEntryAsState()
@@ -477,7 +491,11 @@ private fun NoxaAppContent(
                         songRatings = songRatings,
                         onRateSong = { song, stars -> viewModel.rateSong(song, stars) },
                         onMuteSong = { viewModel.muteSong(it) },
-                        onMuteArtist = { viewModel.muteArtist(it) }
+                        onMuteArtist = { viewModel.muteArtist(it) },
+                        downloadedIds = downloadedIds,
+                        downloadingIds = downloadingIds,
+                        onToggleDownload = { viewModel.toggleDownload(it) },
+                        onStartRadio = { viewModel.startSongRadio(it) }
                     )
                 }
 
@@ -507,7 +525,12 @@ private fun NoxaAppContent(
                         songRatings = songRatings,
                         onRateSong = { song, stars -> viewModel.rateSong(song, stars) },
                         onMuteSong = { viewModel.muteSong(it) },
-                        onMuteArtist = { viewModel.muteArtist(it) }
+                        onMuteArtist = { viewModel.muteArtist(it) },
+                        offlineSongs = offlineSongs,
+                        downloadedIds = downloadedIds,
+                        downloadingIds = downloadingIds,
+                        onToggleDownload = { viewModel.toggleDownload(it) },
+                        onStartRadio = { viewModel.startSongRadio(it) }
                     )
                 }
 
@@ -541,7 +564,11 @@ private fun NoxaAppContent(
                             onSharePlaylist = { viewModel.sharePlaylist(playlistId) },
                             onSyncPlaylist = { viewModel.syncSharedPlaylist(playlistId) },
                             onDismissNotice = { viewModel.dismissSharedNotice() },
-                            onConsumeSharedPlaylist = { viewModel.consumeSharedPlaylistUi() }
+                            onConsumeSharedPlaylist = { viewModel.consumeSharedPlaylistUi() },
+                            downloadedIds = downloadedIds,
+                            downloadingIds = downloadingIds,
+                            onToggleDownload = { viewModel.toggleDownload(it) },
+                            onStartRadio = { viewModel.startSongRadio(it) }
                         )
                     }
                 }
@@ -579,7 +606,12 @@ private fun NoxaAppContent(
                             songRatings = songRatings,
                             onRateSong = { song, stars -> viewModel.rateSong(song, stars) },
                             onMuteSong = { viewModel.muteSong(it) },
-                            onMuteArtist = { viewModel.muteArtist(it) }
+                            onMuteArtist = { viewModel.muteArtist(it) },
+                            downloadedIds = downloadedIds,
+                            downloadingIds = downloadingIds,
+                            onToggleDownload = { viewModel.toggleDownload(it) },
+                            onStartRadio = { viewModel.startSongRadio(it) },
+                            isBuildingRadio = isBuildingRadio
                         )
                     }
                 }
@@ -604,7 +636,11 @@ private fun NoxaAppContent(
                             onAddToPlaylist = { songPendingPlaylist = it },
                             onShare = { songPendingShare = it },
                             onOpenArtist = openArtistProfile,
-                            onRetry = { viewModel.loadAlbum(albumId) }
+                            onRetry = { viewModel.loadAlbum(albumId) },
+                            downloadedIds = downloadedIds,
+                            downloadingIds = downloadingIds,
+                            onToggleDownload = { viewModel.toggleDownload(it) },
+                            onStartRadio = { viewModel.startSongRadio(it) }
                         )
                     }
                 }

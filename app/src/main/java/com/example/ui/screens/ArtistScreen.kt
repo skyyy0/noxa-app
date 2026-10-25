@@ -28,6 +28,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Radio
 import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -126,6 +127,13 @@ fun ArtistScreen(
     onRateSong: (Song, Int) -> Unit = { _, _ -> },
     onMuteSong: (Song) -> Unit = {},
     onMuteArtist: (Song) -> Unit = {},
+    // ------------------------------------------- v2.1: radio & unduhan
+    downloadedIds: Set<String> = emptySet(),
+    downloadingIds: Set<String> = emptySet(),
+    onToggleDownload: (Song) -> Unit = {},
+    onStartRadio: (Song) -> Unit = {},
+    /** True while the radio queue for this artist is being built. */
+    isBuildingRadio: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     Box(
@@ -196,7 +204,12 @@ fun ArtistScreen(
                     songRatings = songRatings,
                     onRateSong = onRateSong,
                     onMuteSong = onMuteSong,
-                    onMuteArtist = onMuteArtist
+                    onMuteArtist = onMuteArtist,
+                    downloadedIds = downloadedIds,
+                    downloadingIds = downloadingIds,
+                    onToggleDownload = onToggleDownload,
+                    onStartRadio = onStartRadio,
+                    isBuildingRadio = isBuildingRadio
                 )
             }
         }
@@ -226,7 +239,14 @@ private fun ArtistPageContent(
     songRatings: Map<String, Int> = emptyMap(),
     onRateSong: (Song, Int) -> Unit = { _, _ -> },
     onMuteSong: (Song) -> Unit = {},
-    onMuteArtist: (Song) -> Unit = {}
+    onMuteArtist: (Song) -> Unit = {},
+    // ------------------------------------------- v2.1: radio & unduhan
+    downloadedIds: Set<String> = emptySet(),
+    downloadingIds: Set<String> = emptySet(),
+    onToggleDownload: (Song) -> Unit = {},
+    onStartRadio: (Song) -> Unit = {},
+    /** True while the radio queue for this artist is being built. */
+    isBuildingRadio: Boolean = false
 ) {
     val profile = state.profile
     val topSongs = state.topSongs
@@ -474,6 +494,42 @@ private fun ArtistPageContent(
                         fontWeight = FontWeight.Bold
                     )
                 }
+
+                // Radio: an endless queue seeded by this artist (their top
+                // tracks plus the artists Deezer calls related).
+                if (topSongs.isNotEmpty()) {
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(24.dp))
+                            .background(Color.Transparent)
+                            .border(1.dp, NoxaBorder, RoundedCornerShape(24.dp))
+                            .noxaTap { if (!isBuildingRadio) onStartRadio(topSongs[0]) }
+                            .padding(horizontal = 18.dp, vertical = 11.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (isBuildingRadio) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                color = NoxaLime,
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.Default.Radio,
+                                contentDescription = null,
+                                tint = NoxaLime,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Radio",
+                            color = NoxaTextPrimary,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
             }
 
             // ------------------------------------------------------------ bio
@@ -550,6 +606,10 @@ private fun ArtistPageContent(
                             onRate = onRateSong,
                             onMuteSong = { onMuteSong(song) },
                             onMuteArtist = { onMuteArtist(song) },
+                            onStartRadio = { onStartRadio(song) },
+                            onToggleDownload = { onToggleDownload(song) },
+                            isDownloaded = downloadedIds.contains(song.id),
+                            isDownloading = downloadingIds.contains(song.id),
                             metaText = audienceLine,
                             metaHighlight = index == 0
                         )

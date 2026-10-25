@@ -16,9 +16,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         PlayRecordEntity::class,
         FollowedArtistEntity::class,
         SongRatingEntity::class,
-        MutedEntryEntity::class
+        MutedEntryEntity::class,
+        OfflineTrackEntity::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 abstract class NoxaDatabase : RoomDatabase() {
@@ -108,6 +109,35 @@ abstract class NoxaDatabase : RoomDatabase() {
             }
         }
 
+/**
+ * Adds the `offline_tracks` table introduced in version 5 (Mode offline).
+ * A real migration again — downloading a song must never cost the user their
+ * favourites, history, playlists or ratings.
+ */
+        private val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `offline_tracks` (" +
+                        "`songId` TEXT NOT NULL, " +
+                        "`title` TEXT NOT NULL, " +
+                        "`artist` TEXT NOT NULL, " +
+                        "`album` TEXT NOT NULL, " +
+                        "`artworkUrl` TEXT NOT NULL, " +
+                        "`artworkPath` TEXT NOT NULL, " +
+                        "`durationMs` INTEGER NOT NULL, " +
+                        "`audioPath` TEXT NOT NULL, " +
+                        "`sizeBytes` INTEGER NOT NULL, " +
+                        "`source` TEXT NOT NULL, " +
+                        "`remoteId` TEXT NOT NULL, " +
+                        "`shareUrl` TEXT NOT NULL, " +
+                        "`artistId` TEXT NOT NULL, " +
+                        "`isPreview` INTEGER NOT NULL, " +
+                        "`downloadedAt` INTEGER NOT NULL, " +
+                        "PRIMARY KEY(`songId`))"
+                )
+            }
+        }
+
         fun getDatabase(context: Context): NoxaDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -115,7 +145,7 @@ abstract class NoxaDatabase : RoomDatabase() {
                     NoxaDatabase::class.java,
                     "noxa_music.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                     .fallbackToDestructiveMigration()
                     .build()
                 INSTANCE = instance

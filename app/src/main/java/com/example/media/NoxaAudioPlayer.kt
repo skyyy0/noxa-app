@@ -834,8 +834,13 @@ class NoxaAudioPlayer(private val context: Context) {
         }
     }
 
+    /**
+     * A source ExoPlayer can open: a network stream, or a local `file://` /
+     * `content://` URI written by Mode offline.
+     */
     private fun isPlayable(url: String): Boolean =
-        url.startsWith("http://") || url.startsWith("https://")
+        url.startsWith("http://") || url.startsWith("https://") ||
+            url.startsWith("file://") || url.startsWith("content://")
 
     fun release() {
         stopPositionUpdater()

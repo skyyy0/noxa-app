@@ -124,6 +124,11 @@ fun PlaylistDetailScreen(
     onSyncPlaylist: () -> Unit = {},
     onDismissNotice: () -> Unit = {},
     onConsumeSharedPlaylist: () -> Unit = {},
+    // ------------------------------------------- v2.1: radio & unduhan
+    downloadedIds: Set<String> = emptySet(),
+    downloadingIds: Set<String> = emptySet(),
+    onToggleDownload: (Song) -> Unit = {},
+    onStartRadio: (Song) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val songs by songsFlow.collectAsStateWithLifecycle(initialValue = emptyList())
@@ -417,6 +422,10 @@ fun PlaylistDetailScreen(
                             onAddToQueue = { onAddToQueue(song) },
                             onShare = { onShare(song) },
                             onOpenArtist = onOpenArtist,
+                            onStartRadio = { onStartRadio(song) },
+                            onToggleDownload = { onToggleDownload(song) },
+                            isDownloaded = downloadedIds.contains(song.id),
+                            isDownloading = downloadingIds.contains(song.id),
                             modifier = Modifier.weight(1f)
                         )
                         IconButton(

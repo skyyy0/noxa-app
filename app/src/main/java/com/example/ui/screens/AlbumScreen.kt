@@ -81,6 +81,11 @@ fun AlbumScreen(
     onShare: (Song) -> Unit,
     onOpenArtist: (String, String) -> Unit,
     onRetry: () -> Unit,
+    // ------------------------------------------- v2.1: radio & unduhan
+    downloadedIds: Set<String> = emptySet(),
+    downloadingIds: Set<String> = emptySet(),
+    onToggleDownload: (Song) -> Unit = {},
+    onStartRadio: (Song) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Box(
@@ -286,7 +291,11 @@ fun AlbumScreen(
                                     onAddToQueue = { onAddToQueue(song) },
                                     onAddToPlaylist = { onAddToPlaylist(song) },
                                     onShare = { onShare(song) },
-                                    onOpenArtist = onOpenArtist
+                                    onOpenArtist = onOpenArtist,
+                                    onStartRadio = { onStartRadio(song) },
+                                    onToggleDownload = { onToggleDownload(song) },
+                                    isDownloaded = downloadedIds.contains(song.id),
+                                    isDownloading = downloadingIds.contains(song.id)
                                 )
                             }
                         }

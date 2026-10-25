@@ -29,13 +29,16 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.QueuePlayNext
+import androidx.compose.material.icons.filled.Radio
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.VolumeOff
@@ -249,6 +252,14 @@ fun SongListItem(
     onMuteSong: (() -> Unit)? = null,
     /** v2.0.0 — "Jangan putar lagi (artis)"; null hides it. */
     onMuteArtist: (() -> Unit)? = null,
+    /** v2.1 — "Radio dari lagu ini": a queue built around this song's artist. */
+    onStartRadio: (() -> Unit)? = null,
+    /** v2.1 — offline download; null hides the item. */
+    onToggleDownload: (() -> Unit)? = null,
+    /** v2.1 — already stored on this device (menu says "Hapus unduhan"). */
+    isDownloaded: Boolean = false,
+    /** v2.1 — download in flight (menu says "Mengunduh…" and ignores taps). */
+    isDownloading: Boolean = false,
     /**
      * Optional third line beneath artist • duration (e.g. the artist's total
      * audience on the artist page). When [metaHighlight] is true the number is
@@ -370,9 +381,11 @@ fun SongListItem(
             )
         }
 
-        // Overflow actions: queue management, playlists and sharing.
+        // Overflow actions: queue management, playlists, radio, downloads and
+        // sharing.
         if (onPlayNext != null || onAddToQueue != null || onAddToPlaylist != null ||
-            onShare != null || onRate != null || onMuteSong != null || onMuteArtist != null
+            onShare != null || onRate != null || onMuteSong != null || onMuteArtist != null ||
+            onStartRadio != null || onToggleDownload != null
         ) {
             Box {
                 IconButton(
@@ -427,6 +440,49 @@ fun SongListItem(
                             onClick = {
                                 menuOpen = false
                                 onAddToPlaylist()
+                            }
+                        )
+                    }
+                    if (onStartRadio != null) {
+                        DropdownMenuItem(
+                            text = { Text("Radio dari lagu ini", color = NoxaTextPrimary, fontSize = 14.sp) },
+                            leadingIcon = {
+                                Icon(Icons.Default.Radio, contentDescription = null, tint = NoxaLime)
+                            },
+                            onClick = {
+                                menuOpen = false
+                                onStartRadio()
+                            }
+                        )
+                    }
+                    if (onToggleDownload != null) {
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    text = when {
+                                        isDownloading -> "Mengunduh…"
+                                        isDownloaded -> "Hapus unduhan"
+                                        else -> "Unduh lagu"
+                                    },
+                                    color = NoxaTextPrimary,
+                                    fontSize = 14.sp
+                                )
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = if (isDownloaded) {
+                                        Icons.Default.Delete
+                                    } else {
+                                        Icons.Default.FileDownload
+                                    },
+                                    contentDescription = null,
+                                    tint = if (isDownloaded) NoxaError else NoxaLime
+                                )
+                            },
+                            onClick = {
+                                if (isDownloading) return@DropdownMenuItem
+                                menuOpen = false
+                                onToggleDownload()
                             }
                         )
                     }

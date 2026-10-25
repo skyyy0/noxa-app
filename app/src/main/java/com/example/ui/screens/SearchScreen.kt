@@ -1,5 +1,10 @@
 package com.example.ui.screens
 
+import android.content.Intent
+import android.speech.RecognizerIntent
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -28,6 +33,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Subject
@@ -101,10 +107,53 @@ fun SearchScreen(
     onRateSong: (Song, Int) -> Unit = { _, _ -> },
     onMuteSong: (Song) -> Unit = {},
     onMuteArtist: (Song) -> Unit = {},
+    // ------------------------------------------- v2.1: radio & unduhan
+    downloadedIds: Set<String> = emptySet(),
+    downloadingIds: Set<String> = emptySet(),
+    onToggleDownload: (Song) -> Unit = {},
+    onStartRadio: (Song) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     // "Cari pakai lirik" mode: type a line of lyrics, get the songs back.
     var lyricMode by remember { mutableStateOf(false) }
+
+    // -------------------------------------------------- v2.1: pencarian suara
+    // The system speech recognizer does the listening (and holds the mic
+    // permission itself), so this app never records anything — it just gets
+    // the transcript back and runs the normal search with it.
+    val context = LocalContext.current
+    val speechLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val spoken = result.data
+            ?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+            ?.firstOrNull()
+            .orEmpty()
+        if (spoken.isNotBlank()) {
+            onQueryChange(spoken)
+            if (lyricMode) onSearchByLyrics(spoken) else onPerformSearch(spoken)
+        }
+    }
+
+    fun startVoiceSearch() {
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(
+                RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
+            )
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "id-ID")
+            putExtra(RecognizerIntent.EXTRA_PROMPT, "Sebutkan judul atau artis lagu")
+        }
+        try {
+            speechLauncher.launch(intent)
+        } catch (e: Exception) {
+            Toast.makeText(
+                context,
+                "Pencarian suara tidak tersedia di perangkat ini.",
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+    }
 
     val genres = remember {
         listOf(
@@ -172,18 +221,30 @@ fun SearchScreen(
                     )
                 },
                 trailingIcon = {
-                    if (searchQuery.isNotEmpty()) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
                         IconButton(
-                            onClick = {
-                                onQueryChange("")
-                                if (lyricMode) onClearLyricSearch()
-                            }
+                            onClick = { startVoiceSearch() },
+                            modifier = Modifier.testTag("voice_search_btn")
                         ) {
                             Icon(
-                                imageVector = Icons.Default.Clear,
-                                contentDescription = "Clear",
-                                tint = NoxaTextSecondary
+                                imageVector = Icons.Default.Mic,
+                                contentDescription = "Cari dengan suara",
+                                tint = NoxaLime
                             )
+                        }
+                        if (searchQuery.isNotEmpty()) {
+                            IconButton(
+                                onClick = {
+                                    onQueryChange("")
+                                    if (lyricMode) onClearLyricSearch()
+                                }
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Clear,
+                                    contentDescription = "Clear",
+                                    tint = NoxaTextSecondary
+                                )
+                            }
                         }
                     }
                 },
@@ -323,6 +384,10 @@ fun SearchScreen(
                             onRate = onRateSong,
                             onMuteSong = { onMuteSong(song) },
                             onMuteArtist = { onMuteArtist(song) },
+                            onStartRadio = { onStartRadio(song) },
+                            onToggleDownload = { onToggleDownload(song) },
+                            isDownloaded = downloadedIds.contains(song.id),
+                            isDownloading = downloadingIds.contains(song.id),
                             modifier = Modifier.padding(horizontal = 4.dp)
                         )
                     }
@@ -429,7 +494,6 @@ fun SearchScreen(
                 ) {
                     items(genres) { genre ->
                         val imageUrl = genreImages[genre.name]
-                        val context = LocalContext.current
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
