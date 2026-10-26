@@ -42,7 +42,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -59,8 +62,11 @@ import com.example.data.model.Song
 import com.example.data.remote.HomeMusicSection
 import com.example.ui.components.HeroSpotlightCard
 import com.example.ui.components.NoxAmbientBackdrop
+import com.example.ui.components.NoxaCountUp
+import com.example.ui.components.NoxaShimmerBox
 import com.example.ui.components.noxaAppear
 import com.example.ui.components.noxaClickable
+import com.example.ui.components.noxaTap
 import com.example.ui.theme.NoxaBlack
 import com.example.ui.theme.NoxaBorder
 import com.example.ui.theme.NoxaLime
@@ -145,6 +151,7 @@ fun HomeScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .noxaAppear()
                     .padding(horizontal = 20.dp, vertical = 16.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
@@ -153,15 +160,16 @@ fun HomeScreen(
                     Text(
                         text = greeting,
                         color = NoxaTextTertiary,
-                        fontSize = 12.sp,
+                        fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
-                        letterSpacing = 1.sp
+                        letterSpacing = 1.6.sp
                     )
                     Text(
                         text = if (currentUser != null) (currentUser.displayName ?: "NOXA Music") else "NOXA Music",
                         color = NoxaTextPrimary,
-                        fontSize = 24.sp,
+                        fontSize = 26.sp,
                         fontWeight = FontWeight.Black,
+                        letterSpacing = (-0.3).sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -177,16 +185,17 @@ fun HomeScreen(
                         contentScale = ContentScale.Crop,
                         modifier = Modifier
                             .size(38.dp)
+                            .shadow(4.dp, CircleShape)
                             .clip(CircleShape)
                             .border(1.5.dp, NoxaLime, CircleShape)
                     )
-                } else {
-                    Box(
-                        modifier = Modifier
-                            .size(38.dp)
-                            .clip(CircleShape)
-                            .background(NoxaSurfaceSecondary)
-                            .border(1.dp, NoxaLime, CircleShape),
+                } else {                        Box(
+                            modifier = Modifier
+                                .size(38.dp)
+                                .shadow(4.dp, CircleShape)
+                                .clip(CircleShape)
+                                .background(NoxaSurfaceSecondary)
+                                .border(1.dp, NoxaLime, CircleShape),
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
@@ -207,10 +216,11 @@ fun HomeScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 20.dp, vertical = 6.dp)
+                        .shadow(6.dp, RoundedCornerShape(16.dp))
                         .clip(RoundedCornerShape(16.dp))
                         .background(NoxaSurfaceElevated)
                         .border(1.dp, NoxaLime.copy(alpha = 0.35f), RoundedCornerShape(16.dp))
-                        .clickable { onResume() }
+                        .noxaTap { onResume() }
                         .padding(12.dp)
                         .testTag("resume_card"),
                     verticalAlignment = Alignment.CenterVertically
@@ -284,6 +294,7 @@ fun HomeScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 20.dp, vertical = 6.dp)
+                        .shadow(5.dp, RoundedCornerShape(16.dp))
                         .clip(RoundedCornerShape(16.dp))
                         .background(NoxaSurfaceElevated)
                         .border(1.dp, NoxaBorder, RoundedCornerShape(16.dp))
@@ -360,17 +371,59 @@ fun HomeScreen(
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         if (isLoading) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(28.dp),
-                                color = NoxaLime,
-                                strokeWidth = 3.dp
-                            )
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Text(
-                                text = "Memuat musik...",
-                                color = NoxaTextSecondary,
-                                fontSize = 14.sp
-                            )
+                            // Shimmer skeleton shaped like the feed that is
+                            // about to land — heading, shelf cards, list rows.
+                            Column(modifier = Modifier.fillMaxWidth()) {
+                                NoxaShimmerBox(
+                                    modifier = Modifier
+                                        .width(150.dp)
+                                        .height(20.dp)
+                                )
+                                Spacer(modifier = Modifier.height(16.dp))
+                                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                    repeat(3) {
+                                        NoxaShimmerBox(
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .height(150.dp),
+                                            shape = RoundedCornerShape(14.dp)
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(20.dp))
+                                repeat(3) {
+                                    Row(
+                                        modifier = Modifier.padding(vertical = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        NoxaShimmerBox(
+                                            modifier = Modifier.size(48.dp),
+                                            shape = RoundedCornerShape(10.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(12.dp))
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            NoxaShimmerBox(
+                                                modifier = Modifier
+                                                    .fillMaxWidth(0.6f)
+                                                    .height(14.dp)
+                                            )
+                                            Spacer(modifier = Modifier.height(8.dp))
+                                            NoxaShimmerBox(
+                                                modifier = Modifier
+                                                    .fillMaxWidth(0.35f)
+                                                    .height(12.dp),
+                                                shape = RoundedCornerShape(6.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Text(
+                                    text = "Memuat musik...",
+                                    color = NoxaTextSecondary,
+                                    fontSize = 13.sp
+                                )
+                            }
                         } else {
                             Text(
                                 text = errorMessage ?: "",
@@ -402,17 +455,12 @@ fun HomeScreen(
         // A. Hero Spotlight Card — "Blinding Lights" by The Weeknd.
         if (heroSong != null) {
             item(key = "hero") {
-                Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp)) {
-                    Text(
-                        text = "Sorotan hari ini",
-                        color = NoxaTextTertiary,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 1.sp,
-                        modifier = Modifier.padding(bottom = 8.dp)
-                    )
+                Column(modifier = Modifier.padding(vertical = 10.dp)) {
+                    HomeSectionHeader(title = "Sorotan hari ini", subtitle = "")
+                    Spacer(modifier = Modifier.height(10.dp))
                     HeroSpotlightCard(
                         song = heroSong,
+                        modifier = Modifier.padding(horizontal = 20.dp),
                         onPlay = {
                             val queue = if (heroQueue.isEmpty()) listOf(heroSong) else heroQueue
                             val index = queue.indexOfFirst { it.id == heroSong.id }.coerceAtLeast(0)
@@ -427,45 +475,38 @@ fun HomeScreen(
         val gridSongs = if (quickPlaySongs.isNotEmpty()) quickPlaySongs else recentSongs.take(8)
         if (gridSongs.isNotEmpty()) {
             item(key = "quick_grid") {
-                Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = "Putar cepat",
-                            color = NoxaTextPrimary,
-                            fontSize = 19.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Spacer(modifier = Modifier.weight(1f))
-                        Icon(
-                            imageVector = Icons.Default.LocalFireDepartment,
-                            contentDescription = null,
-                            tint = NoxaLime,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                    Text(
-                        text = "Lagu yang paling sering kamu putar",
-                        color = NoxaTextSecondary,
-                        fontSize = 12.sp,
-                        modifier = Modifier.padding(bottom = 10.dp)
+                Column(modifier = Modifier.padding(vertical = 10.dp)) {
+                    HomeSectionHeader(
+                        title = "Putar cepat",
+                        subtitle = "Lagu yang paling sering kamu putar",
+                        leadingIcon = Icons.Default.LocalFireDepartment
                     )
+                    Spacer(modifier = Modifier.height(12.dp))
                     gridSongs.chunked(2).forEach { rowSongs ->
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .padding(horizontal = 20.dp)
                                 .padding(bottom = 8.dp),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             rowSongs.forEach { song ->
                                 val index = gridSongs.indexOfFirst { it.id == song.id }
+                                val tilePlaying = song.id == currentPlayingSongId
                                 Row(
                                     modifier = Modifier
                                         .weight(1f)
-                                        .clip(RoundedCornerShape(10.dp))
+                                        .shadow(4.dp, RoundedCornerShape(12.dp))
+                                        .clip(RoundedCornerShape(12.dp))
                                         .background(NoxaSurfaceElevated)
+                                        .border(
+                                            1.dp,
+                                            if (tilePlaying) NoxaLime else NoxaBorder,
+                                            RoundedCornerShape(12.dp)
+                                        )
                                         .noxaAppear(delayMillis = index * 40)
                                         .noxaClickable { onPlaySong(song, gridSongs, index) }
-                                        .padding(6.dp)
+                                        .padding(7.dp)
                                         .testTag("quick_tile_${song.id}"),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
@@ -478,13 +519,13 @@ fun HomeScreen(
                                         contentDescription = song.title,
                                         contentScale = ContentScale.Crop,
                                         modifier = Modifier
-                                            .size(40.dp)
-                                            .clip(RoundedCornerShape(6.dp))
+                                            .size(42.dp)
+                                            .clip(RoundedCornerShape(8.dp))
                                     )
-                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Spacer(modifier = Modifier.width(9.dp))
                                     Text(
                                         text = song.title,
-                                        color = NoxaTextPrimary,
+                                        color = if (tilePlaying) NoxaLime else NoxaTextPrimary,
                                         fontSize = 12.sp,
                                         fontWeight = FontWeight.SemiBold,
                                         maxLines = 2,
@@ -516,8 +557,16 @@ fun HomeScreen(
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
+                            .shadow(6.dp, RoundedCornerShape(16.dp))
                             .clip(RoundedCornerShape(16.dp))
-                            .background(NoxaSurfaceElevated)
+                            .background(
+                                Brush.linearGradient(
+                                    colors = listOf(
+                                        NoxaSurfaceElevated,
+                                        NoxaLime.copy(alpha = 0.06f)
+                                    )
+                                )
+                            )
                             .border(1.dp, NoxaBorder, RoundedCornerShape(16.dp))
                             .padding(14.dp)
                             .testTag("listen_stats_card")
@@ -539,11 +588,13 @@ fun HomeScreen(
                         }
                         Spacer(modifier = Modifier.height(10.dp))
                         Row(verticalAlignment = Alignment.Bottom) {
-                            Text(
-                                text = listeningStats.playsWeek.toString(),
-                                color = NoxaLime,
-                                fontSize = 30.sp,
-                                fontWeight = FontWeight.Black
+                            NoxaCountUp(
+                                target = listeningStats.playsWeek,
+                                style = androidx.compose.ui.text.TextStyle(
+                                    color = NoxaLime,
+                                    fontSize = 30.sp,
+                                    fontWeight = FontWeight.Black
+                                )
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
@@ -570,7 +621,7 @@ fun HomeScreen(
                                                 NoxaLime.copy(alpha = 0.45f),
                                                 RoundedCornerShape(50)
                                             )
-                                            .clickable { onOpenArtist("", artist.name) }
+                                            .noxaTap { onOpenArtist("", artist.name) }
                                             .padding(horizontal = 10.dp, vertical = 6.dp),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
@@ -599,26 +650,13 @@ fun HomeScreen(
         // A4. Buat kamu — recommendations grown from the user's own taste.
         if (forYouSongs.isNotEmpty()) {
             item(key = "for_you") {
-                Column(modifier = Modifier.padding(top = 20.dp)) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 20.dp)
-                    ) {
-                        Text(
-                            text = "Buat kamu",
-                            color = NoxaTextPrimary,
-                            fontSize = 19.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = forYouLabel.ifBlank { "Rekomendasi dari selera mendengarmu" },
-                            color = NoxaTextSecondary,
-                            fontSize = 12.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
+                Column(modifier = Modifier.padding(top = 24.dp)) {
+                    HomeSectionHeader(
+                        title = "Buat kamu",
+                        subtitle = forYouLabel.ifBlank {
+                            "Rekomendasi dari selera mendengarmu"
+                        }
+                    )
 
                     Spacer(modifier = Modifier.height(12.dp))
 
@@ -632,10 +670,10 @@ fun HomeScreen(
                             key = { _, song -> "foryou_${song.id}" },
                             contentType = { _, _ -> "foryou_card" }
                         ) { index, song ->
+                            val forYouPlaying = song.id == currentPlayingSongId
                             Column(
                                 modifier = Modifier
                                     .width(140.dp)
-                                    .clip(RoundedCornerShape(14.dp))
                                     .noxaAppear(delayMillis = index * 50)
                                     .noxaClickable { onPlaySong(song, forYouSongs, index) }
                                     .testTag("foryou_song_${song.id}")
@@ -643,9 +681,14 @@ fun HomeScreen(
                                 Box(
                                     modifier = Modifier
                                         .size(140.dp)
+                                        .shadow(6.dp, RoundedCornerShape(14.dp))
                                         .clip(RoundedCornerShape(14.dp))
                                         .background(NoxaSurfaceElevated)
-                                        .border(1.dp, NoxaBorder, RoundedCornerShape(14.dp))
+                                        .border(
+                                            1.dp,
+                                            if (forYouPlaying) NoxaLime else NoxaBorder,
+                                            RoundedCornerShape(14.dp)
+                                        )
                                 ) {
                                     AsyncImage(
                                         model = ImageRequest.Builder(context)
@@ -663,7 +706,7 @@ fun HomeScreen(
 
                                 Text(
                                     text = song.title,
-                                    color = NoxaTextPrimary,
+                                    color = if (forYouPlaying) NoxaLime else NoxaTextPrimary,
                                     fontSize = 13.sp,
                                     fontWeight = FontWeight.SemiBold,
                                     maxLines = 1,
@@ -687,26 +730,13 @@ fun HomeScreen(
         // B. Artis Populer — avatar shelf; each avatar opens the artist page.
         if (popularArtists.isNotEmpty()) {
             item(key = "popular_artists") {
-                Column(modifier = Modifier.padding(top = 20.dp)) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 20.dp)
-                    ) {
-                        Text(
-                            text = "Artis Populer",
-                            color = NoxaTextPrimary,
-                            fontSize = 19.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = "Ketuk untuk membuka profil artis",
-                            color = NoxaTextSecondary,
-                            fontSize = 12.sp
-                        )
-                    }
+                Column(modifier = Modifier.padding(top = 24.dp)) {
+                    HomeSectionHeader(
+                        title = "Artis Populer",
+                        subtitle = "Ketuk untuk membuka profil artis"
+                    )
 
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(14.dp))
 
                     LazyRow(
                         modifier = Modifier.fillMaxWidth(),
@@ -721,7 +751,7 @@ fun HomeScreen(
                             Column(
                                 modifier = Modifier
                                     .width(72.dp)
-                                    .clickable {
+                                    .noxaTap {
                                         onOpenArtist(artist.id.toString(), artist.name)
                                     }
                                     .testTag("popular_artist_${artist.id}"),
@@ -737,6 +767,7 @@ fun HomeScreen(
                                     contentScale = ContentScale.Crop,
                                     modifier = Modifier
                                         .size(64.dp)
+                                        .shadow(6.dp, CircleShape)
                                         .clip(CircleShape)
                                         .border(
                                             width = 1.5.dp,
@@ -764,33 +795,12 @@ fun HomeScreen(
         // C0. Radar Rilis — new albums from artists you follow (v2.0.0).
         if (releaseRadar.isNotEmpty()) {
             item(key = "release_radar_shelf") {
-                Column(modifier = Modifier.padding(top = 20.dp)) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 20.dp)
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                imageVector = Icons.Default.NewReleases,
-                                contentDescription = null,
-                                tint = NoxaLime,
-                                modifier = Modifier.size(19.dp)
-                            )
-                            Spacer(modifier = Modifier.width(7.dp))
-                            Text(
-                                text = "Radar Rilis",
-                                color = NoxaTextPrimary,
-                                fontSize = 19.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                        Text(
-                            text = "Album baru dari artis yang kamu ikuti",
-                            color = NoxaTextSecondary,
-                            fontSize = 12.sp
-                        )
-                    }
+                Column(modifier = Modifier.padding(top = 24.dp)) {
+                    HomeSectionHeader(
+                        title = "Radar Rilis",
+                        subtitle = "Album baru dari artis yang kamu ikuti",
+                        leadingIcon = Icons.Default.NewReleases
+                    )
 
                     Spacer(modifier = Modifier.height(12.dp))
 
@@ -821,6 +831,7 @@ fun HomeScreen(
                                     contentScale = ContentScale.Crop,
                                     modifier = Modifier
                                         .size(132.dp)
+                                        .shadow(6.dp, RoundedCornerShape(12.dp))
                                         .clip(RoundedCornerShape(12.dp))
                                         .border(1.dp, NoxaBorder, RoundedCornerShape(12.dp))
                                 )
@@ -850,34 +861,23 @@ fun HomeScreen(
         // C. Pinned by Sky — the dedicated pin shelf with the quote.
         if (pinnedSongs.isNotEmpty()) {
             item(key = "pinned_shelf") {
-                Column(modifier = Modifier.padding(top = 20.dp)) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 20.dp)
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                imageVector = Icons.Rounded.PushPin,
-                                contentDescription = null,
-                                tint = NoxaLime,
-                                modifier = Modifier.size(19.dp)
-                            )
-                            Spacer(modifier = Modifier.width(7.dp))
-                            Text(
-                                text = "Pinned by Sky",
-                                color = NoxaTextPrimary,
-                                fontSize = 19.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Spacer(modifier = Modifier.weight(1f))
+                Column(modifier = Modifier.padding(top = 24.dp)) {
+                    HomeSectionHeader(
+                        title = "Pinned by Sky",
+                        subtitle = "Lagu khusus pilihan Sky",
+                        leadingIcon = Icons.Rounded.PushPin,
+                        trailing = {
                             // Mix Sky: one shuffled queue from Sky's pins, the
                             // user's favorites and their recent listens.
                             Row(
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(50))
                                     .background(NoxaLime.copy(alpha = 0.14f))
-                                    .border(1.dp, NoxaLime.copy(alpha = 0.5f), RoundedCornerShape(50))
+                                    .border(
+                                        1.dp,
+                                        NoxaLime.copy(alpha = 0.5f),
+                                        RoundedCornerShape(50)
+                                    )
                                     .noxaClickable { onPlaySkyMix() }
                                     .padding(horizontal = 12.dp, vertical = 6.dp)
                                     .testTag("mix_sky_btn"),
@@ -898,12 +898,7 @@ fun HomeScreen(
                                 )
                             }
                         }
-                        Text(
-                            text = "Lagu khusus pilihan Sky",
-                            color = NoxaTextSecondary,
-                            fontSize = 12.sp
-                        )
-                    }
+                    )
 
                     Spacer(modifier = Modifier.height(12.dp))
 
@@ -935,24 +930,11 @@ fun HomeScreen(
         // C2. Dengar Terakhir — quick jumps back into recent listens.
         if (recentSongs.isNotEmpty()) {
             item(key = "recent_shelf") {
-                Column(modifier = Modifier.padding(top = 20.dp)) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 20.dp)
-                    ) {
-                        Text(
-                            text = "Dengar Terakhir",
-                            color = NoxaTextPrimary,
-                            fontSize = 19.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = "Lanjutkan dari mana kamu berhenti",
-                            color = NoxaTextSecondary,
-                            fontSize = 12.sp
-                        )
-                    }
+                Column(modifier = Modifier.padding(top = 24.dp)) {
+                    HomeSectionHeader(
+                        title = "Dengar Terakhir",
+                        subtitle = "Lanjutkan dari mana kamu berhenti"
+                    )
 
                     Spacer(modifier = Modifier.height(12.dp))
 
@@ -966,6 +948,7 @@ fun HomeScreen(
                             key = { _, song -> "recent_${song.id}" },
                             contentType = { _, _ -> "recent_card" }
                         ) { index, song ->
+                            val recentPlaying = song.id == currentPlayingSongId
                             Column(
                                 modifier = Modifier
                                     .width(96.dp)
@@ -979,9 +962,14 @@ fun HomeScreen(
                                 Box(
                                     modifier = Modifier
                                         .size(96.dp)
+                                        .shadow(6.dp, RoundedCornerShape(12.dp))
                                         .clip(RoundedCornerShape(12.dp))
                                         .background(NoxaSurfaceElevated)
-                                        .border(1.dp, NoxaBorder, RoundedCornerShape(12.dp))
+                                        .border(
+                                            1.dp,
+                                            if (recentPlaying) NoxaLime else NoxaBorder,
+                                            RoundedCornerShape(12.dp)
+                                        )
                                 ) {
                                     AsyncImage(
                                         model = ImageRequest.Builder(context)
@@ -996,7 +984,7 @@ fun HomeScreen(
                                 }
                                 Text(
                                     text = song.title,
-                                    color = NoxaTextPrimary,
+                                    color = if (recentPlaying) NoxaLime else NoxaTextPrimary,
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.SemiBold,
                                     maxLines = 1,
@@ -1015,25 +1003,12 @@ fun HomeScreen(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(top = 20.dp)
+                        .padding(top = 24.dp)
                 ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 20.dp)
-                    ) {
-                        Text(
-                            text = section.title,
-                            color = NoxaTextPrimary,
-                            fontSize = 19.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = section.subtitle,
-                            color = NoxaTextSecondary,
-                            fontSize = 12.sp
-                        )
-                    }
+                    HomeSectionHeader(
+                        title = section.title,
+                        subtitle = section.subtitle
+                    )
 
                     Spacer(modifier = Modifier.height(12.dp))
 
@@ -1051,7 +1026,6 @@ fun HomeScreen(
                             Column(
                                 modifier = Modifier
                                     .width(140.dp)
-                                    .clip(RoundedCornerShape(14.dp))
                                     .noxaAppear(delayMillis = index * 50)
                                     .noxaClickable {
                                         onPlaySong(song, section.songs, index)
@@ -1061,6 +1035,7 @@ fun HomeScreen(
                                 Box(
                                     modifier = Modifier
                                         .size(140.dp)
+                                        .shadow(6.dp, RoundedCornerShape(14.dp))
                                         .clip(RoundedCornerShape(14.dp))
                                         .background(NoxaSurfaceElevated)
                                         .border(
@@ -1152,7 +1127,7 @@ fun HomeScreen(
                                     // itself is the entry point to their profile.
                                     modifier = Modifier
                                         .clip(RoundedCornerShape(4.dp))
-                                        .clickable { onOpenArtist(song.artistId, song.artist) }
+                                        .noxaTap { onOpenArtist(song.artistId, song.artist) }
                                         .padding(vertical = 1.dp, horizontal = 2.dp)
                                 )
                             }
@@ -1181,6 +1156,7 @@ private fun PinnedShelfCard(
     Column(
         modifier = modifier
             .width(280.dp)
+            .shadow(8.dp, RoundedCornerShape(16.dp))
             .clip(RoundedCornerShape(16.dp))
             .background(NoxaSurfaceElevated)
             .border(
@@ -1271,6 +1247,67 @@ private fun PinnedShelfCard(
                 maxLines = 3,
                 overflow = TextOverflow.Ellipsis,
                 lineHeight = 15.sp
+            )
+        }
+    }
+}
+
+/**
+ * One header style for every shelf on Home — the rhythm that makes the feed
+ * read as a designed surface instead of stacked widgets: an optional lime
+ * badge for the shelf's icon, a large iOS-flavoured title, a quiet subtitle
+ * and an optional trailing control (e.g. the Mix Sky chip). Content and
+ * navigation are untouched; only the presentation is unified.
+ */
+@Composable
+private fun HomeSectionHeader(
+    title: String,
+    subtitle: String,
+    modifier: Modifier = Modifier,
+    leadingIcon: ImageVector? = null,
+    trailing: (@Composable () -> Unit)? = null
+) {
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (leadingIcon != null) {
+                Box(
+                    modifier = Modifier
+                        .size(28.dp)
+                        .clip(RoundedCornerShape(9.dp))
+                        .background(NoxaLime.copy(alpha = 0.12f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = leadingIcon,
+                        contentDescription = null,
+                        tint = NoxaLime,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.width(10.dp))
+            }
+            Text(
+                text = title,
+                color = NoxaTextPrimary,
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Black,
+                letterSpacing = (-0.2).sp
+            )
+            Spacer(modifier = Modifier.weight(1f))
+            trailing?.invoke()
+        }
+        if (subtitle.isNotBlank()) {
+            Text(
+                text = subtitle,
+                color = NoxaTextTertiary,
+                fontSize = 12.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 3.dp)
             )
         }
     }

@@ -55,13 +55,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -79,12 +83,53 @@ import com.example.ui.theme.NoxaLime
 import com.example.ui.theme.NoxaSurface
 import com.example.ui.theme.NoxaSurfaceElevated
 import com.example.ui.theme.NoxaSurfaceSecondary
+import com.example.ui.theme.NoxaSurfaceTertiary
 import com.example.ui.theme.NoxaPurple
 import com.example.ui.theme.NoxaPurpleDeep
 import com.example.ui.theme.NoxaTextPrimary
 import com.example.ui.theme.NoxaTextSecondary
 import com.example.ui.theme.NoxaTextTertiary
 import com.example.ui.util.FormatUtils
+
+/**
+ * A placeholder block with an iOS-style light sweep travelling across it.
+ * Loading then reads as "content is arriving" instead of a lonely spinner:
+ * [modifier] sizes it into bars, cards or thumbnails and [shape] rounds it.
+ */
+@Composable
+fun NoxaShimmerBox(
+    modifier: Modifier = Modifier,
+    shape: Shape = RoundedCornerShape(10.dp)
+) {
+    val transition = rememberInfiniteTransition(label = "noxa_shimmer")
+    val progress by transition.animateFloat(
+        initialValue = -0.4f,
+        targetValue = 1.4f,
+        animationSpec = infiniteRepeatable(
+            tween(durationMillis = 1500, easing = LinearEasing)
+        ),
+        label = "noxa_shimmer_progress"
+    )
+    var widthPx by remember { mutableStateOf(1f) }
+    Box(
+        modifier = modifier
+            .onSizeChanged { widthPx = it.width.toFloat().coerceAtLeast(1f) }
+            .clip(shape)
+            .background(
+                Brush.linearGradient(
+                    colors = listOf(
+                        NoxaSurfaceSecondary,
+                        NoxaSurfaceTertiary,
+                        NoxaSurfaceElevated,
+                        NoxaSurfaceTertiary,
+                        NoxaSurfaceSecondary
+                    ),
+                    start = Offset(x = (progress - 0.35f) * widthPx, y = 0f),
+                    end = Offset(x = (progress + 0.05f) * widthPx, y = 0f)
+                )
+            )
+    )
+}
 
 @Composable
 fun CategoryChipsRow(
@@ -109,7 +154,7 @@ fun CategoryChipsRow(
                         if (isSelected) NoxaLime else NoxaBorder,
                         CircleShape
                     )
-                    .clickable { onSelectCategory(category) }
+                    .noxaTap { onSelectCategory(category) }
                     .padding(horizontal = 16.dp, vertical = 8.dp)
                     .testTag("category_chip_$category")
             ) {
@@ -135,10 +180,11 @@ fun HeroSpotlightCard(
         modifier = modifier
             .fillMaxWidth()
             .height(200.dp)
+            .shadow(10.dp, RoundedCornerShape(20.dp))
             .clip(RoundedCornerShape(20.dp))
             .background(NoxaSurfaceElevated)
             .border(1.dp, if (isPlaying) NoxaLime else NoxaBorder, RoundedCornerShape(20.dp))
-            .clickable { onPlay() }
+            .noxaClickable { onPlay() }
             .testTag("hero_spotlight_card")
     ) {
         val context = LocalContext.current
@@ -215,7 +261,7 @@ fun HeroSpotlightCard(
                 .size(46.dp)
                 .clip(CircleShape)
                 .background(NoxaLime)
-                .clickable { onPlay() }
+                .noxaStrongTap { onPlay() }
                 .testTag("hero_play_btn"),
             contentAlignment = Alignment.Center
         ) {
@@ -276,8 +322,9 @@ fun SongListItem(
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
             // Tap plays; long-press opens the same quick menu as the ⋮ button —
-            // the gesture Spotify users expect on every song row.
-            .combinedClickable(
+            // the gesture Spotify users expect on every song row. Wrapped in
+            // the NOXA row feedback so the row dips and ticks under the finger.
+            .noxaCombinedClickable(
                 onLongClick = { menuOpen = true },
                 onClick = { onPlay() }
             )
@@ -339,7 +386,7 @@ fun SongListItem(
                     modifier = if (onOpenArtist != null) {
                         Modifier
                             .clip(RoundedCornerShape(4.dp))
-                            .clickable { onOpenArtist(song.artistId, song.artist) }
+                            .noxaTap { onOpenArtist(song.artistId, song.artist) }
                             .padding(vertical = 1.dp, horizontal = 2.dp)
                     } else {
                         Modifier

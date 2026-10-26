@@ -37,6 +37,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -94,9 +96,15 @@ fun EqualizerScreen(
                 )
             }
 
+            val haptic = LocalHapticFeedback.current
             Switch(
                 checked = equalizerState.isEnabled,
-                onCheckedChange = onSetEnabled,
+                onCheckedChange = {
+                    // Master switch: the heavy tick, since this one arms the
+                    // whole DSP chain.
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    onSetEnabled(it)
+                },
                 colors = SwitchDefaults.colors(
                     checkedThumbColor = NoxaBlack,
                     checkedTrackColor = NoxaLime,

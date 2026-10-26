@@ -79,6 +79,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.example.data.ai.AiChatMessage
+import com.example.ui.components.noxaTap
 import com.example.ui.theme.NoxaBlack
 import com.example.ui.theme.NoxaBorder
 import com.example.ui.theme.NoxaLime
@@ -323,7 +324,7 @@ private fun AiWelcomeCard(onSuggestion: (String) -> Unit) {
                         .clip(RoundedCornerShape(18.dp))
                         .background(NoxaSurfaceSecondary)
                         .border(1.dp, NoxaBorder, RoundedCornerShape(18.dp))
-                        .clickable { onSuggestion(suggestion) }
+                        .noxaTap { onSuggestion(suggestion) }
                         .padding(horizontal = 14.dp, vertical = 9.dp)
                 ) {
                     Text(

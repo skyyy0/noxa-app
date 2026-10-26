@@ -97,6 +97,8 @@ import com.example.ui.theme.NoxaTextPrimary
 import com.example.ui.theme.NoxaTextSecondary
 import com.example.ui.theme.NoxaTextTertiary
 import com.example.ui.components.noxaTap
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import com.example.ui.viewmodel.WeeklyRecap
 import com.example.ui.viewmodel.YearListeningUi
 import kotlinx.coroutines.Dispatchers
@@ -2136,10 +2138,13 @@ private fun SettingsToggleRow(
     onCheckedChange: (Boolean) -> Unit,
     tag: String
 ) {
+    // Flipping a switch ticks: a heavier pulse than a plain tap so the
+    // settings row feels like a physical toggle, iOS-style.
+    val haptic = LocalHapticFeedback.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onCheckedChange(!checked) }
+            .noxaTap { onCheckedChange(!checked) }
             .padding(horizontal = 16.dp, vertical = 10.dp)
             .testTag(tag),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -2161,7 +2166,10 @@ private fun SettingsToggleRow(
         Spacer(modifier = Modifier.width(12.dp))
         Switch(
             checked = checked,
-            onCheckedChange = onCheckedChange,
+            onCheckedChange = {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                onCheckedChange(it)
+            },
             colors = SwitchDefaults.colors(
                 checkedTrackColor = NoxaLime,
                 checkedThumbColor = NoxaBlack,

@@ -45,10 +45,14 @@ object WakeCommandParser {
     )
 
     /**
-     * Bentuk brand yang dieja beda oleh recognizer sistem. Kecocokan memakai
-     * `contains` sehingga "hinoxa" / "hainoxa" (satu kata) tetap terdeteksi.
+     * Bentuk brand yang dieja beda oleh recognizer sistem.
+     *
+     * Kecocokan harus TEPAT per kata (bukan `contains`): kecocokan substring
+     * membuat banyak kata biasa ikut terdeteksi sebagai wake word, sehingga
+     * bubble muncul tanpa user benar-benar menyebut "Hi NOXA". Variasi yang
+     * digabung dengan sapaan ("hinoxa") ditangani [isMergedWake].
      */
-    private val BRAND_FORMS = listOf("noxa", "noksa", "nosa", "nokca")
+    private val BRAND_FORMS = setOf("noxa", "noksa", "nosa", "nokca")
 
     /** Kata kerja putar — posisinya menandai awal query lagu. */
     private val PLAY_VERBS = setOf(
@@ -77,17 +81,44 @@ object WakeCommandParser {
     private fun wordsOf(text: String): List<String> =
         normalize(text).split(" ").filter { it.isNotBlank() }
 
-    private fun isBrandWord(word: String): Boolean = BRAND_FORMS.any { word.contains(it) }
-
-    /** Index token brand pertama dalam utterance, atau -1. */
-    private fun wakeIndex(text: String): Int =
-        wordsOf(text).indexOfFirst { isBrandWord(it) }
+    private fun isBrandWord(word: String): Boolean = word in BRAND_FORMS
 
     /**
-     * Ada tidaknya kata bangun. Sengaja longgar: "noxa" sebagai kata sendiri
-     * pun dihitung — merek cukup unik, dan false positive cuma memunculkan
-     * bubble yang menghilang sendiri, bukan salah memutar lagu.
+     * "hinoxa" / "hainoxa" — sapaan + brand yang disatukan recognizer jadi
+     * satu kata. Hanya dihitung bila tepat sapaan + brand (bukan sembarang
+     * kata yang kebetulan memuat brand di dalamnya).
      */
+    private fun isMergedWake(word: String): Boolean =
+        GREETINGS.any { greeting -> BRAND_FORMS.any { word == greeting + it } }
+
+    /**
+     * Index token wake pertama dalam utterance, atau -1.
+     *
+     * Aturan ketat (perbaikan sensitivitas v3.1.0) — wake terdeteksi HANYA bila:
+     *  * kata itu bentuk gabungan sapaan+brand ("hinoxa"), ATAU
+     *  * kata itu brand persis dan berada di awal kalimat (user menyo\u2019a
+     *    langsung: "noxa, putarkan …"), ATAU
+     *  * brand persis didahului kata sapaan ("hi noxa", "hai noxa putar …").
+     *
+     * Brand di tengah kalimat tanpa sapaan ("putarkan lagu noxa",
+     * "aplikasi noxa keren", transkrip lirik/obrolan) TIDAK membangunkan
+     * layanan — itu sumber false positive yang membuat ikon mikrofon
+     * "merespons" tanpa ucapan "Hi NOXA".
+     */
+    private fun wakeIndex(text: String): Int {
+        val words = wordsOf(text)
+        words.forEachIndexed { index, word ->
+            if (isMergedWake(word)) return index
+            if (isBrandWord(word) &&
+                (index == 0 || words[index - 1] in GREETINGS)
+            ) {
+                return index
+            }
+        }
+        return -1
+    }
+
+    /** Ada tidaknya kata bangun — lihat [wakeIndex] untuk aturannya. */
     fun containsWake(text: String): Boolean = wakeIndex(text) >= 0
 
     /**

@@ -205,7 +205,7 @@ fun AlbumScreen(
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(6.dp))
-                                    .clickable {
+                                    .noxaTap {
                                         onOpenArtist(
                                             album.artistId.toString(),
                                             album.artistName
