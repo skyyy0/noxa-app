@@ -62,6 +62,7 @@ import com.example.ui.i18n.string
 import com.example.ui.components.noxaAppear
 import com.example.ui.components.noxaTap
 import com.example.ui.components.NoxAmbientBackdrop
+import com.example.ui.components.NoxaCountUp
 import com.example.ui.theme.NoxaBlack
 import com.example.ui.theme.NoxaBorder
 import com.example.ui.theme.NoxaLime
@@ -177,7 +178,7 @@ fun ArtistScreen(
                         modifier = Modifier
                             .clip(RoundedCornerShape(20.dp))
                             .border(1.dp, NoxaLime, RoundedCornerShape(20.dp))
-                            .clickable { onRetry() }
+                            .noxaTap { onRetry() }
                             .padding(horizontal = 24.dp, vertical = 10.dp)
                     )
                 }
@@ -352,6 +353,7 @@ private fun ArtistPageContent(
                 val audience = insights?.youtubeSubscribers ?: profile.fanCount
                 StatBlock(
                     value = FormatUtils.formatCount(audience),
+                    count = audience,
                     label = if (insights?.youtubeSubscribers != null) {
                         "subscriber YouTube"
                     } else {
@@ -362,12 +364,14 @@ private fun ArtistPageContent(
                 if (profile.albumCount > 0) {
                     StatBlock(
                         value = profile.albumCount.toString(),
+                        count = profile.albumCount.toLong(),
                         label = string("artist.releases"),
                         modifier = Modifier.weight(1f)
                     )
                 }
                 StatBlock(
                     value = topSongs.size.toString(),
+                    count = topSongs.size.toLong(),
                     label = string("artist.topTracks"),
                     modifier = Modifier.weight(1f)
                 )
@@ -688,16 +692,33 @@ private fun ArtistPageContent(
 }
 
 @Composable
-private fun StatBlock(value: String, label: String, modifier: Modifier = Modifier) {
+private fun StatBlock(
+    value: String,
+    label: String,
+    modifier: Modifier = Modifier,
+    /** When set, the number ticks up to this value on first appearance. */
+    count: Long? = null
+) {
     Column(modifier = modifier) {
-        Text(
-            text = value,
-            color = NoxaTextPrimary,
-            fontSize = 19.sp,
-            fontWeight = FontWeight.Black,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
+        if (count != null && count in 0..Int.MAX_VALUE) {
+            NoxaCountUp(
+                target = count.toInt(),
+                style = androidx.compose.ui.text.TextStyle(
+                    color = NoxaTextPrimary,
+                    fontSize = 19.sp,
+                    fontWeight = FontWeight.Black
+                )
+            )
+        } else {
+            Text(
+                text = value,
+                color = NoxaTextPrimary,
+                fontSize = 19.sp,
+                fontWeight = FontWeight.Black,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
         Text(
             text = label,
             color = NoxaTextTertiary,

@@ -74,6 +74,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import com.example.ui.components.noxaStrongTap
+import com.example.ui.components.noxaTap
 import com.example.ui.theme.NoxaBlack
 import com.example.ui.theme.NoxaBorder
 import com.example.ui.theme.NoxaLime
@@ -297,7 +299,7 @@ private fun RoomIdleBody(onJoin: (String) -> Unit, onCreate: () -> Unit) {
             .fillMaxWidth()
             .clip(RoundedCornerShape(26.dp))
             .background(NoxaLime)
-            .clickable { onCreate() }
+            .noxaStrongTap { onCreate() }
             .padding(vertical = 14.dp),
         contentAlignment = Alignment.Center
     ) {
@@ -317,7 +319,7 @@ private fun RoomIdleBody(onJoin: (String) -> Unit, onCreate: () -> Unit) {
                 if (canJoin) NoxaLime.copy(alpha = 0.6f) else NoxaBorder,
                 RoundedCornerShape(26.dp)
             )
-            .clickable(enabled = canJoin) { onJoin(code) }
+            .noxaTap(enabled = canJoin) { onJoin(code) }
             .padding(vertical = 14.dp),
         contentAlignment = Alignment.Center
     ) {
@@ -462,7 +464,7 @@ private fun RoomInRoomBody(
                 .clip(RoundedCornerShape(16.dp))
                 .background(NoxaSurfaceElevated)
                 .border(1.dp, NoxaLime.copy(alpha = 0.45f), RoundedCornerShape(16.dp))
-                .clickable {
+                .noxaTap {
                     clipboard.setText(AnnotatedString(state.code))
                     Toast.makeText(context, "Kode room disalin: ${state.code}", Toast.LENGTH_SHORT)
                         .show()
@@ -522,7 +524,7 @@ private fun RoomInRoomBody(
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier
                 .clip(RoundedCornerShape(14.dp))
-                .clickable { onLeave() }
+                .noxaStrongTap { onLeave() }
                 .padding(horizontal = 8.dp, vertical = 6.dp)
         )
     }
@@ -794,9 +796,8 @@ private fun VoteSkipBar(
                 1.dp,
                 if (state.myVote) NoxaLime.copy(alpha = 0.6f) else NoxaBorder,
                 RoundedCornerShape(18.dp)
-            )
-            .clickable { onVoteSkip() }
-            .padding(horizontal = 14.dp, vertical = 12.dp)
+            )                .noxaTap { onVoteSkip() }
+                .padding(horizontal = 14.dp, vertical = 12.dp)
             .testTag("room_vote_skip")
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {

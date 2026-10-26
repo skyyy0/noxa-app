@@ -65,6 +65,8 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.example.data.model.Song
 import com.example.ui.components.SongListItem
+import com.example.ui.components.noxaClickable
+import com.example.ui.components.noxaTap
 import com.example.ui.theme.NoxaBlack
 import com.example.ui.theme.NoxaBorder
 import com.example.ui.theme.NoxaLime
@@ -501,7 +503,7 @@ fun SearchScreen(
                                 .clip(RoundedCornerShape(12.dp))
                                 .background(genre.color.copy(alpha = 0.25f))
                                 .border(1.dp, genre.color.copy(alpha = 0.55f), RoundedCornerShape(12.dp))
-                                .clickable {
+                                .noxaClickable {
                                     onPerformSearch(genre.name)
                                 }
                                 .testTag("genre_card_${genre.name}"),
@@ -567,7 +569,7 @@ private fun SearchModeChip(
                 if (selected) NoxaLime else NoxaBorder,
                 RoundedCornerShape(20.dp)
             )
-            .clickable { onClick() }
+            .noxaTap { onClick() }
             .padding(horizontal = 14.dp, vertical = 7.dp)
             .testTag(testTag)
     ) {

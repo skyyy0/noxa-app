@@ -99,7 +99,7 @@ fun AddToPlaylistDialog(
                                     .fillMaxWidth()
                                     .clip(RoundedCornerShape(10.dp))
                                     .background(NoxaBlack.copy(alpha = 0.35f))
-                                    .clickable { onSelect(playlist.playlistId) }
+                                    .noxaTap { onSelect(playlist.playlistId) }
                                     .padding(12.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {

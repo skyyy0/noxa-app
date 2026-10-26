@@ -35,6 +35,31 @@ class WakeCommandParserTest {
     }
 
     @Test
+    fun `brand di tengah kalimat tanpa sapaan bukan wake word`() {
+        // v3.1.0 — aturan diperketat: substring brand di dalam kata lain dan
+        // brand tanpa sapaan di tengah kalimat dulu membangunkan layanan
+        // tanpa user menyebut \"Hi NOXA\" (false positive sensitivitas).
+        assertFalse(WakeCommandParser.containsWake("putarkan lagu noxa"))
+        assertFalse(WakeCommandParser.containsWake("aplikasi noxa keren banget"))
+        assertFalse(WakeCommandParser.containsWake("monoxa rilis versi baru"))
+        assertFalse(WakeCommandParser.containsWake("hipnotis itu bukan noxa"))
+        assertNull(WakeCommandParser.stripWake("putarkan lagu noxa"))
+    }
+
+    @Test
+    fun `sapaan di depan brand dan bentuk gabungan tetap terdeteksi`() {
+        assertTrue(WakeCommandParser.containsWake("hi noksa"))
+        assertTrue(WakeCommandParser.containsWake("hai nosa putarkan lagu"))
+        assertTrue(WakeCommandParser.containsWake("hainoxa putarkan lagu"))
+        // Menyo\u2019a langsung tanpa sapaan juga sah (brand = kata pertama).
+        assertTrue(WakeCommandParser.containsWake("noxa putarkan lagu x"))
+        assertEquals(
+            "putarkan lagu x",
+            WakeCommandParser.stripWake("tolong hi noxa putarkan lagu x")
+        )
+    }
+
+    @Test
     fun `stripWake membuang sapaan dan menyisakan perintah`() {
         assertEquals("putarkan lagu x", WakeCommandParser.stripWake("hi noxa putarkan lagu x"))
         assertEquals("putar aku milikmu", WakeCommandParser.stripWake("hai noxa putar aku milikmu"))

@@ -17,6 +17,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -484,7 +485,13 @@ fun FullPlayerSheet(
                                     model = song.artworkUrl,
                                     contentDescription = "Full player artwork",
                                     contentScale = ContentScale.Crop,
-                                    modifier = Modifier.fillMaxSize()
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        // Breathing loop while audio runs — the
+                                        // artwork swells almost imperceptibly
+                                        // so the player feels alive, and holds
+                                        // still the moment it pauses.
+                                        .noxaBreathe(active = playerState.isPlaying)
                                 )
                             }
                         }
@@ -535,7 +542,10 @@ fun FullPlayerSheet(
                             fontSize = 20.sp,
                             fontWeight = FontWeight.Bold,
                             maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                            overflow = TextOverflow.Ellipsis,
+                            // Long titles scroll like the iOS now-playing
+                            // screen instead of being quietly cut off.
+                            modifier = Modifier.basicMarquee()
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -548,7 +558,7 @@ fun FullPlayerSheet(
                                 modifier = if (onOpenArtist != null) {
                                     Modifier
                                         .clip(RoundedCornerShape(6.dp))
-                                        .clickable { onOpenArtist(song.artistId, song.artist) }
+                                        .noxaTap { onOpenArtist(song.artistId, song.artist) }
                                         .padding(vertical = 2.dp, horizontal = 2.dp)
                                 } else {
                                     Modifier
@@ -582,7 +592,11 @@ fun FullPlayerSheet(
                             imageVector = if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
                             contentDescription = "Favorite",
                             tint = if (isFavorite) NoxaLime else NoxaTextSecondary,
-                            modifier = Modifier.size(26.dp)
+                            modifier = Modifier
+                                .size(26.dp)
+                                // The heart pops when it fills (and settles
+                                // when it empties) instead of snapping.
+                                .noxaPop(trigger = isFavorite)
                         )
                     }
                 }
@@ -619,7 +633,7 @@ fun FullPlayerSheet(
                                             else NoxaBorder,
                                             RoundedCornerShape(14.dp)
                                         )
-                                        .clickable { spectrumStyle = entry }
+                                        .noxaTap { spectrumStyle = entry }
                                         .padding(horizontal = 12.dp, vertical = 5.dp)
                                 ) {
                                     Text(
@@ -663,7 +677,10 @@ fun FullPlayerSheet(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     IconButton(
-                        onClick = onToggleShuffle,
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            onToggleShuffle()
+                        },
                         modifier = Modifier.testTag("full_player_shuffle_btn")
                     ) {
                         Icon(
@@ -674,9 +691,15 @@ fun FullPlayerSheet(
                         )
                     }
 
-                    IconButton(
-                        onClick = onPrevious,
-                        modifier = Modifier.testTag("full_player_prev_btn")
+                    Box(
+                        modifier = Modifier
+                            .size(56.dp)
+                            .clip(CircleShape)
+                            // Tap dips the glyph and ticks under the finger,
+                            // the way the transport row feels on iOS.
+                            .noxaTap { onPrevious() }
+                            .testTag("full_player_prev_btn"),
+                        contentAlignment = Alignment.Center
                     ) {
                         Icon(
                             imageVector = Icons.Default.SkipPrevious,
@@ -726,9 +749,13 @@ fun FullPlayerSheet(
                         }
                     }
 
-                    IconButton(
-                        onClick = onNext,
-                        modifier = Modifier.testTag("full_player_next_btn")
+                    Box(
+                        modifier = Modifier
+                            .size(56.dp)
+                            .clip(CircleShape)
+                            .noxaTap { onNext() }
+                            .testTag("full_player_next_btn"),
+                        contentAlignment = Alignment.Center
                     ) {
                         Icon(
                             imageVector = Icons.Default.SkipNext,
@@ -739,7 +766,10 @@ fun FullPlayerSheet(
                     }
 
                     IconButton(
-                        onClick = onToggleRepeat,
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onToggleRepeat()
+                        },
                         modifier = Modifier.testTag("full_player_repeat_btn")
                     ) {
                         val isOne = playerState.repeatMode == Player.REPEAT_MODE_ONE
@@ -915,7 +945,7 @@ fun FullPlayerSheet(
                                     .fillMaxWidth()
                                     .clip(RoundedCornerShape(8.dp))
                                     .background(if (isCurrent) NoxaSurfaceSecondary else Color.Transparent)
-                                    .clickable {
+                                    .noxaTap {
                                         onSelectQueueItem(queueSong, index)
                                         showQueueSheet = false
                                     }
@@ -1364,6 +1394,9 @@ private fun WaveformSeekbar(
 ) {
     val bars = remember(songId) { waveformBars(songId, WAVE_BAR_COUNT) }
     var previewFraction by remember(songId) { mutableStateOf<Float?>(null) }
+    // One light tick per 5% of track crossed while scrubbing: the waveform
+    // gets physical detents under the finger instead of sliding on glass.
+    val scrubTick = rememberScrubTicker()
 
     val total = durationMs.coerceAtLeast(1L)
     val fraction = previewFraction
@@ -1380,6 +1413,7 @@ private fun WaveformSeekbar(
                 detectTapGestures { offset ->
                     if (durationMs <= 0L) return@detectTapGestures
                     val f = (offset.x / size.width).coerceIn(0f, 1f)
+                    scrubTick(f)
                     onSeekTo((f * durationMs).toLong())
                 }
             }
@@ -1393,8 +1427,9 @@ private fun WaveformSeekbar(
                     onDrag = { change, _ ->
                         change.consume()
                         if (durationMs > 0L) {
-                            previewFraction =
-                                (change.position.x / size.width).coerceIn(0f, 1f)
+                            val f = (change.position.x / size.width).coerceIn(0f, 1f)
+                            previewFraction = f
+                            scrubTick(f)
                         }
                     },
                     onDragEnd = {
@@ -1482,7 +1517,7 @@ private fun MediaModeChip(
                 color = NoxaBorder,
                 shape = RoundedCornerShape(14.dp)
             )
-            .clickable { onClick() }
+            .noxaTap { onClick() }
             .padding(horizontal = 9.dp, vertical = 9.dp)
             .testTag(tag),
         horizontalAlignment = Alignment.CenterHorizontally

@@ -12,12 +12,14 @@ import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.media.AudioManager
 import android.media.ToneGenerator
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
+import android.os.SystemClock
 import android.provider.Settings
 import android.speech.RecognitionListener
 import android.speech.SpeechRecognizer
@@ -86,6 +88,16 @@ class NoxaWakeService : Service() {
     private var pendingRestart: Runnable? = null
     private var commandTimeout: Runnable? = null
     private var hideBubble: Runnable? = null
+
+    /**
+     * Ekor ucapan perintah tidak boleh membangunkan layanan lagi: setelah
+     * dispatch, wake word diabaikan selama [WAKE_QUIET_MS] (v3.1.0 — mencegah
+     * bubble langsung muncul kedua kali oleh gema/lanjutan kalimat yang sama).
+     */
+    private var wakeQuietUntil = 0L
+
+    /** Izin overlay hilang — peringatan sudah dikirim, jangan spam notifikasi. */
+    private var overlayWarned = false
 
     private var overlay: NoxaBubbleOverlay? = null
     private var wakeLock: PowerManager.WakeLock? = null
@@ -235,7 +247,9 @@ class NoxaWakeService : Service() {
                 // sesi TIDAK dibatalkan: "hi noxa putar lagu x" dalam satu
                 // napas harus utuh sampai hasil akhir.
                 Mode.WAKE ->
-                    if (!sessionWakeHeard && WakeCommandParser.containsWake(text)) {
+                    if (!sessionWakeHeard && WakeCommandParser.containsWake(text) &&
+                        SystemClock.elapsedRealtime() >= wakeQuietUntil
+                    ) {
                         onWakeHeard(fromPartial = true)
                     }
                 // Mode perintah: transcript berjalan real-time di bubble.
@@ -247,10 +261,13 @@ class NoxaWakeService : Service() {
             val text = firstResult(results).orEmpty()
             when (mode) {
                 Mode.WAKE -> {
-                    if (WakeCommandParser.containsWake(text)) {
+                    if (WakeCommandParser.containsWake(text) &&
+                        SystemClock.elapsedRealtime() >= wakeQuietUntil
+                    ) {
                         onWakeHeard(fromPartial = false)
                     } else {
-                        // Tidak ada wake word — sesi berakhir sendiri, dengarkan lagi.
+                        // Tidak ada wake word (atau masih periode tenang) — sesi
+                        // berakhir sendiri, dengarkan lagi.
                         scheduleRestart(150, Mode.WAKE)
                     }
                 }
@@ -282,9 +299,16 @@ class NoxaWakeService : Service() {
         sessionWakeHeard = true
         mode = Mode.COMMAND
         beep()
-        ensureOverlay()?.also {
-            it.show()
-            it.setCaption("Mendengarkan\u2026")
+        val bubble = ensureOverlay()
+        if (bubble != null) {
+            overlayWarned = false
+            bubble.show()
+            bubble.setCaption("Mendengarkan\u2026")
+        } else {
+            // Bubble tidak bisa tampil (izin overlay dicabut / belum diberikan).
+            // Jangan diam — tanpa pesan ini fitur terlihat \"mati\" padahal
+            // mikrofon tetap mendengar. Satu notifikasi + jalan ke Pengaturan.
+            notifyOverlayMissing()
         }
         scheduleCommandTimeout()
         if (!fromPartial) scheduleRestart(300, Mode.COMMAND)
@@ -293,6 +317,9 @@ class NoxaWakeService : Service() {
     /** Eksekusi perintah; bubble menampilkan hasil, lalu kembali mendengarkan. */
     private fun dispatchCommand(text: String) {
         sessionWakeHeard = false
+        // Periode tenang: kalimat yang baru saja dieksekusi (atau gema
+        // mikrofon) tidak boleh langsung memicu \"Hi NOXA\" palsu.
+        wakeQuietUntil = SystemClock.elapsedRealtime() + WAKE_QUIET_MS
         commandTimeout?.let { mainHandler.removeCallbacks(it); commandTimeout = null }
 
         overlay?.setCaption("Memproses\u2026")
@@ -380,9 +407,54 @@ class NoxaWakeService : Service() {
         ?.trim()
 
     private fun ensureOverlay(): NoxaBubbleOverlay? {
-        if (!Settings.canDrawOverlays(this)) return null
+        if (!Settings.canDrawOverlays(this)) {
+            // Log jujur supaya kasus \"terdeteksi tapi bubble hilang\" bisa
+            // dibedakan dari bug tampilan di lapangan.
+            Log.w(TAG, "izin SYSTEM_ALERT_WINDOW tidak ada — bubble dilewati")
+            return null
+        }
         if (overlay == null) overlay = NoxaBubbleOverlay(this)
         return overlay
+    }
+
+    /**
+     * Izin overlay hilang di tengah jalan → beri tahu user sekali, dengan
+     * intent langsung ke layar izin \"Tampilkan di atas aplikasi lain\".
+     */
+    private fun notifyOverlayMissing() {
+        if (overlayWarned) return
+        overlayWarned = true
+        runCatching {
+            val channel = NotificationChannel(
+                ALERT_CHANNEL_ID, "NOXA Wake — Izin bubble",
+                NotificationManager.IMPORTANCE_DEFAULT
+            ).apply {
+                description =
+                    "Bubble \"Hi NOXA\" butuh izin \"Tampilkan di atas aplikasi lain\""
+            }
+            notificationManager.createNotificationChannel(channel)
+            val openOverlaySettings = PendingIntent.getActivity(
+                this, 2,
+                Intent(
+                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:$packageName")
+                ),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            notificationManager.notify(
+                ALERT_NOTIF_ID,
+                NotificationCompat.Builder(this, ALERT_CHANNEL_ID)
+                    .setSmallIcon(R.drawable.ic_noxa_wake)
+                    .setContentTitle("Bubble NOXA tidak bisa tampil")
+                    .setContentText(
+                        "Izin \"Tampilkan di atas aplikasi lain\" dibutuhkan — " +
+                            "ketuk untuk membukanya."
+                    )
+                    .setContentIntent(openOverlaySettings)
+                    .setAutoCancel(true)
+                    .build()
+            )
+        }
     }
 
     /** Nada pendek "terdeteksi" — ToneGenerator, tanpa file audio resource. */
@@ -504,8 +576,13 @@ class NoxaWakeService : Service() {
     companion object {
         private const val TAG = "NoxaWakeService"
         private const val NOTIF_ID = 4711
+        private const val ALERT_NOTIF_ID = 4712
         private const val CHANNEL_ID = "noxa_wake"
+        private const val ALERT_CHANNEL_ID = "noxa_wake_alert"
         private const val ACTION_STOP = "com.example.voice.STOP"
+
+        /** Pasca-perintah, wake word diabaikan selama ini (mencegah gema). */
+        private const val WAKE_QUIET_MS = 2_500L
 
         /** 12 detik "hi noxa" tanpa perintah → bubble tutup sendiri. */
         private const val COMMAND_TIMEOUT_MS = 12_000L

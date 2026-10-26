@@ -10,6 +10,8 @@ import android.graphics.Shader
 import android.graphics.SweepGradient
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
+import android.text.TextUtils
+import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
@@ -47,8 +49,25 @@ class NoxaBubbleOverlay(private val context: Context) {
 
     /** Tampilkan orb (sekali); kalau sudah tampil tidak ditumpuk. */
     fun show() {
-        if (container != null) return
+        val existing = container
+        if (existing != null) {
+            if (existing.isAttachedToWindow) return
+            // Window basi: view sudah dilepas sistem (task ditutup / OEM
+            // membuang overlay saat app exit) tapi referensinya masih ada —
+            // check “sudah tampil” lama membuat bubble tidak pernah muncul
+            // lagi walaupun wake word terdeteksi. Buang dulu, pasang ulang.
+            hide()
+        }
         try {
+            val metrics = context.resources.displayMetrics
+            val screenWidth = metrics.widthPixels
+            val screenHeight = metrics.heightPixels
+            // Lebar kontainer mengikuti layar (dibatasi 400dp): caption panjang
+            // membungkus ke maksimal 3 baris DI DALAM layar, bukan melebar
+            // keluar tepi seperti sebelumnya (WRAP_CONTENT tanpa batas).
+            val containerWidth = min(screenWidth - dp(24), dp(400))
+            val orbSize = min(dp(140), (screenWidth * 0.4f).toInt())
+
             val orb = NoxaOrbView(context)
             val caption = TextView(context).apply {
                 visibility = TextView.GONE
@@ -56,6 +75,8 @@ class NoxaBubbleOverlay(private val context: Context) {
                 setTextColor(Color.WHITE)
                 textSize = 14f
                 maxLines = 3
+                maxWidth = containerWidth - dp(16)
+                ellipsize = TextUtils.TruncateAt.END
                 setPadding(dp(16), dp(9), dp(16), dp(9))
                 background = GradientDrawable().apply {
                     cornerRadius = dp(24).toFloat()
@@ -66,7 +87,7 @@ class NoxaBubbleOverlay(private val context: Context) {
             val root = LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER_HORIZONTAL
-                addView(orb, LinearLayout.LayoutParams(dp(140), dp(140)))
+                addView(orb, LinearLayout.LayoutParams(orbSize, orbSize))
                 addView(
                     caption,
                     LinearLayout.LayoutParams(
@@ -75,13 +96,15 @@ class NoxaBubbleOverlay(private val context: Context) {
                     ).apply { topMargin = dp(14) }
                 )
             }
-            windowManager.addView(root, layoutParams())
+            windowManager.addView(root, layoutParams(containerWidth, screenHeight))
             container = root
             orbView = orb
             captionView = caption
         } catch (e: Exception) {
             // Izin overlay dicabut / token window tidak valid: fitur tetap
-            // jalan tanpa bubble (service memberi lewat notifikasi).
+            // jalan tanpa bubble (service memberi lewat notifikasi) — dan
+            // kegagalannya dicatat, bukan ditelan diam-diam.
+            Log.w(TAG, "bubble gagal tampil: ${e.javaClass.simpleName}: ${e.message}")
             container = null
             orbView = null
             captionView = null
@@ -115,7 +138,7 @@ class NoxaBubbleOverlay(private val context: Context) {
         }
     }
 
-    private fun layoutParams(): WindowManager.LayoutParams {
+    private fun layoutParams(widthPx: Int, screenHeightPx: Int): WindowManager.LayoutParams {
         val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
         } else {
@@ -123,7 +146,7 @@ class NoxaBubbleOverlay(private val context: Context) {
             WindowManager.LayoutParams.TYPE_SYSTEM_ALERT
         }
         return WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
+            widthPx,
             WindowManager.LayoutParams.WRAP_CONTENT,
             type,
             // NOT_TOUCH_MODAL: ketukan di LUAR bubble diteruskan ke app di
@@ -133,17 +156,27 @@ class NoxaBubbleOverlay(private val context: Context) {
                 WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
             android.graphics.PixelFormat.TRANSLUCENT
         ).apply {
-            gravity = Gravity.CENTER
+            // Posisi mengikuti tinggi layar: dasar bubble 25% dari bawah —
+            // di atas kontrol game / navigation bar, tidak menutupi tengah
+            // layar seperti penempatan CENTER sebelumnya.
+            gravity = Gravity.BOTTOM
             x = 0
-            y = 0
-            // Bubble dekat tengah bawah biar tidak menutupi kontrol game.
-            verticalWeight = 0f
+            y = (screenHeightPx * 0.25f).toInt()
+            // Tetap terbaca saat layar terkunci (Hi NOXA sering diucapkan
+            // dengan layar menyala/terkunci) — flag system, bukan overlay tiruan.
+            @Suppress("DEPRECATION")
+            val showWhenLocked = WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED
+            flags = flags or showWhenLocked
         }
     }
 
     private fun dp(value: Int): Int = TypedValue.applyDimension(
         TypedValue.COMPLEX_UNIT_DIP, value.toFloat(), context.resources.displayMetrics
     ).toInt()
+
+    private companion object {
+        const val TAG = "NoxaBubbleOverlay"
+    }
 }
 
 /**

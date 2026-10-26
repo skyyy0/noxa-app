@@ -1,12 +1,15 @@
 package com.example.ui.components
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -128,7 +131,9 @@ fun MiniPlayer(
                             fontWeight = FontWeight.Bold,
                             fontSize = 14.sp,
                             maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                            overflow = TextOverflow.Ellipsis,
+                            // Scrolls when the title is too long for the strip.
+                            modifier = Modifier.basicMarquee()
                         )
                         Text(
                             text = currentSong.artist,
@@ -153,7 +158,10 @@ fun MiniPlayer(
                             imageVector = if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
                             contentDescription = "Favorite",
                             tint = if (isFavorite) NoxaLime else NoxaTextSecondary,
-                            modifier = Modifier.size(20.dp)
+                            modifier = Modifier
+                                .size(20.dp)
+                                // Pops when the heart fills, settles when it empties.
+                                .noxaPop(trigger = isFavorite)
                         )
                     }
 
@@ -217,8 +225,15 @@ fun MiniPlayer(
 @Composable
 private fun MiniPlayerProgress(progressFlow: StateFlow<PlaybackProgress>) {
     val progress by progressFlow.collectAsState()
+    // The position jumps twice a second; easing each step keeps the hairline
+    // gliding forward like iOS instead of hopping in visible chunks.
+    val smoothFraction by animateFloatAsState(
+        targetValue = progress.fraction.coerceIn(0f, 1f),
+        animationSpec = tween(durationMillis = 420, easing = LinearEasing),
+        label = "mini_progress"
+    )
     LinearProgressIndicator(
-        progress = { progress.fraction },
+        progress = { smoothFraction },
         modifier = Modifier
             .fillMaxWidth()
             .height(2.5.dp),
