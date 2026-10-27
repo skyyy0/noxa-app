@@ -38,7 +38,11 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -56,11 +60,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import com.example.ui.util.ArtworkPalette
 import com.example.data.model.ArtistProfile
 import com.example.data.model.PinnedTracks
 import com.example.data.model.Song
 import com.example.data.remote.HomeMusicSection
 import com.example.ui.components.HeroSpotlightCard
+import com.example.ui.components.NowPlayingBars
 import com.example.ui.components.NoxAmbientBackdrop
 import com.example.ui.components.NoxaCountUp
 import com.example.ui.components.NoxaShimmerBox
@@ -69,6 +75,8 @@ import com.example.ui.components.noxaClickable
 import com.example.ui.components.noxaTap
 import com.example.ui.theme.NoxaBlack
 import com.example.ui.theme.NoxaBorder
+import com.example.ui.theme.NoxaEmber
+import com.example.ui.theme.NoxaHaze
 import com.example.ui.theme.NoxaLime
 import com.example.ui.theme.NoxaSurfaceElevated
 import com.example.ui.theme.NoxaSurfaceSecondary
@@ -132,10 +140,26 @@ fun HomeScreen(
     val heroQueue = remember(sections) { sections.firstOrNull()?.songs.orEmpty() }
 
     Box(modifier = modifier.fillMaxSize().background(NoxaBlack)) {
-        // Ambient depth: soft lime (top) and warm ember (bottom) glows over
-        // pure black so the home feed feels lit, not flat. Decorative only —
-        // the feed scrolls on top at full contrast.
-        NoxAmbientBackdrop(modifier = Modifier.matchParentSize())
+        // The hero cover sets the room's light: sample its dominant colour once
+        // per artwork and let the backdrop breathe in it, so Home changes mood
+        // with the featured cover instead of sitting under a fixed lime wash.
+        var ambientTint by remember { mutableStateOf<Color?>(null) }
+        LaunchedEffect(heroSong?.artworkUrl) {
+            val artworkUrl = heroSong?.artworkUrl
+            ambientTint = if (artworkUrl.isNullOrBlank()) {
+                null
+            } else {
+                ArtworkPalette.dominantColorOf(
+                    artworkUrl,
+                    coil.Coil.imageLoader(context),
+                    context
+                )
+            }
+        }
+        NoxAmbientBackdrop(
+            modifier = Modifier.matchParentSize(),
+            tint = ambientTint
+        )
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -157,19 +181,21 @@ fun HomeScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column {
+                    // Eyebrow, not a shout: a tracked-out micro label sitting
+                    // above the name gives the header hierarchy without size.
                     Text(
                         text = greeting,
                         color = NoxaTextTertiary,
                         fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 1.6.sp
+                        fontWeight = FontWeight.Medium,
+                        letterSpacing = 1.4.sp
                     )
                     Text(
                         text = if (currentUser != null) (currentUser.displayName ?: "NOXA Music") else "NOXA Music",
                         color = NoxaTextPrimary,
-                        fontSize = 26.sp,
-                        fontWeight = FontWeight.Black,
-                        letterSpacing = (-0.3).sp,
+                        fontSize = 25.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = (-0.5).sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -187,7 +213,9 @@ fun HomeScreen(
                             .size(38.dp)
                             .shadow(4.dp, CircleShape)
                             .clip(CircleShape)
-                            .border(1.5.dp, NoxaLime, CircleShape)
+                            // A neutral edge, not a brand ring: the avatar is a
+                            // control, not an accent.
+                            .border(1.dp, NoxaBorder, CircleShape)
                     )
                 } else {                        Box(
                             modifier = Modifier
@@ -195,14 +223,14 @@ fun HomeScreen(
                                 .shadow(4.dp, CircleShape)
                                 .clip(CircleShape)
                                 .background(NoxaSurfaceSecondary)
-                                .border(1.dp, NoxaLime, CircleShape),
+                                .border(1.dp, NoxaBorder, CircleShape),
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
                             text = "N",
-                            color = NoxaLime,
+                            color = NoxaTextPrimary,
                             fontSize = 16.sp,
-                            fontWeight = FontWeight.Black
+                            fontWeight = FontWeight.Bold
                         )
                     }
                 }
@@ -216,10 +244,11 @@ fun HomeScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 20.dp, vertical = 6.dp)
-                        .shadow(6.dp, RoundedCornerShape(16.dp))
-                        .clip(RoundedCornerShape(16.dp))
+                        // Tone, not outline: the resume row separates from the
+                        // canvas by a tonal step alone. The lime border it used
+                        // to carry fought with the hero for attention.
+                        .clip(RoundedCornerShape(14.dp))
                         .background(NoxaSurfaceElevated)
-                        .border(1.dp, NoxaLime.copy(alpha = 0.35f), RoundedCornerShape(16.dp))
                         .noxaTap { onResume() }
                         .padding(12.dp)
                         .testTag("resume_card"),
@@ -240,10 +269,10 @@ fun HomeScreen(
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = "Lanjutkan mendengarkan",
-                            color = NoxaLime,
+                            color = NoxaTextTertiary,
                             fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            letterSpacing = 0.5.sp
+                            fontWeight = FontWeight.SemiBold,
+                            letterSpacing = 1.sp
                         )
                         Text(
                             text = resumeSong.title,
@@ -261,17 +290,19 @@ fun HomeScreen(
                             overflow = TextOverflow.Ellipsis
                         )
                     }
+                    // Glass, not brand fill: the hero below owns the single
+                    // lime focal point on this screen.
                     Box(
                         modifier = Modifier
                             .size(40.dp)
                             .clip(CircleShape)
-                            .background(NoxaLime),
+                            .background(Color.White.copy(alpha = 0.12f)),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
                             imageVector = Icons.Default.PlayArrow,
                             contentDescription = "Lanjutkan",
-                            tint = NoxaBlack,
+                            tint = NoxaTextPrimary,
                             modifier = Modifier.size(24.dp)
                         )
                     }
@@ -294,10 +325,8 @@ fun HomeScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 20.dp, vertical = 6.dp)
-                        .shadow(5.dp, RoundedCornerShape(16.dp))
-                        .clip(RoundedCornerShape(16.dp))
+                        .clip(RoundedCornerShape(14.dp))
                         .background(NoxaSurfaceElevated)
-                        .border(1.dp, NoxaBorder, RoundedCornerShape(16.dp))
                         .padding(14.dp)
                 ) {
                     Row(
@@ -312,7 +341,7 @@ fun HomeScreen(
                             Icon(
                                 imageVector = Icons.Default.AccountCircle,
                                 contentDescription = "Guest",
-                                tint = NoxaLime,
+                                tint = NoxaTextSecondary,
                                 modifier = Modifier.size(32.dp)
                             )
                             Spacer(modifier = Modifier.width(10.dp))
@@ -460,7 +489,9 @@ fun HomeScreen(
                     Spacer(modifier = Modifier.height(10.dp))
                     HeroSpotlightCard(
                         song = heroSong,
-                        modifier = Modifier.padding(horizontal = 20.dp),
+                        // Full bleed on purpose: the artwork runs edge to edge and
+                        // dissolves into the page instead of sitting in a card.
+                        modifier = Modifier,
                         onPlay = {
                             val queue = if (heroQueue.isEmpty()) listOf(heroSong) else heroQueue
                             val index = queue.indexOfFirst { it.id == heroSong.id }.coerceAtLeast(0)
@@ -479,7 +510,8 @@ fun HomeScreen(
                     HomeSectionHeader(
                         title = "Putar cepat",
                         subtitle = "Lagu yang paling sering kamu putar",
-                        leadingIcon = Icons.Default.LocalFireDepartment
+                        leadingIcon = Icons.Default.LocalFireDepartment,
+                        iconTint = NoxaEmber
                     )
                     Spacer(modifier = Modifier.height(12.dp))
                     gridSongs.chunked(2).forEach { rowSongs ->
@@ -496,48 +528,48 @@ fun HomeScreen(
                                 Row(
                                     modifier = Modifier
                                         .weight(1f)
-                                        .shadow(4.dp, RoundedCornerShape(12.dp))
+                                        // No outline and no "playing" border: the
+                                        // tile is a tonal block, and playback state
+                                        // is shown by the bars over its artwork.
                                         .clip(RoundedCornerShape(12.dp))
                                         .background(NoxaSurfaceElevated)
-                                        .border(
-                                            1.dp,
-                                            if (tilePlaying) NoxaLime else NoxaBorder,
-                                            RoundedCornerShape(12.dp)
-                                        )
                                         .noxaAppear(delayMillis = index * 40)
                                         .noxaClickable { onPlaySong(song, gridSongs, index) }
                                         .padding(7.dp)
                                         .testTag("quick_tile_${song.id}"),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    AsyncImage(
-                                        model = ImageRequest.Builder(context)
-                                            .data(song.artworkUrl)
-                                            .size(96, 96)
-                                            .crossfade(true)
-                                            .build(),
-                                        contentDescription = song.title,
-                                        contentScale = ContentScale.Crop,
-                                        modifier = Modifier
-                                            .size(42.dp)
-                                            .clip(RoundedCornerShape(8.dp))
-                                    )
+                                    Box {
+                                        AsyncImage(
+                                            model = ImageRequest.Builder(context)
+                                                .data(song.artworkUrl)
+                                                .size(96, 96)
+                                                .crossfade(true)
+                                                .build(),
+                                            contentDescription = song.title,
+                                            contentScale = ContentScale.Crop,
+                                            modifier = Modifier
+                                                .size(44.dp)
+                                                .clip(RoundedCornerShape(6.dp))
+                                        )
+                                        if (tilePlaying) {
+                                            NowPlayingBars(
+                                                modifier = Modifier
+                                                    .align(Alignment.BottomStart)
+                                                    .padding(3.dp)
+                                            )
+                                        }
+                                    }
                                     Spacer(modifier = Modifier.width(9.dp))
                                     Text(
                                         text = song.title,
                                         color = if (tilePlaying) NoxaLime else NoxaTextPrimary,
-                                        fontSize = 12.sp,
+                                        fontSize = 12.5.sp,
                                         fontWeight = FontWeight.SemiBold,
                                         maxLines = 2,
                                         overflow = TextOverflow.Ellipsis,
                                         lineHeight = 15.sp,
                                         modifier = Modifier.weight(1f)
-                                    )
-                                    Icon(
-                                        imageVector = Icons.Default.PlayArrow,
-                                        contentDescription = "Putar",
-                                        tint = NoxaLime,
-                                        modifier = Modifier.size(16.dp)
                                     )
                                 }
                             }
@@ -557,17 +589,17 @@ fun HomeScreen(
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .shadow(6.dp, RoundedCornerShape(16.dp))
                             .clip(RoundedCornerShape(16.dp))
+                            // Warm tonal wash instead of a lime one: this card is
+                            // about *your* listening, not about playback state.
                             .background(
                                 Brush.linearGradient(
                                     colors = listOf(
                                         NoxaSurfaceElevated,
-                                        NoxaLime.copy(alpha = 0.06f)
+                                        NoxaEmber.copy(alpha = 0.08f)
                                     )
                                 )
                             )
-                            .border(1.dp, NoxaBorder, RoundedCornerShape(16.dp))
                             .padding(14.dp)
                             .testTag("listen_stats_card")
                     ) {
@@ -575,7 +607,7 @@ fun HomeScreen(
                             Icon(
                                 imageVector = Icons.Default.LocalFireDepartment,
                                 contentDescription = null,
-                                tint = NoxaLime,
+                                tint = NoxaEmber,
                                 modifier = Modifier.size(18.dp)
                             )
                             Spacer(modifier = Modifier.width(7.dp))
@@ -591,9 +623,10 @@ fun HomeScreen(
                             NoxaCountUp(
                                 target = listeningStats.playsWeek,
                                 style = androidx.compose.ui.text.TextStyle(
-                                    color = NoxaLime,
+                                    color = NoxaTextPrimary,
                                     fontSize = 30.sp,
-                                    fontWeight = FontWeight.Black
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = (-0.8).sp
                                 )
                             )
                             Spacer(modifier = Modifier.width(6.dp))
@@ -611,34 +644,28 @@ fun HomeScreen(
                                 itemsIndexed(
                                     items = listeningStats.topArtists,
                                     key = { _, artist -> "stat_${artist.name}" }
-                                ) { position, artist ->
-                                    Row(
-                                        modifier = Modifier
-                                            .clip(RoundedCornerShape(50))
-                                            .background(NoxaLime.copy(alpha = 0.12f))
-                                            .border(
-                                                1.dp,
-                                                NoxaLime.copy(alpha = 0.45f),
-                                                RoundedCornerShape(50)
+                                ) { position, artist ->                                        Row(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(50))
+                                                .background(NoxaSurfaceSecondary)
+                                                .noxaTap { onOpenArtist("", artist.name) }
+                                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = "#${position + 1} ${artist.name}",
+                                                color = NoxaTextPrimary,
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.SemiBold
                                             )
-                                            .noxaTap { onOpenArtist("", artist.name) }
-                                            .padding(horizontal = 10.dp, vertical = 6.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text(
-                                            text = "#${position + 1} ${artist.name}",
-                                            color = NoxaTextPrimary,
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.SemiBold
-                                        )
-                                        Spacer(modifier = Modifier.width(5.dp))
-                                        Text(
-                                            text = "${artist.plays}x",
-                                            color = NoxaLime,
-                                            fontSize = 10.sp,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
+                                            Spacer(modifier = Modifier.width(5.dp))
+                                            Text(
+                                                text = "${artist.plays}x",
+                                                color = NoxaTextTertiary,
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
                                 }
                             }
                         }
@@ -684,11 +711,6 @@ fun HomeScreen(
                                         .shadow(6.dp, RoundedCornerShape(14.dp))
                                         .clip(RoundedCornerShape(14.dp))
                                         .background(NoxaSurfaceElevated)
-                                        .border(
-                                            1.dp,
-                                            if (forYouPlaying) NoxaLime else NoxaBorder,
-                                            RoundedCornerShape(14.dp)
-                                        )
                                 ) {
                                     AsyncImage(
                                         model = ImageRequest.Builder(context)
@@ -769,11 +791,6 @@ fun HomeScreen(
                                         .size(64.dp)
                                         .shadow(6.dp, CircleShape)
                                         .clip(CircleShape)
-                                        .border(
-                                            width = 1.5.dp,
-                                            color = NoxaLime.copy(alpha = 0.65f),
-                                            shape = CircleShape
-                                        )
                                 )
                                 Spacer(modifier = Modifier.height(6.dp))
                                 Text(
@@ -799,7 +816,8 @@ fun HomeScreen(
                     HomeSectionHeader(
                         title = "Radar Rilis",
                         subtitle = "Album baru dari artis yang kamu ikuti",
-                        leadingIcon = Icons.Default.NewReleases
+                        leadingIcon = Icons.Default.NewReleases,
+                        iconTint = NoxaHaze
                     )
 
                     Spacer(modifier = Modifier.height(12.dp))
@@ -833,7 +851,6 @@ fun HomeScreen(
                                         .size(132.dp)
                                         .shadow(6.dp, RoundedCornerShape(12.dp))
                                         .clip(RoundedCornerShape(12.dp))
-                                        .border(1.dp, NoxaBorder, RoundedCornerShape(12.dp))
                                 )
                                 Spacer(modifier = Modifier.height(7.dp))
                                 Text(
@@ -872,12 +889,7 @@ fun HomeScreen(
                             Row(
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(50))
-                                    .background(NoxaLime.copy(alpha = 0.14f))
-                                    .border(
-                                        1.dp,
-                                        NoxaLime.copy(alpha = 0.5f),
-                                        RoundedCornerShape(50)
-                                    )
+                                    .background(NoxaSurfaceSecondary)
                                     .noxaClickable { onPlaySkyMix() }
                                     .padding(horizontal = 12.dp, vertical = 6.dp)
                                     .testTag("mix_sky_btn"),
@@ -886,15 +898,15 @@ fun HomeScreen(
                                 Icon(
                                     imageVector = Icons.Default.Shuffle,
                                     contentDescription = null,
-                                    tint = NoxaLime,
+                                    tint = NoxaTextSecondary,
                                     modifier = Modifier.size(13.dp)
                                 )
                                 Spacer(modifier = Modifier.width(5.dp))
                                 Text(
                                     text = "Mix Sky",
-                                    color = NoxaLime,
+                                    color = NoxaTextPrimary,
                                     fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold
+                                    fontWeight = FontWeight.SemiBold
                                 )
                             }
                         }
@@ -965,11 +977,6 @@ fun HomeScreen(
                                         .shadow(6.dp, RoundedCornerShape(12.dp))
                                         .clip(RoundedCornerShape(12.dp))
                                         .background(NoxaSurfaceElevated)
-                                        .border(
-                                            1.dp,
-                                            if (recentPlaying) NoxaLime else NoxaBorder,
-                                            RoundedCornerShape(12.dp)
-                                        )
                                 ) {
                                     AsyncImage(
                                         model = ImageRequest.Builder(context)
@@ -1038,11 +1045,6 @@ fun HomeScreen(
                                         .shadow(6.dp, RoundedCornerShape(14.dp))
                                         .clip(RoundedCornerShape(14.dp))
                                         .background(NoxaSurfaceElevated)
-                                        .border(
-                                            width = if (isPlaying) 1.5.dp else 1.dp,
-                                            color = if (isPlaying) NoxaLime else NoxaBorder,
-                                            shape = RoundedCornerShape(14.dp)
-                                        )
                                 ) {
                                     AsyncImage(
                                         model = ImageRequest.Builder(context)
@@ -1085,7 +1087,10 @@ fun HomeScreen(
                                                 .align(Alignment.TopStart)
                                                 .padding(6.dp)
                                                 .clip(RoundedCornerShape(5.dp))
-                                                .background(NoxaLime)
+                                                // Status over artwork needs its own
+                                                // scrim to stay legible on light
+                                                // covers — not a solid brand slab.
+                                                .background(Color.Black.copy(alpha = 0.62f))
                                                 .padding(horizontal = 5.dp, vertical = 2.dp),
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
@@ -1159,11 +1164,6 @@ private fun PinnedShelfCard(
             .shadow(8.dp, RoundedCornerShape(16.dp))
             .clip(RoundedCornerShape(16.dp))
             .background(NoxaSurfaceElevated)
-            .border(
-                width = if (isPlaying) 1.5.dp else 1.dp,
-                color = NoxaLime.copy(alpha = if (isPlaying) 0.9f else 0.4f),
-                shape = RoundedCornerShape(16.dp)
-            )
             .noxaClickable { onClick() }
             .padding(12.dp)
             .testTag("pinned_card_${song.id}"),
@@ -1189,7 +1189,7 @@ private fun PinnedShelfCard(
                         .align(Alignment.TopStart)
                         .padding(3.dp)
                         .clip(RoundedCornerShape(5.dp))
-                        .background(NoxaLime)
+                        .background(Color.Black.copy(alpha = 0.62f))
                         .padding(3.dp),
                     contentAlignment = Alignment.Center
                 ) {
@@ -1265,6 +1265,12 @@ private fun HomeSectionHeader(
     subtitle: String,
     modifier: Modifier = Modifier,
     leadingIcon: ImageVector? = null,
+    /**
+     * Wayfinder tint for [leadingIcon]. Shelves use a support hue (ember for
+     * heat, haze for releases) instead of routing every icon through the
+     * brand lime, which is reserved for playback state.
+     */
+    iconTint: Color = NoxaTextTertiary,
     trailing: (@Composable () -> Unit)? = null
 ) {
     Column(
@@ -1274,28 +1280,22 @@ private fun HomeSectionHeader(
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             if (leadingIcon != null) {
-                Box(
-                    modifier = Modifier
-                        .size(28.dp)
-                        .clip(RoundedCornerShape(9.dp))
-                        .background(NoxaLime.copy(alpha = 0.12f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = leadingIcon,
-                        contentDescription = null,
-                        tint = NoxaLime,
-                        modifier = Modifier.size(16.dp)
-                    )
-                }
-                Spacer(modifier = Modifier.width(10.dp))
+                // No chip container — a bare wayfinder icon keeps the header
+                // quiet so the shelf title, not its decoration, carries weight.
+                Icon(
+                    imageVector = leadingIcon,
+                    contentDescription = null,
+                    tint = iconTint,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
             }
             Text(
                 text = title,
                 color = NoxaTextPrimary,
-                fontSize = 20.sp,
-                fontWeight = FontWeight.Black,
-                letterSpacing = (-0.2).sp
+                fontSize = 19.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = (-0.4).sp
             )
             Spacer(modifier = Modifier.weight(1f))
             trailing?.invoke()

@@ -2,13 +2,7 @@ package com.example.ui
 
 import android.app.Activity
 import android.widget.Toast
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.expandHorizontally
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -85,8 +79,8 @@ import com.example.ui.screens.SearchScreen
 import com.example.ui.screens.SupportChatScreen
 import com.example.ui.theme.NoxaBlack
 import com.example.ui.theme.NoxaBorder
+import com.example.ui.theme.NoxaDock
 import com.example.ui.theme.NoxaLime
-import com.example.ui.theme.NoxaSurfaceElevated
 import com.example.ui.theme.NoxaTextPrimary
 import com.example.ui.theme.NoxaTextSecondary
 import com.example.ui.theme.NoxaTextTertiary
@@ -310,78 +304,91 @@ private fun NoxaAppContent(
     Box(modifier = Modifier.fillMaxSize().background(NoxaBlack)) {
         Scaffold(
             bottomBar = {
-                Column(
+                // ── The dock ──────────────────────────────────────────────
+                // Player strip and navigation are ONE container: same surface,
+                // same hairline, one tonal step above the canvas, rounded only
+                // where it meets content. The playhead caps it as a seam. This
+                // replaces the old stack of two floating outlined pills, which
+                // read as unrelated widgets fighting for the same 120dp.
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .navigationBarsPadding()
+                        .clip(RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp))
+                        .background(NoxaDock)
+                        .border(
+                            1.dp,
+                            NoxaBorder,
+                            RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp)
+                        )
                 ) {
-                    MiniPlayer(
-                        currentSong = playerState.currentSong,
-                        isPlaying = playerState.isPlaying,
-                        isBuffering = playerState.isBuffering,
-                        progressFlow = viewModel.playbackProgress,
-                        isFavorite = isCurrentFavorite,
-                        onTogglePlayPause = { viewModel.togglePlayPause() },
-                        onNext = { viewModel.next() },
-                        onToggleFavorite = {
-                            playerState.currentSong?.let { viewModel.toggleFavorite(it) }
-                        },
-                        onClick = { viewModel.openFullPlayer() }
-                    )
-
-                    // Floating pill navigation: the bar itself is a rounded card
-                    // instead of a full-width box, and the selected tab gets an
-                    // animated lime pill with its label — the modern iOS/Android
-                    // hybrid look rather than the old squared-off row.
-                    Row(
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 8.dp)
-                            .clip(RoundedCornerShape(28.dp))
-                            .background(NoxaSurfaceElevated)
-                            .border(1.dp, NoxaBorder.copy(alpha = 0.7f), RoundedCornerShape(28.dp))
-                            .padding(horizontal = 6.dp, vertical = 6.dp),
-                        horizontalArrangement = Arrangement.SpaceEvenly,
-                        verticalAlignment = Alignment.CenterVertically
+                            .navigationBarsPadding()
                     ) {
-                        bottomNavItems.forEach { screen ->
-                            val isSelected = currentRoute == screen.route
-                            val pillColor by animateColorAsState(
-                                targetValue = if (isSelected) NoxaLime else Color.Transparent,
-                                label = "nav_pill"
-                            )
-                            // The selected icon swells a touch and settles on a
-                            // spring — the small living detail iOS is known for.
-                            val iconScale by animateFloatAsState(
-                                targetValue = if (isSelected) 1.12f else 1f,
-                                animationSpec = NoxaMotion.snappySpring,
-                                label = "nav_icon_scale"
-                            )
-                            Row(
-                                modifier = Modifier
-                                    .clip(CircleShape)
-                                    .background(pillColor)
-                                    .noxaTap { navigateToTab(screen) }
-                                    .padding(horizontal = 14.dp, vertical = 8.dp)
-                                    .testTag("nav_item_${screen.route}"),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    imageVector = screen.icon,
-                                    contentDescription = screen.title,
-                                    tint = if (isSelected) NoxaBlack else NoxaTextTertiary,
-                                    modifier = Modifier
-                                        .size(20.dp)
-                                        .graphicsLayer {
-                                            scaleX = iconScale
-                                            scaleY = iconScale
-                                        }
+                        MiniPlayer(
+                            currentSong = playerState.currentSong,
+                            isPlaying = playerState.isPlaying,
+                            isBuffering = playerState.isBuffering,
+                            progressFlow = viewModel.playbackProgress,
+                            isFavorite = isCurrentFavorite,
+                            onTogglePlayPause = { viewModel.togglePlayPause() },
+                            onNext = { viewModel.next() },
+                            onToggleFavorite = {
+                                playerState.currentSong?.let { viewModel.toggleFavorite(it) }
+                            },
+                            onClick = { viewModel.openFullPlayer() }
+                        )
+
+                        // Seam between playing and navigating — structural, not
+                        // decorative: it is the only divider in the dock.
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(1.dp)
+                                .background(NoxaBorder)
+                        )
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 6.dp, vertical = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceEvenly,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            bottomNavItems.forEach { screen ->
+                                val isSelected = currentRoute == screen.route
+                                // The selected icon settles a touch larger on a
+                                // spring — a living detail without any flashing.
+                                val iconScale by animateFloatAsState(
+                                    targetValue = if (isSelected) 1.08f else 1f,
+                                    animationSpec = NoxaMotion.snappySpring,
+                                    label = "nav_icon_scale"
                                 )
-                                AnimatedVisibility(
-                                    visible = isSelected,
-                                    enter = fadeIn() + expandHorizontally(expandFrom = Alignment.Start),
-                                    exit = fadeOut() + shrinkHorizontally(shrinkTowards = Alignment.Start)
+                                Column(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(16.dp))
+                                        .noxaTap { navigateToTab(screen) }
+                                        .padding(vertical = 9.dp)
+                                        .testTag("nav_item_${screen.route}"),
+                                    horizontalAlignment = Alignment.CenterHorizontally
                                 ) {
+                                    Icon(
+                                        imageVector = screen.icon,
+                                        contentDescription = screen.title,
+                                        tint = if (isSelected) NoxaTextPrimary else NoxaTextTertiary,
+                                        modifier = Modifier
+                                            .size(22.dp)
+                                            .graphicsLayer {
+                                                scaleX = iconScale
+                                                scaleY = iconScale
+                                            }
+                                    )
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    // Labels are always present: an evenly weighted,
+                                    // quiet bar instead of a label that expands and
+                                    // shoves its neighbours around.
                                     Text(
                                         text = when (screen.route) {
                                             Screen.Home.route -> string("nav.home")
@@ -390,11 +397,21 @@ private fun NoxaAppContent(
                                             Screen.Profile.route -> string("nav.profile")
                                             else -> screen.title
                                         },
-                                        color = NoxaBlack,
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        maxLines = 1,
-                                        modifier = Modifier.padding(start = 6.dp)
+                                        color = if (isSelected) NoxaTextPrimary else NoxaTextTertiary,
+                                        fontSize = 10.sp,
+                                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
+                                        maxLines = 1
+                                    )
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    // The one lime mark in the bar: a 4dp dot that
+                                    // says "you are here" without shouting.
+                                    Box(
+                                        modifier = Modifier
+                                            .size(4.dp)
+                                            .clip(CircleShape)
+                                            .background(
+                                                if (isSelected) NoxaLime else Color.Transparent
+                                            )
                                     )
                                 }
                             }
