@@ -44,6 +44,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import com.example.ui.theme.NoxaAmbientHaze
 import com.example.ui.theme.NoxaAmbientLime
 import com.example.ui.theme.NoxaAmbientWarm
 
@@ -193,30 +194,73 @@ fun Modifier.noxaAppear(delayMillis: Int = 0): Modifier = composed {
 }
 
 /**
- * Ambient backdrop behind a screen — the fix for a flat black canvas.
+ * Ambient backdrop — the fix for a flat black canvas.
  *
- * Two very low-alpha radial glows (brand lime anchored top-start, a warm
- * ember bottom-end) bloom over pure black so the background has depth and a
- * sense of light source, the way Spotify/iOS dark modes breathe. It stays
- * subtle enough that text and album art keep full contrast; [content] draws
- * on top. Purely decorative and infinitely cheap (two static gradients).
+ * Three layers, all static and therefore free:
+ *
+ * 1. a vertical tonal wash, so the screen is *lit from above* and settles
+ *    darker toward the bottom (this is what stops #000 from reading as a
+ *    hole rather than a surface);
+ * 2. a brand-lime bloom in the top-start corner, the light source behind
+ *    the header;
+ * 3. an ember bloom bottom-end and a cool haze bloom top-end, which give
+ *    the charcoal a warm/cool axis instead of leaving it monochrome.
+ *
+ * Every wash sits at 6–10% alpha so text and album art keep full contrast.
+ * Purely decorative; [content] draws on top.
+ *
+ * [tint] lets a screen anchor the brand bloom in the dominant colour of the
+ * artwork it is actually showing (see [com.example.ui.util.ArtworkPalette]),
+ * so the page changes mood with the cover while the warm/cool axis and the
+ * charcoal floor keep it recognisably NOXA. `null` falls back to brand lime.
  */
 @Composable
 fun NoxAmbientBackdrop(
     modifier: Modifier = Modifier,
+    tint: Color? = null,
     content: @Composable () -> Unit = {}
 ) {
+    // Artwork colour at wash strength — never at full saturation, or the
+    // backdrop starts competing with the type sitting on it.
+    val anchor = tint?.copy(alpha = 0.15f) ?: NoxaAmbientLime
     Box(modifier = modifier.fillMaxSize()) {
-        // Lime bloom anchored top-start: the gradient centres inside its own
-        // sub-box, so the glow sits near the header instead of mid-screen.
+        // Tonal wash: near-black at the floor, a touch of light up top.
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(
+                            Color(0xFF0C0D11),
+                            Color(0xFF0A0B0E),
+                            NoxaBaseTint
+                        )
+                    )
+                )
+        )
+        // Primary bloom anchored top-start: the gradient centres inside its
+        // own sub-box, so the glow sits near the header instead of mid-screen.
         Box(
             modifier = Modifier
                 .fillMaxWidth(0.95f)
-                .fillMaxHeight(0.55f)
+                .fillMaxHeight(0.5f)
                 .align(Alignment.TopStart)
                 .background(
                     Brush.radialGradient(
-                        colors = listOf(NoxaAmbientLime, Color.Transparent)
+                        colors = listOf(anchor, Color.Transparent)
+                    )
+                )
+        )
+        // Cool haze top-end — the counterweight that keeps the lime from
+        // being the only colour in the room.
+        Box(
+            modifier = Modifier
+                .fillMaxWidth(0.7f)
+                .fillMaxHeight(0.34f)
+                .align(Alignment.TopEnd)
+                .background(
+                    Brush.radialGradient(
+                        colors = listOf(NoxaAmbientHaze, Color.Transparent)
                     )
                 )
         )
@@ -235,6 +279,9 @@ fun NoxAmbientBackdrop(
         content()
     }
 }
+
+/** Bottom of the ambient wash — must match [com.example.ui.theme.NoxaBlack]. */
+private val NoxaBaseTint = Color(0xFF08090A)
 
 /* =========================================================================
  * Micro-detail layer — the small, iOS-flavoured touches applied all over

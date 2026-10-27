@@ -10,6 +10,10 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 
+// The dark scheme is deliberately built from the surface ladder rather than
+// from outlines: M3 roles (surface / surfaceVariant / outline) map onto the
+// charcoal steps so any Material component dropped into the app inherits the
+// same tonal hierarchy the hand-written components use.
 private val NoxaDarkColorScheme = darkColorScheme(
     primary = NoxaLime,
     onPrimary = NoxaBlack,
@@ -43,7 +47,9 @@ fun NoxaTheme(
             val window = (view.context as? Activity)?.window
             if (window != null) {
                 window.statusBarColor = NoxaBlack.toArgb()
-                window.navigationBarColor = NoxaBlack.toArgb()
+                // The fused control dock always sits behind the gesture inset,
+                // so the system bar matches the dock tone instead of the canvas.
+                window.navigationBarColor = NoxaDock.toArgb()
                 val controller = WindowCompat.getInsetsController(window, view)
                 // Dark background -> light status icons (false for isAppearanceLightStatusBars)
                 controller.isAppearanceLightStatusBars = false

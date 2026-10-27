@@ -26,6 +26,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Radio
@@ -35,6 +36,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -71,6 +73,7 @@ import com.example.ui.theme.NoxaSurfaceSecondary
 import com.example.ui.theme.NoxaTextPrimary
 import com.example.ui.theme.NoxaTextSecondary
 import com.example.ui.theme.NoxaTextTertiary
+import com.example.ui.util.ArtworkPalette
 import com.example.ui.util.FormatUtils
 import com.example.ui.viewmodel.ArtistUiState
 
@@ -142,9 +145,27 @@ fun ArtistScreen(
             .fillMaxSize()
             .background(NoxaBlack)
     ) {
-        // Ambient depth behind the page: lime bloom over black so the hero
-        // photo and stats feel lit rather than pasted on a flat void.
-        NoxAmbientBackdrop(modifier = Modifier.matchParentSize())
+        // Ambient depth behind the page, keyed to the artist's own photo: the
+        // hero, stats and rows sit in the light of this artist's imagery rather
+        // than under a fixed brand wash.
+        val context = LocalContext.current
+        var ambientTint by remember { mutableStateOf<Color?>(null) }
+        val artistArtwork = (state as? ArtistUiState.Ready)?.profile?.pictureUrl
+        LaunchedEffect(artistArtwork) {
+            ambientTint = if (artistArtwork.isNullOrBlank()) {
+                null
+            } else {
+                ArtworkPalette.dominantColorOf(
+                    artistArtwork,
+                    coil.Coil.imageLoader(context),
+                    context
+                )
+            }
+        }
+        NoxAmbientBackdrop(
+            modifier = Modifier.matchParentSize(),
+            tint = ambientTint
+        )
         when (state) {
             is ArtistUiState.Loading -> {
                 CircularProgressIndicator(
@@ -411,8 +432,7 @@ private fun ArtistPageContent(
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(20.dp))
-                                .background(NoxaSurfaceElevated)
-                                .border(1.dp, NoxaBorder, RoundedCornerShape(20.dp))
+                                .background(NoxaSurfaceSecondary)
                                 .padding(horizontal = 12.dp, vertical = 6.dp)
                         ) {
                             Text(
@@ -475,25 +495,31 @@ private fun ArtistPageContent(
                         )
                     }
                 }
-                // Ikuti: fills the accent when following, outline when not.
+                // Ikuti: filled when following, ghost when not — the state is
+                // carried by fill and a check mark, not by painting a second
+                // lime button next to the lime play.
                 Row(
                     modifier = Modifier
                         .clip(RoundedCornerShape(24.dp))
                         .background(
-                            if (isFollowing) NoxaLime.copy(alpha = 0.16f) else Color.Transparent
-                        )
-                        .border(
-                            1.dp,
-                            if (isFollowing) NoxaLime else NoxaBorder,
-                            RoundedCornerShape(24.dp)
+                            if (isFollowing) NoxaSurfaceSecondary else NoxaSurfaceElevated
                         )
                         .noxaTap { onToggleFollow() }
                         .padding(horizontal = 22.dp, vertical = 11.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    if (isFollowing) {
+                        Icon(
+                            imageVector = Icons.Default.Check,
+                            contentDescription = null,
+                            tint = NoxaTextPrimary,
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Spacer(modifier = Modifier.width(5.dp))
+                    }
                     Text(
                         text = if (isFollowing) string("artist.following") else string("artist.follow"),
-                        color = if (isFollowing) NoxaLime else NoxaTextPrimary,
+                        color = if (isFollowing) NoxaTextPrimary else NoxaTextSecondary,
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Bold
                     )
@@ -514,14 +540,14 @@ private fun ArtistPageContent(
                         if (isBuildingRadio) {
                             CircularProgressIndicator(
                                 modifier = Modifier.size(16.dp),
-                                color = NoxaLime,
+                                color = NoxaTextSecondary,
                                 strokeWidth = 2.dp
                             )
                         } else {
                             Icon(
                                 imageVector = Icons.Default.Radio,
                                 contentDescription = null,
-                                tint = NoxaLime,
+                                tint = NoxaTextSecondary,
                                 modifier = Modifier.size(18.dp)
                             )
                         }
@@ -565,7 +591,7 @@ private fun ArtistPageContent(
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
                         text = if (bioExpanded) "Tutup" else "Baca selengkapnya",
-                        color = NoxaLime,
+                        color = NoxaTextPrimary,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier
@@ -814,12 +840,14 @@ private fun DiscographyFilterRow(
             val isSelected = label == selected
             Text(
                 text = label,
+                // Selected tab goes neutral-white instead of lime: an in-page
+                // filter is wayfinding, not playback.
                 color = if (isSelected) NoxaBlack else NoxaTextSecondary,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier
                     .clip(RoundedCornerShape(18.dp))
-                    .background(if (isSelected) NoxaLime else NoxaSurfaceSecondary)
+                    .background(if (isSelected) NoxaTextPrimary else NoxaSurfaceSecondary)
                     .noxaTap { onSelect(label) }
                     .padding(horizontal = 14.dp, vertical = 7.dp)
             )

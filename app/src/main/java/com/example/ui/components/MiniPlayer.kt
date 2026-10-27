@@ -10,7 +10,6 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -53,7 +52,6 @@ import com.example.data.model.Song
 import com.example.media.PlaybackProgress
 import com.example.ui.theme.NoxaBorder
 import com.example.ui.theme.NoxaLime
-import com.example.ui.theme.NoxaSurfaceElevated
 import com.example.ui.theme.NoxaTextPrimary
 import com.example.ui.theme.NoxaTextSecondary
 import kotlinx.coroutines.flow.StateFlow
@@ -92,19 +90,22 @@ fun MiniPlayer(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 6.dp)
-                .clip(RoundedCornerShape(16.dp))
-                .background(NoxaSurfaceElevated)
-                .border(1.dp, NoxaBorder, RoundedCornerShape(16.dp))
-                // iOS-style press dip + light tick instead of a flat tap.
+                // Deliberately no card: the mini player is the upper half of the
+                // fused bottom dock, so it inherits the dock surface instead of
+                // drawing its own rounded outline on top of it. One container,
+                // one edge — that is what makes player and navigation read as a
+                // single system instead of two floating pills.
                 .noxaTap { onClick() }
                 .testTag("mini_player")
         ) {
             Column {
+                // The playhead is the dock's top seam: edge to edge, so playback
+                // and navigation are literally joined by the same line.
+                MiniPlayerProgress(progressFlow)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
@@ -115,8 +116,9 @@ fun MiniPlayer(
                         contentScale = ContentScale.Crop,
                         modifier = Modifier
                             .size(46.dp)
-                            .clip(RoundedCornerShape(10.dp))
-                            .border(0.5.dp, NoxaBorder, RoundedCornerShape(10.dp))
+                            // Sleeve radius: album art is nearly square everywhere
+                            // in NOXA so artwork reads as artwork, not as a chip.
+                            .clip(RoundedCornerShape(8.dp))
                     )
 
                     Spacer(modifier = Modifier.width(12.dp))
@@ -206,27 +208,24 @@ fun MiniPlayer(
                         )
                     }
                 }
-
-                // Progress Bar at bottom of mini player. Isolated in its own
-                // composable so the twice-a-second position update does not
-                // recompose the rest of the mini player.
-                MiniPlayerProgress(progressFlow)
             }
         }
     }
 }
 
 /**
- * The thin play-progress bar under the mini player.
+ * The playhead hairline that caps the dock.
  *
  * This is the only part of the mini player that watches the fast position flow,
  * so the surrounding artwork, title and buttons are not rebuilt every 500 ms.
+ * The track stays faintly visible so the seam doubles as the dock's top edge
+ * even before playback has moved.
  */
 @Composable
 private fun MiniPlayerProgress(progressFlow: StateFlow<PlaybackProgress>) {
     val progress by progressFlow.collectAsState()
     // The position jumps twice a second; easing each step keeps the hairline
-    // gliding forward like iOS instead of hopping in visible chunks.
+    // gliding forward instead of hopping in visible chunks.
     val smoothFraction by animateFloatAsState(
         targetValue = progress.fraction.coerceIn(0f, 1f),
         animationSpec = tween(durationMillis = 420, easing = LinearEasing),
@@ -236,8 +235,8 @@ private fun MiniPlayerProgress(progressFlow: StateFlow<PlaybackProgress>) {
         progress = { smoothFraction },
         modifier = Modifier
             .fillMaxWidth()
-            .height(2.5.dp),
+            .height(2.dp),
         color = NoxaLime,
-        trackColor = Color.Transparent
+        trackColor = NoxaBorder
     )
 }

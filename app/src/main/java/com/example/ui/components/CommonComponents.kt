@@ -169,6 +169,16 @@ fun CategoryChipsRow(
     }
 }
 
+/**
+ * The Home hero — NOT a card.
+ *
+ * Full-bleed artwork that dissolves into the page on all four edges, so it
+ * reads as the screen's light source rather than a photograph pasted inside
+ * a rounded, outlined box. Typography sits directly on the scrim in editorial
+ * order (title, artist), with a single lime play control as the only accent
+ * on the whole block — one focal point instead of a badge, a border and two
+ * filled buttons competing.
+ */
 @Composable
 fun HeroSpotlightCard(
     song: Song,
@@ -176,101 +186,104 @@ fun HeroSpotlightCard(
     onPlay: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .height(200.dp)
-            .shadow(10.dp, RoundedCornerShape(20.dp))
-            .clip(RoundedCornerShape(20.dp))
-            .background(NoxaSurfaceElevated)
-            .border(1.dp, if (isPlaying) NoxaLime else NoxaBorder, RoundedCornerShape(20.dp))
+            .height(284.dp)
             .noxaClickable { onPlay() }
             .testTag("hero_spotlight_card")
     ) {
-        val context = LocalContext.current
         AsyncImage(
-            // Capped decode size: the card is 200dp tall, so decoding a
+            // Capped decode size: the hero is ~300dp tall, so decoding a
             // 1000x1000 cover for it was wasted work on every home load.
             model = ImageRequest.Builder(context)
                 .data(song.artworkUrl)
-                .size(512, 512)
+                .size(720, 720)
                 .crossfade(true)
                 .build(),
-            contentDescription = "Spotlight Artwork",
+            contentDescription = "Sorotan hari ini",
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize()
         )
 
-        // Gradient overlay
+        // Vertical dissolve: the top edge melts into the canvas (so the photo
+        // never starts with a hard line) and the bottom settles into full
+        // charcoal for the type.
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(
                     Brush.verticalGradient(
-                        colors = listOf(
-                            Color.Transparent,
-                            Color.Black.copy(alpha = 0.5f),
-                            Color.Black.copy(alpha = 0.95f)
-                        )
+                        0f to NoxaBlack.copy(alpha = 0.72f),
+                        0.24f to Color.Transparent,
+                        0.58f to Color.Transparent,
+                        1f to NoxaBlack.copy(alpha = 0.96f)
                     )
                 )
         )
 
-        // Spotlight Content
-        Column(
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .padding(16.dp)
-        ) {
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(NoxaLime)
-                    .padding(horizontal = 6.dp, vertical = 2.dp)
-            ) {
-                Text(
-                    text = "FEATURED SPOTLIGHT",
-                    color = NoxaBlack,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Black
-                )
-            }
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(
-                text = song.title,
-                color = NoxaTextPrimary,
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Text(
-                text = song.artist,
-                color = NoxaTextSecondary,
-                fontSize = 13.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
-
-        // Play Button FAB on bottom right
+        // Side vignette — keeps the title legible over a bright cover and
+        // finishes the "dissolved edge" read.
         Box(
             modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(16.dp)
-                .size(46.dp)
-                .clip(CircleShape)
-                .background(NoxaLime)
-                .noxaStrongTap { onPlay() }
-                .testTag("hero_play_btn"),
-            contentAlignment = Alignment.Center
+                .fillMaxSize()
+                .background(
+                    Brush.horizontalGradient(
+                        0f to NoxaBlack.copy(alpha = 0.55f),
+                        0.5f to Color.Transparent,
+                        1f to NoxaBlack.copy(alpha = 0.4f)
+                    )
+                )
+        )
+
+        // Title block + transport, sharing the baseline at the bottom edge.
+        Row(
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 20.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(
-                imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                contentDescription = if (isPlaying) "Pause Spotlight" else "Play Spotlight",
-                tint = NoxaBlack,
-                modifier = Modifier.size(28.dp)
-            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = song.title,
+                    color = NoxaTextPrimary,
+                    fontSize = 27.sp,
+                    lineHeight = 31.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = (-0.6).sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(modifier = Modifier.height(3.dp))
+                Text(
+                    text = song.artist,
+                    color = NoxaTextSecondary,
+                    fontSize = 14.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            Spacer(modifier = Modifier.width(16.dp))
+
+            Box(
+                modifier = Modifier
+                    .size(52.dp)
+                    .clip(CircleShape)
+                    .background(NoxaLime)
+                    .noxaStrongTap { onPlay() }
+                    .testTag("hero_play_btn"),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                    contentDescription = if (isPlaying) "Jeda sorotan" else "Putar sorotan",
+                    tint = NoxaBlack,
+                    modifier = Modifier.size(30.dp)
+                )
+            }
         }
     }
 }
