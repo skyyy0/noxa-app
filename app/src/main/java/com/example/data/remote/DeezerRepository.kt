@@ -114,14 +114,20 @@ class DeezerRepository {
     /**
      * A single track by Deezer id — what resolves a shared NOXA link
      * (`deezer:<id>`) back into a playable song.
+     *
+     * [fullCredit] widens the artist line to every name Deezer credits on the
+     * track detail (the search payload only carries the main artist). The Home
+     * hero uses it so a featured artist actually appears on the banner; every
+     * other caller keeps the plain main-artist label.
      */
-    suspend fun trackById(trackId: Long): Song? = withContext(Dispatchers.IO) {
-        val body = safeResponse(
-            block = { api.trackDetail(trackId) },
-            isFailure = { it.error != null || it.id == null }
-        ) ?: return@withContext null
-        body.toSong()
-    }
+    suspend fun trackById(trackId: Long, fullCredit: Boolean = false): Song? =
+        withContext(Dispatchers.IO) {
+            val body = safeResponse(
+                block = { api.trackDetail(trackId) },
+                isFailure = { it.error != null || it.id == null }
+            ) ?: return@withContext null
+            body.toSong(fullCredit = fullCredit)
+        }
 
     /**
      * Artist page header: picture, listener count and release count.
@@ -256,12 +262,14 @@ class DeezerRepository {
      * A track is only kept when Deezer actually handed back a playable preview
      * URL; otherwise it would be a silent, unplayable entry in the list.
      * [defaultAlbum] / [defaultCover] fill in what `album/{id}/tracks` leaves
-     * out (its track objects carry no `album` block). Internal so the mapping
-     * can be unit-tested.
+     * out (its track objects carry no `album` block). [fullCredit] widens the
+     * artist line to every name Deezer credits (main + featured) for the Home
+     * hero only. Internal so the mapping can be unit-tested.
      */
     internal fun DeezerTrack.toSong(
         defaultAlbum: String = "",
-        defaultCover: String = ""
+        defaultCover: String = "",
+        fullCredit: Boolean = false
     ): Song? {
         val remoteId = id?.takeIf { it > 0 } ?: return null
         val previewUrl = preview?.takeIf { it.startsWith("https://") } ?: return null
@@ -278,10 +286,13 @@ class DeezerRepository {
             defaultAlbum.trim().ifEmpty { "Single" }
         }
 
+        val mainArtist = artist?.name?.trim().orEmpty().ifEmpty { "Unknown Artist" }
         return Song(
             id = "$ID_PREFIX$remoteId",
             title = title?.trim().orEmpty().ifEmpty { "Untitled" },
-            artist = artist?.name?.trim().orEmpty().ifEmpty { "Unknown Artist" },
+            // Display credit only: [artistId] below still points at the main
+            // artist, so artist pages, radio and lyrics keep their old behaviour.
+            artist = if (fullCredit) fullArtistCredit(mainArtist) else mainArtist,
             album = albumTitle,
             artworkUrl = artwork,
             streamUrl = previewUrl,
@@ -294,6 +305,19 @@ class DeezerRepository {
             shareUrl = link ?: SHARE_URL_PREFIX + remoteId,
             artistId = artist?.id?.toString().orEmpty()
         )
+    }
+
+    /**
+     * Deezer's own credit line: main artist plus every featured name, in the
+     * order Deezer lists them (e.g. "Ellie Goulding, Juice WRLD"). Never a
+     * guess — if the response carries no contributors, the main artist stands.
+     */
+    private fun DeezerTrack.fullArtistCredit(mainArtist: String): String {
+        val names = contributors.orEmpty()
+            .mapNotNull { it.name?.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+        return if (names.isEmpty()) mainArtist else names.joinToString(", ")
     }
 
     /** Maps a discography entry; entries without an id are dropped. */

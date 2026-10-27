@@ -47,9 +47,10 @@ fun NoxaTheme(
             val window = (view.context as? Activity)?.window
             if (window != null) {
                 window.statusBarColor = NoxaBlack.toArgb()
-                // The fused control dock always sits behind the gesture inset,
-                // so the system bar matches the dock tone instead of the canvas.
-                window.navigationBarColor = NoxaDock.toArgb()
+                // Both control surfaces float *above* the gesture inset now, so
+                // the strip behind them is plain canvas — the system bar matches
+                // the app background instead of a dock that no longer exists.
+                window.navigationBarColor = NoxaBlack.toArgb()
                 val controller = WindowCompat.getInsetsController(window, view)
                 // Dark background -> light status icons (false for isAppearanceLightStatusBars)
                 controller.isAppearanceLightStatusBars = false
@@ -61,6 +62,10 @@ fun NoxaTheme(
     MaterialTheme(
         colorScheme = NoxaDarkColorScheme,
         typography = Typography,
+        // Shape roles come from the same scale as every hand-built surface
+        // (see Shape.kt), so Material components never round corners
+        // differently from the rest of the app.
+        shapes = NoxaShapes,
         content = content
     )
 }

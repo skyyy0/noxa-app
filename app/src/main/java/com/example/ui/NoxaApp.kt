@@ -37,6 +37,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -78,9 +80,8 @@ import com.example.ui.screens.ProfileScreen
 import com.example.ui.screens.SearchScreen
 import com.example.ui.screens.SupportChatScreen
 import com.example.ui.theme.NoxaBlack
-import com.example.ui.theme.NoxaBorder
-import com.example.ui.theme.NoxaDock
 import com.example.ui.theme.NoxaLime
+import com.example.ui.theme.NoxaSurface
 import com.example.ui.theme.NoxaTextPrimary
 import com.example.ui.theme.NoxaTextSecondary
 import com.example.ui.theme.NoxaTextTertiary
@@ -304,55 +305,82 @@ private fun NoxaAppContent(
     Box(modifier = Modifier.fillMaxSize().background(NoxaBlack)) {
         Scaffold(
             bottomBar = {
-                // ── The dock ──────────────────────────────────────────────
-                // Player strip and navigation are ONE container: same surface,
-                // same hairline, one tonal step above the canvas, rounded only
-                // where it meets content. The playhead caps it as a seam. This
-                // replaces the old stack of two floating outlined pills, which
-                // read as unrelated widgets fighting for the same 120dp.
-                Box(
+                // ── Two surfaces, one system ──────────────────────────
+                // The player and the navigation are deliberately separate: a
+                // floating glass mini player hovering above its own light
+                // navigation pill, with a real gap between them. Both wear the
+                // same material — translucent sheet, top sheen, hairline edge,
+                // soft shadow — so they read as siblings instead of as one
+                // heavy slab. Each keeps its own boundary, its own shape and
+                // its own inset, which is what keeps the stack feeling light.
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp))
-                        .background(NoxaDock)
-                        .border(
-                            1.dp,
-                            NoxaBorder,
-                            RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp)
-                        )
+                        .navigationBarsPadding()
                 ) {
-                    Column(
+                    MiniPlayer(
+                        currentSong = playerState.currentSong,
+                        isPlaying = playerState.isPlaying,
+                        isBuffering = playerState.isBuffering,
+                        progressFlow = viewModel.playbackProgress,
+                        isFavorite = isCurrentFavorite,
+                        onTogglePlayPause = { viewModel.togglePlayPause() },
+                        onNext = { viewModel.next() },
+                        onToggleFavorite = {
+                            playerState.currentSong?.let { viewModel.toggleFavorite(it) }
+                        },
+                        onClick = { viewModel.openFullPlayer() },
+                        // Inset from both edges: the panel floats, it is not a
+                        // full-width strip welded to the screen.
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                    )
+
+                    // The gap only exists while a song is loaded — a standing
+                    // spacer would lift the bar for no reason.
+                    if (playerState.currentSong != null) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                    }
+
+                    val navShape = RoundedCornerShape(26.dp)
+                    Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .navigationBarsPadding()
+                            .padding(horizontal = 10.dp)
+                            .shadow(10.dp, navShape, clip = false)
+                            .clip(navShape)
+                            .background(
+                                Brush.verticalGradient(
+                                    listOf(
+                                        NoxaSurface.copy(alpha = 0.97f),
+                                        NoxaSurface.copy(alpha = 0.90f)
+                                    )
+                                )
+                            )
+                            // Light gathers along the top edge and is gone by
+                            // the time it reaches the icons: the glass cue,
+                            // kept cheap enough to run every frame.
+                            .background(
+                                Brush.verticalGradient(
+                                    listOf(Color.White.copy(alpha = 0.08f), Color.Transparent)
+                                )
+                            )
+                            // Edge highlight instead of an outline — a drawn
+                            // top, a disappearing bottom.
+                            .border(
+                                1.dp,
+                                Brush.verticalGradient(
+                                    listOf(
+                                        Color.White.copy(alpha = 0.15f),
+                                        Color.White.copy(alpha = 0.04f)
+                                    )
+                                ),
+                                navShape
+                            )
                     ) {
-                        MiniPlayer(
-                            currentSong = playerState.currentSong,
-                            isPlaying = playerState.isPlaying,
-                            isBuffering = playerState.isBuffering,
-                            progressFlow = viewModel.playbackProgress,
-                            isFavorite = isCurrentFavorite,
-                            onTogglePlayPause = { viewModel.togglePlayPause() },
-                            onNext = { viewModel.next() },
-                            onToggleFavorite = {
-                                playerState.currentSong?.let { viewModel.toggleFavorite(it) }
-                            },
-                            onClick = { viewModel.openFullPlayer() }
-                        )
-
-                        // Seam between playing and navigating — structural, not
-                        // decorative: it is the only divider in the dock.
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(1.dp)
-                                .background(NoxaBorder)
-                        )
-
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 6.dp, vertical = 4.dp),
+                                .padding(horizontal = 6.dp, vertical = 6.dp),
                             horizontalArrangement = Arrangement.SpaceEvenly,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -417,6 +445,10 @@ private fun NoxaAppContent(
                             }
                         }
                     }
+
+                    // Breathing room under the pill so it never sits glued to
+                    // the gesture inset.
+                    Spacer(modifier = Modifier.height(8.dp))
                 }
             },
             containerColor = NoxaBlack

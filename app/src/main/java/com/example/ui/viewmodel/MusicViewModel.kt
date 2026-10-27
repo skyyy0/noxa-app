@@ -369,7 +369,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     private val _homeError = MutableStateFlow<String?>(null)
     val homeError: StateFlow<String?> = _homeError.asStateFlow()
 
-    // Hero banner — "Blinding Lights" by The Weeknd, fetched live.
+    // Hero banner — "Hate Me" (Ellie Goulding with Juice WRLD), fetched live.
     private val _heroSong = MutableStateFlow<Song?>(null)
     val heroSong: StateFlow<Song?> = _heroSong.asStateFlow()
 

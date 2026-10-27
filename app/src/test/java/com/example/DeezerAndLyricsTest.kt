@@ -91,6 +91,54 @@ class DeezerAndLyricsTest {
         assertNull(with(repository) { track.toSong() })
     }
 
+    /**
+     * The Home hero shows the *whole* credit Deezer publishes — the featured
+     * artist is the reason the pick exists — while every other list keeps the
+     * single main-artist label it has always had.
+     */
+    @Test
+    fun `full credit widens the artist line to every contributor`() {
+        val json = """
+            {"data":[{
+              "id":699805592,
+              "title":"Hate Me",
+              "duration":186,
+              "preview":"https://cdnnt-preview.dzcdn.net/api/preview.mp3",
+              "artist":{"name":"Ellie Goulding"},
+              "album":{"title":"Hate Me","cover_xl":"https://cdn-images.dzcdn.net/cover/1000x1000.jpg"},
+              "contributors":[{"name":"Ellie Goulding"},{"name":"Juice WRLD"}]
+            }]}
+        """.trimIndent()
+        val track = moshi.adapter(DeezerTrackListResponse::class.java).fromJson(json)!!
+            .data!!.first()
+
+        val repository = DeezerRepository()
+        // Default: unchanged main-artist label (search results, shelves, rows).
+        assertEquals("Ellie Goulding", with(repository) { track.toSong() }!!.artist)
+        // Hero: every credited name, in Deezer's own order — nothing invented.
+        assertEquals(
+            "Ellie Goulding, Juice WRLD",
+            with(repository) { track.toSong(fullCredit = true) }!!.artist
+        )
+        // Without contributors the label simply stays what Deezer gave us.
+        val plainJson = """
+            {"data":[{
+              "id":699805592,
+              "title":"Hate Me",
+              "duration":186,
+              "preview":"https://cdnnt-preview.dzcdn.net/api/preview.mp3",
+              "artist":{"name":"Ellie Goulding"},
+              "album":{"title":"Hate Me","cover_xl":"https://cdn-images.dzcdn.net/cover/1000x1000.jpg"}
+            }]}
+        """.trimIndent()
+        val plainTrack = moshi.adapter(DeezerTrackListResponse::class.java).fromJson(plainJson)!!
+            .data!!.first()
+        assertEquals(
+            "Ellie Goulding",
+            with(repository) { plainTrack.toSong(fullCredit = true) }!!.artist
+        )
+    }
+
     @Test
     fun `deezer reports errors inside an http 200 body`() {
         val json = """{"error":{"type":"Exception","message":"Quota exceeded","code":4}}"""

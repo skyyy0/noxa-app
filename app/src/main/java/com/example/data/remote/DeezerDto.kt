@@ -46,6 +46,13 @@ data class DeezerTrack(
     @Json(name = "readable") val readable: Boolean? = null,
     @Json(name = "artist") val artist: DeezerArtist? = null,
     @Json(name = "album") val album: DeezerAlbum? = null,
+    /**
+     * Every credited artist Deezer lists for the track (main + featured),
+     * present on search and track-detail responses. Used only where the full
+     * credit matters — the Home hero — so the everyday single-artist label
+     * stays exactly as it always was.
+     */
+    @Json(name = "contributors") val contributors: List<DeezerArtist>? = null,
     /** Present on `GET /track/{id}` error bodies (a bare track object). */
     @Json(name = "error") val error: DeezerError? = null
 )

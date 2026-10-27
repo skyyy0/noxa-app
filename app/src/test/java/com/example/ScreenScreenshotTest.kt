@@ -72,7 +72,7 @@ class ScreenScreenshotTest {
         )
         renderAndCapture("home_screen") {
             HomeScreen(
-                heroSong = song("deezer:99", "Blinding Lights", "The Weeknd", 200_000),
+                heroSong = song("deezer:99", "Hate Me", "Ellie Goulding, Juice WRLD", 186_000),
                 sections = sections,
                 pinnedSongs = listOf(song("deezer:1", "Kangen", "Dewa 19", 300_000)),
                 recentSongs = listOf(song("deezer:4", "Dan", "Sheila On 7", 250_000)),

@@ -10,6 +10,7 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -38,6 +39,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -50,12 +53,20 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.example.data.model.Song
 import com.example.media.PlaybackProgress
+import com.example.ui.theme.NoxaBlack
 import com.example.ui.theme.NoxaBorder
 import com.example.ui.theme.NoxaLime
+import com.example.ui.theme.NoxaSurface
 import com.example.ui.theme.NoxaTextPrimary
 import com.example.ui.theme.NoxaTextSecondary
 import kotlinx.coroutines.flow.StateFlow
 import androidx.compose.runtime.collectAsState
+
+/**
+ * The panel's silhouette — shared by the surface, the sheen and the edge so
+ * the three layers never disagree about where the corners are.
+ */
+private val MiniPlayerShape = RoundedCornerShape(22.dp)
 
 @Composable
 fun MiniPlayer(
@@ -90,11 +101,40 @@ fun MiniPlayer(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                // Deliberately no card: the mini player is the upper half of the
-                // fused bottom dock, so it inherits the dock surface instead of
-                // drawing its own rounded outline on top of it. One container,
-                // one edge — that is what makes player and navigation read as a
-                // single system instead of two floating pills.
+                // A floating glass panel of its own: soft elevation, a sheet
+                // that lets the canvas read through it, light pooling along the
+                // top edge, and a hairline that fades before it reaches the
+                // bottom. Deliberately NOT welded to the navigation below —
+                // the gap between the two is what makes the stack feel light.
+                .shadow(14.dp, MiniPlayerShape, clip = false)
+                .clip(MiniPlayerShape)
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            NoxaSurface.copy(alpha = 0.97f),
+                            NoxaBlack.copy(alpha = 0.93f)
+                        )
+                    )
+                )
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            Color.White.copy(alpha = 0.10f),
+                            Color.White.copy(alpha = 0.03f),
+                            Color.Transparent
+                        )
+                    )
+                )
+                .border(
+                    1.dp,
+                    Brush.verticalGradient(
+                        listOf(
+                            Color.White.copy(alpha = 0.18f),
+                            Color.White.copy(alpha = 0.04f)
+                        )
+                    ),
+                    MiniPlayerShape
+                )
                 .noxaTap { onClick() }
                 .testTag("mini_player")
         ) {
@@ -105,7 +145,7 @@ fun MiniPlayer(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
@@ -115,10 +155,10 @@ fun MiniPlayer(
                         contentDescription = "Mini player artwork",
                         contentScale = ContentScale.Crop,
                         modifier = Modifier
-                            .size(46.dp)
+                            .size(44.dp)
                             // Sleeve radius: album art is nearly square everywhere
                             // in NOXA so artwork reads as artwork, not as a chip.
-                            .clip(RoundedCornerShape(8.dp))
+                            .clip(RoundedCornerShape(10.dp))
                     )
 
                     Spacer(modifier = Modifier.width(12.dp))

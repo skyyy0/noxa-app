@@ -297,22 +297,45 @@ class MusicRepository(
         }
 
     /**
-     * The hero banner always shows "Blinding Lights" by The Weeknd. The track is
-     * fetched from Deezer like everything else, so the banner is real, playable
-     * audio rather than a hardcoded image.
+     * The Home hero: **"Hate Me" — Ellie Goulding with Juice WRLD**.
+     *
+     * The track is fetched from Deezer like everything else, so the banner is
+     * real, playable audio with its official cover — never a hardcoded image.
+     * Matching is deliberately strict:
+     *
+     *  1. the title must be exactly "Hate Me" — the catalogue is full of covers
+     *     and edits that merely *contain* those words, and a hero that resolved
+     *     to one of those would put the wrong artwork on the front page;
+     *  2. then the credited artist must name Juice WRLD, or Deezer's own main
+     *     credit for the track.
+     *
+     * The search payload only carries the main artist, so the winner is
+     * re-fetched by id to pick up every featured credit — that is what puts
+     * "Ellie Goulding, Juice WRLD" on the banner instead of half the credit.
+     *
+     * When nothing matches, the hero is simply absent — an honest empty slot
+     * beats showing an unrelated song as the pick of the day.
      */
     private suspend fun loadHero(): Song? {
-        val candidates = deezer.search(HERO_QUERY, limit = 10)
-        return candidates.firstOrNull { song ->
-            song.artist.equals(HERO_ARTIST, ignoreCase = true) &&
-                song.title.contains(HERO_TITLE, ignoreCase = true)
-        } ?: candidates.firstOrNull()
+        val candidates = deezer.search(HERO_QUERY, limit = 12)
+        val exact = candidates.filter { it.title.trim().equals(HERO_TITLE, ignoreCase = true) }
+        val match = exact.firstOrNull { it.artist.contains(HERO_ARTIST, ignoreCase = true) }
+            ?: exact.firstOrNull { it.artist.equals(HERO_MAIN_ARTIST, ignoreCase = true) }
+            ?: exact.firstOrNull { it.artist.contains(HERO_MAIN_ARTIST, ignoreCase = true) }
+            ?: return null
+
+        val remoteId = match.remoteId.toLongOrNull() ?: return match
+        return runCatching { deezer.trackById(remoteId, fullCredit = true) }
+            .getOrNull() ?: match
     }
 
     companion object {
-        const val HERO_TITLE = "Blinding Lights"
-        const val HERO_ARTIST = "The Weeknd"
-        private const val HERO_QUERY = "Blinding Lights The Weeknd"
+        const val HERO_TITLE = "Hate Me"
+        /** Featured credit the hero must name — the reason the pick exists. */
+        const val HERO_ARTIST = "Juice WRLD"
+        /** Deezer's main credit on that track (the label that released it). */
+        const val HERO_MAIN_ARTIST = "Ellie Goulding"
+        private const val HERO_QUERY = "Hate Me Juice WRLD"
         private const val SHELF_SIZE = 12
 
         /** Radio: how long a generated queue gets, and how many related

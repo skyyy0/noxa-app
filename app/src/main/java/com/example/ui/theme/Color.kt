@@ -30,13 +30,9 @@ val NoxaInk = Color(0xFF000000)
 val NoxaBlack = Color(0xFF08090A)
 
 /**
- * The bottom control dock (mini player + navigation) — one step above the
- * canvas so the fused dock reads as a single sheet without an outline.
+ * Tone between the canvas and the panels — used when a surface needs to sit
+ * above the background without an outline (sheets, pressed states).
  */
-val NoxaDock = Color(0xFF101116)
-
-// --- Surface ladder -------------------------------------------------------
-
 val NoxaSurface = Color(0xFF141519)
 val NoxaSurfaceElevated = Color(0xFF1B1D22)
 val NoxaSurfaceSecondary = Color(0xFF22242A)

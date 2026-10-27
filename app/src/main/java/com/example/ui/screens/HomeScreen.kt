@@ -168,7 +168,10 @@ fun HomeScreen(
             // slid under the clock and the guest card looked cut off.
             .statusBarsPadding()
             .testTag("home_screen"),
-        contentPadding = PaddingValues(bottom = 24.dp)
+        // Extra room at the end of the feed: the floating mini player plus
+        // the navigation pill stack taller than the old fused dock, and the
+        // last shelf should scroll clear of them instead of stopping short.
+        contentPadding = PaddingValues(bottom = 48.dp),
     ) {
         // Top Header
         item(key = "header") {
@@ -481,7 +484,8 @@ fun HomeScreen(
             }
         }
 
-        // A. Hero Spotlight Card — "Blinding Lights" by The Weeknd.
+        // A. Hero Spotlight — "Hate Me" (Ellie Goulding with Juice WRLD),
+        // resolved live from the catalogue so the cover and the audio are real.
         if (heroSong != null) {
             item(key = "hero") {
                 Column(modifier = Modifier.padding(vertical = 10.dp)) {

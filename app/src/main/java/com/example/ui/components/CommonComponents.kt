@@ -190,12 +190,14 @@ fun HeroSpotlightCard(
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .height(284.dp)
+            // Compact on purpose: the hero should light the page, not own it —
+            // the shelves below stay visible in the same glance.
+            .height(240.dp)
             .noxaClickable { onPlay() }
             .testTag("hero_spotlight_card")
     ) {
         AsyncImage(
-            // Capped decode size: the hero is ~300dp tall, so decoding a
+            // Capped decode size: the hero is 240dp tall, so decoding a
             // 1000x1000 cover for it was wasted work on every home load.
             model = ImageRequest.Builder(context)
                 .data(song.artworkUrl)
@@ -249,8 +251,8 @@ fun HeroSpotlightCard(
                 Text(
                     text = song.title,
                     color = NoxaTextPrimary,
-                    fontSize = 27.sp,
-                    lineHeight = 31.sp,
+                    fontSize = 24.sp,
+                    lineHeight = 28.sp,
                     fontWeight = FontWeight.Bold,
                     letterSpacing = (-0.6).sp,
                     maxLines = 2,
@@ -260,7 +262,7 @@ fun HeroSpotlightCard(
                 Text(
                     text = song.artist,
                     color = NoxaTextSecondary,
-                    fontSize = 14.sp,
+                    fontSize = 13.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -270,7 +272,7 @@ fun HeroSpotlightCard(
 
             Box(
                 modifier = Modifier
-                    .size(52.dp)
+                    .size(48.dp)
                     .clip(CircleShape)
                     .background(NoxaLime)
                     .noxaStrongTap { onPlay() }
@@ -281,7 +283,7 @@ fun HeroSpotlightCard(
                     imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                     contentDescription = if (isPlaying) "Jeda sorotan" else "Putar sorotan",
                     tint = NoxaBlack,
-                    modifier = Modifier.size(30.dp)
+                    modifier = Modifier.size(28.dp)
                 )
             }
         }
