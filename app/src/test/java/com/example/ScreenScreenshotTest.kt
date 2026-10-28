@@ -8,6 +8,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.test.assertCountEquals
@@ -20,7 +21,9 @@ import com.example.data.model.MusicSource
 import com.example.data.model.Song
 import com.example.data.remote.ArtistInsights
 import com.example.data.remote.HomeMusicSection
+import com.example.media.PlaybackProgress
 import com.example.ui.components.NoxAmbientBackdrop
+import com.example.ui.components.NoxaBottomStack
 import com.example.ui.screens.ArtistScreen
 import com.example.ui.screens.HomeScreen
 import com.example.ui.theme.NoxaBlack
@@ -31,6 +34,7 @@ import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import java.io.File
+import kotlinx.coroutines.flow.MutableStateFlow
 
 /**
  * Writes real PNG screenshots of the two screens this change touches so the
@@ -185,6 +189,36 @@ class ScreenScreenshotTest {
         }
         check(warmR in 4..120 && warmR > warmG) {
             "warm ambient glow missing at lower zone: rgb($warmR,$warmG,${android.graphics.Color.blue(warm)})"
+        }
+    }
+
+    /**
+     * Renders the real bottom stack (floating mini player + navigation pill)
+     * so the silhouette can be measured from pixels: how tall the pill is, how
+     * round its corners are, and that both surfaces stay separate.
+     */
+    @Test
+    fun bottomStackScreenshot() {
+        val progress = MutableStateFlow(
+            PlaybackProgress(positionMs = 12_000, durationMs = 186_000)
+        )
+        renderAndCapture("bottom_stack") {
+            Box(modifier = Modifier.fillMaxSize().background(NoxaBlack)) {
+                NoxaBottomStack(
+                    currentSong = song("deezer:1", "Kangen", "Dewa 19", 300_000),
+                    isPlaying = true,
+                    isBuffering = false,
+                    isFavorite = false,
+                    progressFlow = progress,
+                    currentRoute = "home",
+                    onTogglePlayPause = {},
+                    onNext = {},
+                    onToggleFavorite = {},
+                    onOpenPlayer = {},
+                    onNavigateTab = {},
+                    modifier = Modifier.align(Alignment.BottomCenter)
+                )
+            }
         }
     }
 
