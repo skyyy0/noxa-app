@@ -165,40 +165,12 @@ class NoxaAudioPlayer(private val context: Context) {
 
     init {
         setupPlayerListener()
-        // Best-effort first attempt; the authoritative bind happens in
-        // onAudioSessionIdChanged below, because the sink assigns its session
-        // asynchronously and this constructor-time id is still invalid (0).
         equalizerManager.init(exoPlayer.audioSessionId)
         _uiState.update { it.copy(equalizerState = equalizerManager.currentState) }
     }
 
-    /**
-     * The automatic wireless profile (v3.2.1): smile curve scaled to this
-     * hardware, plus bass boost / spatializer when supported. Null means the
-     * audio session does not exist yet — the request is remembered and lands
-     * the moment playback starts.
-     */
-    fun requestAutoTune(): AutoTuneResult? {
-        val result = equalizerManager.applyAutoTune()
-        _uiState.update { it.copy(equalizerState = equalizerManager.currentState) }
-        return result
-    }
-
     private fun setupPlayerListener() {
         exoPlayer.addListener(object : Player.Listener {
-            /**
-             * The only reliable moment to bind the equalizer: ExoPlayer's
-             * audio sink assigns its session id asynchronously after prepare()
-             * and builds a **new** one whenever the output changes (headphones
-             * unplugged, a TWS headset connected). Reading the id in the
-             * constructor or right after prepare() almost always returned
-             * 0 — which is exactly why the EQ sliders used to snap back.
-             */
-            override fun onAudioSessionIdChanged(audioSessionId: Int) {
-                equalizerManager.init(audioSessionId)
-                _uiState.update { it.copy(equalizerState = equalizerManager.currentState) }
-            }
-
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 _uiState.update { it.copy(isPlaying = isPlaying) }
                 if (isPlaying) startPositionUpdater() else stopPositionUpdater()
@@ -407,9 +379,7 @@ class NoxaAudioPlayer(private val context: Context) {
         exoPlayer.prepare()
         exoPlayer.play()
 
-        // Best-effort: if the sink already handed out its session the equalizer
-        // binds here; otherwise onAudioSessionIdChanged does it the moment it
-        // exists. Either way the state below is what the UI renders.
+        // Reconnect the equalizer to the (possibly new) audio session.
         equalizerManager.init(exoPlayer.audioSessionId)
         _uiState.update { it.copy(equalizerState = equalizerManager.currentState) }
 

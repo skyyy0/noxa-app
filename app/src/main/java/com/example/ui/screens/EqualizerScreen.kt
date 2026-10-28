@@ -43,6 +43,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.media.EqualizerBand
 import com.example.media.EqualizerState
 import com.example.ui.theme.NoxaBlack
 import com.example.ui.theme.NoxaBorder
@@ -134,9 +135,7 @@ fun EqualizerScreen(
                         .clip(CircleShape)
                         .background(if (isSelected) NoxaLime else NoxaSurfaceSecondary)
                         .border(1.dp, if (isSelected) NoxaLime else NoxaBorder, CircleShape)
-                        .clickable(
-                            enabled = equalizerState.isEnabled && equalizerState.bands.isNotEmpty()
-                        ) {
+                        .clickable(enabled = equalizerState.isEnabled) {
                             onSelectPreset(preset)
                         }
                         .padding(horizontal = 16.dp, vertical = 8.dp)
@@ -185,22 +184,17 @@ fun EqualizerScreen(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Real bands only. The old "fallback" bands were fake values
-                // drawn before the audio session existed — dragging them did
-                // nothing (the effect had no session to write to), which read
-                // as a broken slider. Now the screen says plainly why nothing
-                // moves, and the controls stay disabled until they can.
-                val bands = equalizerState.bands
-                if (bands.isEmpty()) {
-                    Text(
-                        text = "Equalizer terhubung otomatis saat musik pertama diputar — " +
-                            "sesi audio belum tersedia.",
-                        color = NoxaTextTertiary,
-                        fontSize = 12.sp,
-                        lineHeight = 17.sp,
-                        modifier = Modifier.fillMaxWidth()
+                val bands = if (equalizerState.bands.isNotEmpty()) {
+                    equalizerState.bands
+                } else {
+                    // Fallback visual bands if audio session is initializing
+                    listOf(
+                        EqualizerBand(0, 60, -1500, 1500, 300),
+                        EqualizerBand(1, 230, -1500, 1500, 600),
+                        EqualizerBand(2, 910, -1500, 1500, 0),
+                        EqualizerBand(3, 3600, -1500, 1500, 400),
+                        EqualizerBand(4, 14000, -1500, 1500, 700)
                     )
-                    Spacer(modifier = Modifier.height(10.dp))
                 }
 
                 bands.forEach { band ->
@@ -244,9 +238,7 @@ fun EqualizerScreen(
                                 onSetBandLevel(band.index, newVal.toInt())
                             },
                             valueRange = min..max,
-                            // Dead until a real session exists: a slider that
-                            // snaps back looks broken, a disabled one explains.
-                            enabled = equalizerState.isEnabled && bands.isNotEmpty(),
+                            enabled = equalizerState.isEnabled,
                             colors = SliderDefaults.colors(
                                 thumbColor = NoxaLime,
                                 activeTrackColor = NoxaLime,
