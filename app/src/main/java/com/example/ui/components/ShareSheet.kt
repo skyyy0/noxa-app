@@ -19,10 +19,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CardGiftcard
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.QrCode
+import androidx.compose.material.icons.filled.Redeem
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -45,6 +48,7 @@ import com.example.data.model.Song
 import com.example.ui.theme.NoxaBlack
 import com.example.ui.theme.NoxaBorder
 import com.example.ui.theme.NoxaLime
+import com.example.ui.theme.NoxaRadius
 import com.example.ui.theme.NoxaSurface
 import com.example.ui.theme.NoxaSurfaceElevated
 import com.example.ui.theme.NoxaTextPrimary
@@ -69,11 +73,20 @@ import kotlinx.coroutines.withContext
 @Composable
 fun ShareSheetDialog(
     song: Song,
+    /**
+     * Kirim Lagu (3.3.3): kirim lagu ini ke username teman. `onDone(null)`
+     * = sukses, selain itu pesan error dari backend. Null saat fitur
+     * tidak tersedia (mis. belum masuk akun) — baris kiriman disembunyikan.
+     */
+    onSendGift: ((toUsername: String, message: String, onDone: (String?) -> Unit) -> Unit)? = null,
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var busy by remember { mutableStateOf(false) }
+    var giftFormOpen by remember { mutableStateOf(false) }
+    var giftTo by remember { mutableStateOf("") }
+    var giftMessage by remember { mutableStateOf("") }
     val link = remember(song.id) { NoxaLinks.songLink(song) }
 
     ModalBottomSheet(
@@ -171,6 +184,115 @@ fun ShareSheetDialog(
                     onDismiss()
                 }
             )
+
+            if (onSendGift != null) {
+                Spacer(modifier = Modifier.height(10.dp))
+
+                ShareOptionRow(
+                    icon = Icons.Default.Redeem,
+                    title = "Kirim ke teman",
+                    subtitle = if (giftFormOpen) {
+                        "Tutup form kiriman"
+                    } else {
+                        "Kirim lagu ini ke akun NOXA teman — muncul di profilnya."
+                    },
+                    tag = "send_gift",
+                    enabled = !busy,
+                    onClick = { giftFormOpen = !giftFormOpen }
+                )
+
+                if (giftFormOpen) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(NoxaSurfaceElevated)
+                            .border(1.dp, NoxaBorder, RoundedCornerShape(16.dp))
+                            .padding(14.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = giftTo,
+                            onValueChange = { giftTo = it.trimStart().take(20) },
+                            label = { Text("Username teman", fontSize = 12.sp) },
+                            singleLine = true,
+                            enabled = !busy,
+                            textStyle = androidx.compose.ui.text.TextStyle(
+                                color = NoxaTextPrimary,
+                                fontSize = 14.sp
+                            ),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = NoxaLime,
+                                unfocusedBorderColor = NoxaBorder,
+                                focusedLabelColor = NoxaLime,
+                                unfocusedLabelColor = NoxaTextTertiary,
+                                cursorColor = NoxaLime
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+                        OutlinedTextField(
+                            value = giftMessage,
+                            onValueChange = { giftMessage = it.take(120) },
+                            label = { Text("Pesan (opsional)", fontSize = 12.sp) },
+                            enabled = !busy,
+                            textStyle = androidx.compose.ui.text.TextStyle(
+                                color = NoxaTextPrimary,
+                                fontSize = 14.sp
+                            ),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = NoxaLime,
+                                unfocusedBorderColor = NoxaBorder,
+                                focusedLabelColor = NoxaLime,
+                                unfocusedLabelColor = NoxaTextTertiary,
+                                cursorColor = NoxaLime
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(NoxaRadius.full))
+                                .background(NoxaLime)
+                                .clickable(enabled = !busy) {
+                                    val to = giftTo.trim()
+                                    if (to.isEmpty()) {
+                                        Toast.makeText(
+                                            context,
+                                            "Isi username penerima dulu.",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                        return@clickable
+                                    }
+                                    busy = true
+                                    onSendGift(to, giftMessage.trim()) { error ->
+                                        busy = false
+                                        if (error == null) {
+                                            Toast.makeText(
+                                                context,
+                                                "Lagu dikirim ke @$to 🎁",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                            onDismiss()
+                                        } else {
+                                            Toast.makeText(context, error, Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                }
+                                .padding(vertical = 11.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = if (busy) "Mengirim…" else "Kirim lagu",
+                                color = NoxaBlack,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+            }
 
             if (busy) {
                 Spacer(modifier = Modifier.height(16.dp))

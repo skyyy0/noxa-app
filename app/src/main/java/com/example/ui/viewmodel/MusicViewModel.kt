@@ -850,6 +850,80 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         handleVoiceCommand(transcript)
     }
 
+    // ------------------------------- Profil suara nirkabel (v3.2.1)
+
+    /**
+     * Popup state while NOXA tunes itself for a connected wireless output.
+     * Step 0 = detecting, 1 = applying, 2 = done (auto-dismissed after).
+     */
+    data class TwsTuneState(
+        val deviceName: String,
+               val kindLabel: String,
+        val step: Int,
+        /** One-line report of what actually got applied — honest, never fake. */
+        val summary: String? = null
+    )
+
+    private val _twsTune = MutableStateFlow<TwsTuneState?>(null)
+    /** Non-null while the automatic wireless tuning popup is on screen. */
+    val twsTune: StateFlow<TwsTuneState?> = _twsTune.asStateFlow()
+
+    private val outputWatcher = com.example.media.OutputDeviceWatcher(application)
+    /** Devices already tuned this session — reconnecting must not nag twice. */
+    private val twsTunedDevices = HashSet<String>()
+    private var twsTuneJob: Job? = null
+
+    /**
+     * **Full otomatis**: the moment a TWS/Bluetooth output appears, NOXA says
+     * so in a popup and applies the wireless profile itself — the user never
+     * opens a single slider. One popup per device per session.
+     */
+    private fun startWirelessTuning(device: com.example.media.AudioOutputDevice) {
+        if (!twsTunedDevices.add(device.key)) return
+        twsTuneJob?.cancel()
+        twsTuneJob = safeScope.launch {
+            _twsTune.value = TwsTuneState(device.name, device.kindLabel, step = 0)
+            delay(550)
+            _twsTune.value = TwsTuneState(device.name, device.kindLabel, step = 1)
+            val result = player.requestAutoTune()
+            _twsTune.value = TwsTuneState(
+                deviceName = device.name,
+                kindLabel = device.kindLabel,
+                step = 2,
+                summary = autoTuneSummary(result)
+            )
+            delay(1_800)
+            _twsTune.value = null
+        }
+    }
+
+    /** What really happened, in one line — including "not yet possible". */
+    private fun autoTuneSummary(result: com.example.media.AutoTuneResult?): String =
+        if (result == null) {
+            "Profil disiapkan — aktif otomatis saat musik diputar."
+        } else {
+            buildString {
+                append("${result.bandsApplied} band EQ aktif")
+                result.bassBoostApplied?.let { append(" · Bass +${it / 10}%") }
+                result.virtualizerApplied?.let { append(" · 3D +${it / 10}%") }
+            }
+        }
+
+    /** Manual close from the popup. */
+    fun dismissTwsTune() {
+        twsTuneJob?.cancel()
+        _twsTune.value = null
+    }
+
+    init {
+        // Wireless detection is permission-free: it listens to audio outputs,
+        // not to the Bluetooth stack, so it also sees USB dongles and LE audio.
+        safeScope.launch {
+            outputWatcher.connections.collect { device -> startWirelessTuning(device) }
+        }
+        outputWatcher.start()
+    }
+
     init {
         authManager.attemptSilentAutoSignIn(viewModelScope)
         restoreLastSession()
@@ -2531,6 +2605,78 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 _songComments.update { it?.copy(posting = false, error = friendly) }
                 onDone?.invoke(friendly)
             }
+        }
+    }
+
+    // ---------------------------------------------------- Kirim Lagu (3.3.3)
+
+    /** Kiriman lagu masuk untuk akun yang sedang masuk — terbaru dulu. */
+    private val _gifts =
+        MutableStateFlow<List<com.example.data.support.SongGift>>(emptyList())
+    val gifts: StateFlow<List<com.example.data.support.SongGift>> =
+        _gifts.asStateFlow()
+
+    /** Refresh inbox — dipanggil tiap Profil dibuka; diam saat belum masuk. */
+    fun refreshGifts() {
+        val uid = authManager.currentUser.value?.uid ?: return
+        safeScope.launch {
+            val list = runCatching { backend.giftsFor(uid) }.getOrNull() ?: return@launch
+            _gifts.value = list
+        }
+    }
+
+    /**
+     * Mengirim lagu yang sedang dibagikan ke username teman.
+     * `onDone(null)` = sukses; selain itu pesan error berbahasa Indonesia.
+     */
+    fun sendGift(song: Song, toUsername: String, message: String, onDone: (String?) -> Unit) {
+        val user = authManager.currentUser.value
+        if (user == null) {
+            onDone("Masuk dulu untuk mengirim lagu.")
+            return
+        }
+        val name = user.displayName?.takeIf { it.isNotBlank() }
+            ?: user.email?.substringBefore('@')
+            ?: "Pendengar"
+        safeScope.launch {
+            val err = runCatching {
+                backend.sendGift(
+                    toUsername = toUsername,
+                    fromName = name,
+                    songId = song.id,
+                    title = song.title,
+                    artist = song.artist,
+                    artwork = song.artworkUrl,
+                    message = message
+                )
+            }.getOrDefault("Server NOXA tidak bisa dijangkau. Coba lagi nanti.")
+            onDone(err)
+        }
+    }
+
+    /**
+     * Memutar kiriman dari Profil — id lagu membawa prefix provider, jadi
+     * resolusi stream sama persis seperti lagu biasa (tanpa hardcode sumber).
+     */
+    fun playGift(gift: com.example.data.support.SongGift) {
+        if (gift.songId.isBlank()) return
+        val song = Song(
+            id = gift.songId,
+            title = gift.title,
+            artist = gift.artist,
+            artworkUrl = gift.artwork
+        ).withDerivedProviderFields()
+        playSong(song)
+    }
+
+    /** Optimistik: centang lime hilang langsung; tulis ke backend di belakang. */
+    fun markGiftRead(giftId: String) {
+        val uid = authManager.currentUser.value?.uid ?: return
+        _gifts.update { list ->
+            list.map { if (it.id == giftId) it.copy(read = true) else it }
+        }
+        safeScope.launch {
+            runCatching { backend.markGiftRead(uid, giftId) }
         }
     }
 

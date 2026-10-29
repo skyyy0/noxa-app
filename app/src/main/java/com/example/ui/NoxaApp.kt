@@ -2,11 +2,8 @@ package com.example.ui
 
 import android.app.Activity
 import android.widget.Toast
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -14,11 +11,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Group
@@ -27,26 +21,17 @@ import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Tune
-import androidx.compose.material3.Icon
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -58,13 +43,10 @@ import androidx.navigation.compose.rememberNavController
 import com.example.data.model.Song
 import com.example.ui.components.AddToPlaylistDialog
 import com.example.ui.components.FullPlayerSheet
-import com.example.ui.components.MiniPlayer
+import com.example.ui.components.NoxaBottomStack
 import com.example.ui.components.ShareSheetDialog
 import com.example.ui.components.SongCommentsSheet
-import com.example.ui.i18n.string
 import com.example.ui.components.YouTubePolicyDialog
-import com.example.ui.components.NoxaMotion
-import com.example.ui.components.noxaTap
 import com.example.ui.screens.AboutSkyScreen
 import com.example.ui.screens.AiChatScreen
 import com.example.ui.screens.AlbumScreen
@@ -80,11 +62,6 @@ import com.example.ui.screens.ProfileScreen
 import com.example.ui.screens.SearchScreen
 import com.example.ui.screens.SupportChatScreen
 import com.example.ui.theme.NoxaBlack
-import com.example.ui.theme.NoxaLime
-import com.example.ui.theme.NoxaSurface
-import com.example.ui.theme.NoxaTextPrimary
-import com.example.ui.theme.NoxaTextSecondary
-import com.example.ui.theme.NoxaTextTertiary
 import com.example.ui.viewmodel.ArtistUiState
 import com.example.ui.viewmodel.MusicViewModel
 import com.example.ui.viewmodel.VideoUiState
@@ -188,6 +165,8 @@ private fun NoxaAppContent(
     val weeklyRecap by viewModel.weeklyRecap.collectAsStateWithLifecycle()
     val yearListening by viewModel.yearListening.collectAsStateWithLifecycle()
     val appSettings by viewModel.appSettings.collectAsStateWithLifecycle()
+    // Kirim Lagu (3.3.3) — inbox kiriman teman di Profil.
+    val gifts by viewModel.gifts.collectAsStateWithLifecycle()
 
     // Collaborative playlists: one flow for the sheets, one for banners,
     // and the playlistId -> code map for chips.
@@ -275,14 +254,6 @@ private fun NoxaAppContent(
         }
     }
 
-    val bottomNavItems = listOf(
-        Screen.Home,
-        Screen.Search,
-        Screen.Library,
-        Screen.Equalizer,
-        Screen.Profile
-    )
-
     val isCurrentFavorite = playerState.currentSong?.id?.let { favoriteIds.contains(it) } ?: false
 
     // Collected again here (cheap state read) so Pengaturan shows the active
@@ -305,151 +276,23 @@ private fun NoxaAppContent(
     Box(modifier = Modifier.fillMaxSize().background(NoxaBlack)) {
         Scaffold(
             bottomBar = {
-                // ── Two surfaces, one system ──────────────────────────
-                // The player and the navigation are deliberately separate: a
-                // floating glass mini player hovering above its own light
-                // navigation pill, with a real gap between them. Both wear the
-                // same material — translucent sheet, top sheen, hairline edge,
-                // soft shadow — so they read as siblings instead of as one
-                // heavy slab. Each keeps its own boundary, its own shape and
-                // its own inset, which is what keeps the stack feeling light.
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .navigationBarsPadding()
-                ) {
-                    MiniPlayer(
-                        currentSong = playerState.currentSong,
-                        isPlaying = playerState.isPlaying,
-                        isBuffering = playerState.isBuffering,
-                        progressFlow = viewModel.playbackProgress,
-                        isFavorite = isCurrentFavorite,
-                        onTogglePlayPause = { viewModel.togglePlayPause() },
-                        onNext = { viewModel.next() },
-                        onToggleFavorite = {
-                            playerState.currentSong?.let { viewModel.toggleFavorite(it) }
-                        },
-                        onClick = { viewModel.openFullPlayer() },
-                        // Inset from both edges: the panel floats, it is not a
-                        // full-width strip welded to the screen.
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                    )
-
-                    // The gap only exists while a song is loaded — a standing
-                    // spacer would lift the bar for no reason.
-                    if (playerState.currentSong != null) {
-                        Spacer(modifier = Modifier.height(6.dp))
-                    }
-
-                    val navShape = RoundedCornerShape(26.dp)
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 10.dp)
-                            .shadow(10.dp, navShape, clip = false)
-                            .clip(navShape)
-                            .background(
-                                Brush.verticalGradient(
-                                    listOf(
-                                        NoxaSurface.copy(alpha = 0.97f),
-                                        NoxaSurface.copy(alpha = 0.90f)
-                                    )
-                                )
-                            )
-                            // Light gathers along the top edge and is gone by
-                            // the time it reaches the icons: the glass cue,
-                            // kept cheap enough to run every frame.
-                            .background(
-                                Brush.verticalGradient(
-                                    listOf(Color.White.copy(alpha = 0.08f), Color.Transparent)
-                                )
-                            )
-                            // Edge highlight instead of an outline — a drawn
-                            // top, a disappearing bottom.
-                            .border(
-                                1.dp,
-                                Brush.verticalGradient(
-                                    listOf(
-                                        Color.White.copy(alpha = 0.15f),
-                                        Color.White.copy(alpha = 0.04f)
-                                    )
-                                ),
-                                navShape
-                            )
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 6.dp, vertical = 6.dp),
-                            horizontalArrangement = Arrangement.SpaceEvenly,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            bottomNavItems.forEach { screen ->
-                                val isSelected = currentRoute == screen.route
-                                // The selected icon settles a touch larger on a
-                                // spring — a living detail without any flashing.
-                                val iconScale by animateFloatAsState(
-                                    targetValue = if (isSelected) 1.08f else 1f,
-                                    animationSpec = NoxaMotion.snappySpring,
-                                    label = "nav_icon_scale"
-                                )
-                                Column(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .clip(RoundedCornerShape(16.dp))
-                                        .noxaTap { navigateToTab(screen) }
-                                        .padding(vertical = 9.dp)
-                                        .testTag("nav_item_${screen.route}"),
-                                    horizontalAlignment = Alignment.CenterHorizontally
-                                ) {
-                                    Icon(
-                                        imageVector = screen.icon,
-                                        contentDescription = screen.title,
-                                        tint = if (isSelected) NoxaTextPrimary else NoxaTextTertiary,
-                                        modifier = Modifier
-                                            .size(22.dp)
-                                            .graphicsLayer {
-                                                scaleX = iconScale
-                                                scaleY = iconScale
-                                            }
-                                    )
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    // Labels are always present: an evenly weighted,
-                                    // quiet bar instead of a label that expands and
-                                    // shoves its neighbours around.
-                                    Text(
-                                        text = when (screen.route) {
-                                            Screen.Home.route -> string("nav.home")
-                                            Screen.Search.route -> string("nav.search")
-                                            Screen.Library.route -> string("nav.library")
-                                            Screen.Profile.route -> string("nav.profile")
-                                            else -> screen.title
-                                        },
-                                        color = if (isSelected) NoxaTextPrimary else NoxaTextTertiary,
-                                        fontSize = 10.sp,
-                                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
-                                        maxLines = 1
-                                    )
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    // The one lime mark in the bar: a 4dp dot that
-                                    // says "you are here" without shouting.
-                                    Box(
-                                        modifier = Modifier
-                                            .size(4.dp)
-                                            .clip(CircleShape)
-                                            .background(
-                                                if (isSelected) NoxaLime else Color.Transparent
-                                            )
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    // Breathing room under the pill so it never sits glued to
-                    // the gesture inset.
-                    Spacer(modifier = Modifier.height(8.dp))
-                }
+                // Two surfaces, one system — see NoxaBottomStack for the
+                // material story (glass mini player above its own nav pill).
+                NoxaBottomStack(
+                    currentSong = playerState.currentSong,
+                    isPlaying = playerState.isPlaying,
+                    isBuffering = playerState.isBuffering,
+                    isFavorite = isCurrentFavorite,
+                    progressFlow = viewModel.playbackProgress,
+                    currentRoute = currentRoute,
+                    onTogglePlayPause = { viewModel.togglePlayPause() },
+                    onNext = { viewModel.next() },
+                    onToggleFavorite = {
+                        playerState.currentSong?.let { viewModel.toggleFavorite(it) }
+                    },
+                    onOpenPlayer = { viewModel.openFullPlayer() },
+                    onNavigateTab = { navigateToTab(it) }
+                )
             },
             containerColor = NoxaBlack
         ) { innerPadding ->
@@ -712,6 +555,10 @@ private fun NoxaAppContent(
                         weeklyRecap = weeklyRecap,
                         yearListening = yearListening,
                         appSettings = appSettings,
+                        gifts = gifts,
+                        onRefreshGifts = { viewModel.refreshGifts() },
+                        onPlayGift = { viewModel.playGift(it) },
+                        onMarkGiftRead = { viewModel.markGiftRead(it) },
                         onSignInWithGoogle = { activity: Activity, onError: (String) -> Unit ->
                             viewModel.signInWithGoogle(activity, onError = onError)
                         },
@@ -924,6 +771,18 @@ private fun NoxaAppContent(
             )
         }
 
+        // Automatic wireless tuning (v3.2.1): the moment a TWS/Bluetooth
+        // output connects, NOXA announces the tuning and applies the profile
+        // itself — no manual EQ setup, and the summary reports what really
+        // landed on the hardware.
+        val twsTune by viewModel.twsTune.collectAsStateWithLifecycle()
+        twsTune?.let { twsState ->
+            com.example.ui.components.TwsTuneDialog(
+                state = twsState,
+                onDismiss = { viewModel.dismissTwsTune() }
+            )
+        }
+
         // Full Screen Player Overlay Sheet
         FullPlayerSheet(
             visible = isFullPlayerVisible,
@@ -1002,6 +861,9 @@ private fun NoxaAppContent(
         songPendingShare?.let { song ->
             ShareSheetDialog(
                 song = song,
+                onSendGift = { to, message, done ->
+                    viewModel.sendGift(song, to, message, done)
+                },
                 onDismiss = { songPendingShare = null }
             )
         }

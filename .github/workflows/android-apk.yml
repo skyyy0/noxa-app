@@ -32,6 +32,11 @@ name: Build APK
 on:
   push:
     branches: [main]
+  # PR checks: run the same unit-test + APK build for every pull request that
+  # targets `main`, so feature branches get verified before merging (the
+  # release-publishing step below is skipped for these runs).
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 # Needed so the workflow can publish a Release with the built APK.
@@ -141,7 +146,10 @@ jobs:
           path: dist/*.apk
           if-no-files-found: error
 
+      # Only pushes to `main` publish a Release — pull_request runs (and
+      # manual dispatches) must never create or overwrite a release.
       - name: Publish APK as a GitHub Release
+        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

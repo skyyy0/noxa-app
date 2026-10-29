@@ -65,6 +65,26 @@ data class SupportThread(
     val lastMessage: SupportMessage? get() = messages.lastOrNull()
 }
 
+/**
+ * Kiriman **Kirim Lagu** (3.3.3) — lagu yang dikirim satu pengguna ke
+ * pengguna lain, disimpan di dokumen backend yang sama. [toUid] adalah uid
+ * penerima (diresolve dari username saat mengirim); [read] hanya berarti
+ * "sudah dibaca" bagi penerima — itu yang menyalakan centang lime di profil.
+ */
+data class SongGift(
+    val id: String,
+    val toUid: String,
+    /** Nama pengirim saat mengirim — ganti nama tidak menulis ulang riwayat. */
+    val fromName: String,
+    val songId: String,
+    val title: String,
+    val artist: String,
+    val artwork: String,
+    val message: String = "",
+    val at: Long = 0L,
+    val read: Boolean = false
+)
+
 /** A registered account as stored by the backend. */
 data class BackendLogin(
     val uid: String,
@@ -180,6 +200,7 @@ class NoxaBackend {
         // collaborative playlists lives here too — no single feature can push
         // the page over Telegraph's limit.
         pruneSharedPlaylists(state)
+        pruneGifts(state)
         if (writeState(state)) result else null
     }
 
@@ -483,6 +504,69 @@ class NoxaBackend {
     /** All support threads, most recently active first (dev console). */
     suspend fun listThreads(): List<SupportThread>? =
         readState()?.threads?.values?.sortedByDescending { it.lastUserAt.coerceAtLeast(it.lastSupportAt) }
+
+    // ---------------------------------------------------- Kirim Lagu (3.3.3)
+
+    /**
+     * Mengirim lagu ke akun NOXA lain berdasarkan username penerima.
+     *
+     * @return `null` saat sukses, atau pesan error berbahasa Indonesia
+     *         (username tidak ditemukan / backend tidak terjangkau).
+     */
+    suspend fun sendGift(
+        toUsername: String,
+        fromName: String,
+        songId: String,
+        title: String,
+        artist: String,
+        artwork: String,
+        message: String
+    ): String? {
+        val outcome = mutate { state ->
+            val target = toUsername.trim().lowercase(Locale.ROOT).removePrefix("@")
+            if (target.isEmpty()) return@mutate "Isi username penerima dulu."
+            val account = state.accounts.values.firstOrNull {
+                it.username.trim().lowercase(Locale.ROOT) == target
+            }            ?: return@mutate "Username @$target tidak ditemukan."
+            if (songId.isBlank()) return@mutate "Lagu ini belum siap dikirim."
+            state.gifts.add(
+                SongGift(
+                    id = "${System.currentTimeMillis()}-${songId.hashCode()}",
+                    toUid = account.uid,
+                    fromName = fromName.trim().takeIf { it.isNotBlank() } ?: "Pendengar",
+                    songId = songId,
+                    title = title.trim(),
+                    artist = artist.trim(),
+                    artwork = artwork,
+                    message = message.trim().take(GIFT_MESSAGE_MAX),
+                    at = System.currentTimeMillis(),
+                    read = false
+                )
+            )
+            GIFT_SENT
+        }
+        return when (outcome) {
+            GIFT_SENT -> null
+            null -> "Server NOXA tidak bisa dijangkau. Coba lagi nanti."
+            else -> outcome
+        }
+    }
+
+    /** Kiriman masuk untuk [uid] — terbaru dulu; `null` = backend tak terjangkau. */
+    suspend fun giftsFor(uid: String): List<SongGift>? =
+        readState()?.gifts
+            ?.filter { it.toUid == uid }
+            ?.sortedByDescending { it.at }
+
+    /** Menandai satu kiriman milik [uid] sudah dibaca (optimistik di UI). */
+    suspend fun markGiftRead(uid: String, giftId: String): Boolean =
+        mutate { state ->
+            val index = state.gifts.indexOfFirst { it.id == giftId && it.toUid == uid }
+            if (index >= 0) {
+                state.gifts[index] = state.gifts[index].copy(read = true)
+            }
+            true
+        } ?: false
 
     // ------------------------------------------------- rooms (dengar bareng)
 
@@ -804,6 +888,9 @@ class NoxaBackend {
 
         /** Collaborative playlists keyed by their 6-character share code. */
         val sharedPlaylists = LinkedHashMap<String, SharedPlaylist>()
+
+        /** Kiriman "Kirim Lagu" — terbaru disimpan di akhir daftar. */
+        val gifts = ArrayList<SongGift>()
     }
 
     private fun parseState(json: JSONObject): BackendState {
@@ -914,6 +1001,27 @@ class NoxaBackend {
                 songs = songs
             )
         }
+        val gifts = json.optJSONArray("gifts") ?: JSONArray()
+        for (i in 0 until gifts.length()) {
+            val g = gifts.optJSONObject(i) ?: continue
+            val id = g.optString("id")
+            if (id.isBlank()) continue
+            state.gifts.add(
+                SongGift(
+                    id = id,
+                    toUid = g.optString("toUid"),
+                    fromName = g.optString("fromName"),
+                    songId = g.optString("songId"),
+                    title = g.optString("title"),
+                    artist = g.optString("artist"),
+                    artwork = g.optString("artwork"),
+                    message = g.optString("message"),
+                    at = g.optLong("at"),
+                    read = g.optBoolean("read")
+                )
+            )
+        }
+        state.gifts.sortByDescending { it.at }
         state.update = json.optJSONObject("update")?.let { u ->
             val url = u.optString("url")
             if (url.isBlank()) null else UpdateInfo(
@@ -1043,6 +1151,25 @@ class NoxaBackend {
                     }
                     root.put("sharedPlaylists", shared)
                 }
+                if (state.gifts.isNotEmpty()) {
+                    val gifts = JSONArray()
+                    state.gifts.forEach { g ->
+                        gifts.put(
+                            JSONObject()
+                                .put("id", g.id)
+                                .put("toUid", g.toUid)
+                                .put("fromName", g.fromName)
+                                .put("songId", g.songId)
+                                .put("title", g.title)
+                                .put("artist", g.artist)
+                                .put("artwork", g.artwork)
+                                .put("message", g.message)
+                                .put("at", g.at)
+                                .put("read", g.read)
+                        )
+                    }
+                    root.put("gifts", gifts)
+                }
             }
     }
 
@@ -1051,6 +1178,17 @@ class NoxaBackend {
      * per-playlist song cap plus a global cap that keeps the freshest
      * playlists first. Runs on every write (see [mutate]).
      */
+    /**
+     * Keeps kiriman inside Telegraph's page-size limit: the newest
+     * [MAX_GIFTS] survive regardless of recipient, so one active recipient
+     * cannot fill the document on their own.
+     */
+    private fun pruneGifts(state: BackendState) {
+        if (state.gifts.size <= MAX_GIFTS) return
+        state.gifts.sortByDescending { it.at }
+        while (state.gifts.size > MAX_GIFTS) state.gifts.removeAt(state.gifts.size - 1)
+    }
+
     private fun pruneSharedPlaylists(state: BackendState) {
         if (state.sharedPlaylists.isEmpty()) return
         val MAX_SONGS_PER_PLAYLIST = 200
@@ -1193,6 +1331,19 @@ class NoxaBackend {
     companion object {
         private const val TAG = "NoxaBackend"
         private const val API_BASE = "https://api.telegra.ph"
+
+        /**
+         * Sentinel for [sendGift]: `mutate` collapses "success with no error"
+         * and "write failed" into `null`, so a successful send answers with
+         * this marker instead of an empty string.
+         */
+        private const val GIFT_SENT = "__gift_sent__"
+
+        /** Pesan kiriman dibatasi agar dokumen backend tetap ringkas. */
+        private const val GIFT_MESSAGE_MAX = 120
+
+        /** Kapitas kiriman global (dipangkas saat tulis — lihat [pruneGifts]). */
+        private const val MAX_GIFTS = 150
 
         /** Username may change once every 7 days; password once every 14. */
         const val USERNAME_COOLDOWN_MS = 7L * 24 * 60 * 60 * 1000
