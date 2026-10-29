@@ -165,6 +165,8 @@ private fun NoxaAppContent(
     val weeklyRecap by viewModel.weeklyRecap.collectAsStateWithLifecycle()
     val yearListening by viewModel.yearListening.collectAsStateWithLifecycle()
     val appSettings by viewModel.appSettings.collectAsStateWithLifecycle()
+    // Kirim Lagu (3.3.3) — inbox kiriman teman di Profil.
+    val gifts by viewModel.gifts.collectAsStateWithLifecycle()
 
     // Collaborative playlists: one flow for the sheets, one for banners,
     // and the playlistId -> code map for chips.
@@ -553,6 +555,10 @@ private fun NoxaAppContent(
                         weeklyRecap = weeklyRecap,
                         yearListening = yearListening,
                         appSettings = appSettings,
+                        gifts = gifts,
+                        onRefreshGifts = { viewModel.refreshGifts() },
+                        onPlayGift = { viewModel.playGift(it) },
+                        onMarkGiftRead = { viewModel.markGiftRead(it) },
                         onSignInWithGoogle = { activity: Activity, onError: (String) -> Unit ->
                             viewModel.signInWithGoogle(activity, onError = onError)
                         },
@@ -855,6 +861,9 @@ private fun NoxaAppContent(
         songPendingShare?.let { song ->
             ShareSheetDialog(
                 song = song,
+                onSendGift = { to, message, done ->
+                    viewModel.sendGift(song, to, message, done)
+                },
                 onDismiss = { songPendingShare = null }
             )
         }

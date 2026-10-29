@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.ExitToApp
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Language
@@ -53,10 +54,9 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -85,20 +85,40 @@ import androidx.core.content.ContextCompat
 import com.example.data.local.AppSettings
 import com.example.data.local.AppSettingsStore
 import com.example.data.local.HeatmapStats
+import com.example.data.local.ListeningHeatmap
 import com.example.ui.theme.NoxaBlack
 import com.example.ui.theme.NoxaBorder
+import com.example.ui.theme.NoxaEmber
+import com.example.ui.theme.NoxaError
+import com.example.ui.theme.NoxaHaze
 import com.example.ui.theme.NoxaLime
 import com.example.ui.theme.NoxaPurple
 import com.example.ui.theme.NoxaPurpleDeep
+import com.example.ui.theme.NoxaRadius
 import com.example.ui.theme.NoxaSurface
 import com.example.ui.theme.NoxaSurfaceElevated
 import com.example.ui.theme.NoxaSurfaceSecondary
+import com.example.ui.theme.NoxaSurfaceTertiary
 import com.example.ui.theme.NoxaTextPrimary
 import com.example.ui.theme.NoxaTextSecondary
 import com.example.ui.theme.NoxaTextTertiary
+import com.example.ui.components.noxaAppear
 import com.example.ui.components.noxaTap
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.platform.LocalHapticFeedback
+import com.example.ui.components.SectionHeader
+import com.example.ui.components.SettingsChoiceRow
+import com.example.ui.components.SettingsGroup
+import com.example.ui.components.SettingsRow
+import com.example.ui.components.SettingsRowDivider
+import com.example.ui.components.SettingsSectionLabel
+import com.example.ui.components.SettingsToggleRow
+import com.example.data.local.JournalMoods
+import com.example.data.local.JournalStore
+import com.example.data.local.QuestEngine
+import com.example.data.support.SongGift
+import androidx.compose.material.icons.filled.EmojiEvents
+import androidx.compose.material.icons.filled.LocalFireDepartment
+import androidx.compose.material.icons.filled.MenuBook
+import androidx.compose.material.icons.filled.Redeem
 import com.example.ui.viewmodel.WeeklyRecap
 import com.example.ui.viewmodel.YearListeningUi
 import kotlinx.coroutines.Dispatchers
@@ -152,6 +172,14 @@ fun ProfileScreen(
     /** Pengaturan → Bahasa. Default Indonesia (salinan app hari ini). */
     language: com.example.data.local.AppLanguage = com.example.data.local.AppLanguage.ID,
     onSetLanguage: (com.example.data.local.AppLanguage) -> Unit = {},
+    /** v3.3.3 — Kirim Lagu: kotak masuk kiriman lagu dari teman. */
+    gifts: List<SongGift> = emptyList(),
+    /** Refresh inbox dibuka sekali tiap profil dibuka (jaringan). */
+    onRefreshGifts: () -> Unit = {},
+    /** Putar lagu yang dikirim teman (dipanggil saat baris kiriman ditekan). */
+    onPlayGift: (SongGift) -> Unit = {},
+    /** Tandai kiriman sudah dibaca (optimistik di UI + tulis ke backend). */
+    onMarkGiftRead: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -253,235 +281,597 @@ fun ProfileScreen(
     // Floating QRIS popup for supporting the developer.
     var showQrisDialog by remember { mutableStateOf(false) }
 
+    // Ambient wash hidup di belakang layar ini (dibungkus pemanggil di
+    // NoxaApp), sehingga konten profil duduk di atas cahaya yang sama dengan
+    // Home — bukan di atas hitam datar. Layar ini sendiri transparan.
+    LaunchedEffect(currentUser?.uid) { onRefreshGifts() }
+
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(NoxaBlack)
             .statusBarsPadding()
             .verticalScroll(scrollState)
             .padding(bottom = 120.dp)
             .testTag("profile_screen")
-    ) {
-        // Profile Header
-        Text(
-            text = "Profile & Settings",
-            color = NoxaTextPrimary,
-            fontSize = 28.sp,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 16.dp)
-        )
-
-        // User Info Card
-        Card(
+    ) {        // ---------------------------------------------------- Hero header
+        // Same header language as Home: a tracked greeting eyebrow, the name
+        // at display size, avatar at the trailing edge. Opening the profile
+        // the way Home opens makes both pages read as one product.
+        val greeting = remember {
+            when (java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)) {
+                in 4..11 -> "Selamat pagi"
+                in 12..16 -> "Selamat siang"
+                else -> "Selamat malam"
+            }
+        }
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = NoxaSurfaceElevated),
-            border = androidx.compose.foundation.BorderStroke(1.dp, NoxaBorder)
+                .noxaAppear()
+                .padding(horizontal = 20.dp, vertical = 16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    if (currentUser?.photoUrl != null) {
-                        coil.compose.AsyncImage(
-                            model = currentUser.photoUrl,
-                            contentDescription = "Avatar",
-                            contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-                            modifier = Modifier
-                                .size(54.dp)
-                                .clip(CircleShape)
-                                .border(1.5.dp, NoxaLime, CircleShape)
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = greeting,
+                    color = NoxaTextTertiary,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    letterSpacing = 1.4.sp
+                )
+                Text(
+                    text = currentUser?.displayName ?: "Mode Tamu",
+                    color = NoxaTextPrimary,
+                    fontSize = 25.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = (-0.5).sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // Handle hanya ditampilkan saat bentuknya username unik;
+                    // nama Google berspasi tetap tampil sebagai email/hint.
+                    val handle = currentUser?.displayName
+                    if (handle != null && USERNAME_HANDLE.matches(handle)) {
+                        Text(
+                            text = "@$handle",
+                            color = NoxaTextTertiary,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.testTag("profile_username")
                         )
                     } else {
-                        Box(
-                            modifier = Modifier
-                                .size(54.dp)
-                                .clip(CircleShape)
-                                .background(NoxaLime),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = if (currentUser?.displayName != null) currentUser.displayName!!.take(1).uppercase() else "G",
-                                color = NoxaBlack,
-                                fontSize = 24.sp,
-                                fontWeight = FontWeight.Black
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.width(16.dp))
-
-                    Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = currentUser?.displayName ?: "Guest User",
-                            color = NoxaTextPrimary,
-                            fontSize = 17.sp,
-                            fontWeight = FontWeight.Bold
+                            text = currentUser?.email ?: "Google · Email · Phone (OTP)",
+                            color = NoxaTextSecondary,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                text = currentUser?.email ?: "Mode Tamu (Login Disarankan)",
-                                color = if (currentUser != null) NoxaLime else NoxaTextSecondary,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Medium,
-                                maxLines = 1,
-                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f, fill = false)
-                            )
-                            // Developer: the purple seal sits right of the
-                            // email so the identity never reads as plain text.
-                            if (currentUser?.role ==
-                                com.example.data.support.AccountRole.DEVELOPER
-                            ) {
-                                Spacer(modifier = Modifier.width(6.dp))
-                                com.example.ui.components.VerifiedBadgePurple(size = 15.dp)
-                                Spacer(modifier = Modifier.width(5.dp))
-                                Text(
-                                    text = "Developer",
-                                    color = NoxaPurple,
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Black
-                                )
-                            }
-                        }
-                        // Unique Firestore username (registered accounts only):
-                        // only shown when it is handle-shaped, so Google names
-                        // with spaces do not look odd here.
-                        val handle = currentUser?.displayName
-                        if (handle != null && USERNAME_HANDLE.matches(handle)) {
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = "@$handle",
-                                color = NoxaTextTertiary,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Medium,
-                                modifier = Modifier.testTag("profile_username")
-                            )
-                        }
+                    }
+                    if (currentUser?.role == com.example.data.support.AccountRole.DEVELOPER) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        com.example.ui.components.VerifiedBadgePurple(size = 14.dp)
+                        Spacer(modifier = Modifier.width(5.dp))
+                        Text(
+                            text = "Developer",
+                            color = NoxaPurple,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Black
+                        )
                     }
                 }
-
-                Spacer(modifier = Modifier.height(14.dp))
-
-                if (currentUser != null) {
-                    androidx.compose.material3.OutlinedButton(
-                        onClick = { showSignOutDialog = true },
-                        shape = RoundedCornerShape(20.dp),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, NoxaBorder),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("Sign Out", color = NoxaTextSecondary, fontSize = 13.sp)
-                    }
-                } else {
-                    // Every sign-in method (Google / Email / Phone OTP) lives
-                    // behind one CTA — the hub keeps this card clean now that
-                    // there are three ways in.
-                    androidx.compose.material3.Button(
-                        onClick = onOpenGetStarted,
-                        enabled = !isSigningIn,
-                        shape = RoundedCornerShape(20.dp),
-                        colors = androidx.compose.material3.ButtonDefaults.buttonColors(
-                            containerColor = NoxaLime,
-                            contentColor = NoxaBlack
-                        ),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("get_started_btn")
-                    ) {
-                        Text("Get Started", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
+            }
+            Spacer(modifier = Modifier.width(12.dp))
+            if (currentUser?.photoUrl != null) {
+                coil.compose.AsyncImage(
+                    model = currentUser.photoUrl,
+                    contentDescription = "Avatar",
+                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                    modifier = Modifier
+                        .size(46.dp)
+                        .clip(CircleShape)
+                        // Neutral edge, not a brand ring: same rule as Home.
+                        .border(1.dp, NoxaBorder, CircleShape)
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .size(46.dp)
+                        .clip(CircleShape)
+                        .background(NoxaSurfaceSecondary)
+                        .border(1.dp, NoxaBorder, CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
                     Text(
-                        text = "Google · Email · Phone (OTP)",
-                        color = NoxaTextTertiary,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Medium,
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                        modifier = Modifier.fillMaxWidth()
+                        text = (currentUser?.displayName ?: "G").take(1).uppercase(),
+                        color = NoxaTextPrimary,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold
                     )
                 }
             }
         }
 
-        // PENGATURAN AKUN — ganti username & password dari aplikasi.
-        if (currentUser != null && currentUser.email != null) {
-            Text(
-                text = "Pengaturan Akun",
-                color = NoxaTextPrimary,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
-            )
-            Card(
+        // ------------------------------------------------- Glance statistics
+        // Tiga angka ringkas dari data yang sama dengan heatmap: sekilas
+        // status dengar tanpa harus scroll ke kartu statistik di bawah.
+        val statsNow = yearListening.stats
+        if (statsNow != null) {
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 20.dp),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = NoxaSurfaceElevated),
-                border = androidx.compose.foundation.BorderStroke(1.dp, NoxaBorder)
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Column(modifier = Modifier.padding(vertical = 4.dp)) {
-                    AccountSettingRow(
-                        icon = Icons.Default.Person,
-                        title = "Ganti Username",
-                        subtitle = "Username tampil di profil & chat support",
-                        onClick = { showUsernameDialog = true },
-                        tag = "settings_change_username"
-                    )
-                    Box(
+                listOf(
+                    "Streak" to "${statsNow.currentStreak} hari",
+                    "Lagu tahun ini" to "${statsNow.totalPlays}",
+                    "Hari aktif" to "${statsNow.activeDays}"
+                ).forEach { (label, value) ->
+                    Column(
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .height(1.dp)
-                            .background(NoxaBorder)
-                    )
-                    AccountSettingRow(
-                        icon = Icons.Default.Security,
-                        title = "Ganti Password",
-                        subtitle = "Verifikasi password lama dulu",
-                        onClick = { showPasswordDialog = true },
-                        tag = "settings_change_password"
-                    )
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(1.dp)
-                            .background(NoxaBorder)
-                    )
-                    AccountSettingRow(
+                            .weight(1f)
+                            .clip(RoundedCornerShape(NoxaRadius.md))
+                            .background(NoxaSurfaceElevated)
+                            .padding(horizontal = 10.dp, vertical = 11.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = value,
+                            color = NoxaLime,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Black
+                        )
+                        Text(
+                            text = label,
+                            color = NoxaTextTertiary,
+                            fontSize = 10.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            }
+        }
+
+        // Guest CTA — semua metode masuk tetap lewat satu hub.
+        if (currentUser == null) {
+            Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp)) {
+                androidx.compose.material3.Button(
+                    onClick = onOpenGetStarted,
+                    enabled = !isSigningIn,
+                    shape = RoundedCornerShape(20.dp),
+                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                        containerColor = NoxaLime,
+                        contentColor = NoxaBlack
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("get_started_btn")
+                ) {
+                    Text("Get Started", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "Google · Email · Phone (OTP)",
+                    color = NoxaTextTertiary,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
+
+        // ------------------------------------------------------- Grup AKUN
+        // Satu grup inset berisi semua tindakan akun — termasuk Sign Out yang
+        // dulu berdiri sendiri di kartu identitas.
+        if (currentUser != null) {
+            SettingsSectionLabel("Akun")
+            SettingsGroup(tag = "account_group") {
+                SettingsRow(
+                    icon = Icons.Default.Person,
+                    iconTint = NoxaHaze,
+                    title = "Ganti Username",
+                    subtitle = "Username tampil di profil & chat support",
+                    onClick = { showUsernameDialog = true },
+                    tag = "settings_change_username"
+                )
+                SettingsRowDivider()
+                SettingsRow(
+                    icon = Icons.Default.Security,
+                    iconTint = NoxaHaze,
+                    title = "Ganti Password",
+                    subtitle = "Verifikasi password lama dulu",
+                    onClick = { showPasswordDialog = true },
+                    tag = "settings_change_password"
+                )
+                if (currentUser.email != null) {
+                    SettingsRowDivider()
+                    SettingsRow(
                         icon = Icons.Default.Delete,
+                        iconTint = NoxaError,
                         title = "Hapus Akun",
                         subtitle = "Permanen — data akun & chat support ikut terhapus",
+                        titleColor = NoxaError,
                         onClick = { showDeleteAccountDialog = true },
                         tag = "settings_delete_account"
                     )
                 }
+                SettingsRowDivider()
+                SettingsRow(
+                    icon = Icons.Default.ExitToApp,
+                    iconTint = NoxaError,
+                    title = "Keluar",
+                    subtitle = "Akhiri sesi di perangkat ini",
+                    titleColor = NoxaError,
+                    onClick = { showSignOutDialog = true },
+                    tag = "settings_sign_out"
+                )
             }
         }
 
-        Spacer(modifier = Modifier.height(24.dp))
+        // ---------------------------------------------- NOXA Quest (3.3.3)
+        // Misi mingguan yang dihitung murni dari data dengar di perangkat —
+        // tidak ada server, tidak ada klaim: selesai = progress penuh.
+        val quests = remember(weeklyRecap, yearListening) {
+            QuestEngine.weekly(
+                playsWeek = weeklyRecap.plays,
+                topSongPlays = weeklyRecap.topSongPlays,
+                currentStreak = yearListening.stats?.currentStreak ?: 0L
+            )
+        }
+        SettingsSectionLabel("NOXA Quest")
+        SettingsGroup(tag = "quest_card") {
+            Row(
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Default.EmojiEvents,
+                    contentDescription = null,
+                    tint = NoxaLime,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Misi minggu ini",
+                    color = NoxaTextPrimary,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.weight(1f))
+                Text(
+                    text = "${quests.count { it.completed }}/${quests.size} selesai",
+                    color = NoxaLime,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            SettingsRowDivider(hasIcon = false)
+            quests.forEachIndexed { index, quest ->
+                if (index > 0) SettingsRowDivider(hasIcon = false)
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 11.dp)
+                        .testTag("quest_${quest.id}"),
+                    verticalArrangement = Arrangement.spacedBy(7.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = questIcon(quest.id),
+                            contentDescription = null,
+                            tint = if (quest.completed) NoxaLime else NoxaTextTertiary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(9.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = quest.title,
+                                color = NoxaTextPrimary,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = quest.hint,
+                                color = NoxaTextTertiary,
+                                fontSize = 11.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(10.dp))
+                        if (quest.completed) {
+                            Icon(
+                                imageVector = Icons.Default.Check,
+                                contentDescription = "Selesai",
+                                tint = NoxaLime,
+                                modifier = Modifier.size(17.dp)
+                            )
+                        } else {
+                            Text(
+                                text = "${quest.progress}/${quest.target}",
+                                color = NoxaTextSecondary,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
+                    // Progress bar: tonal track + lime fill — lime hanya
+                    // saat sedang bergerak, sesuai aturan sinyal merek.
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(5.dp)
+                            .clip(RoundedCornerShape(NoxaRadius.full))
+                            .background(NoxaSurfaceSecondary)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth(quest.fraction)
+                                .height(5.dp)
+                                .clip(RoundedCornerShape(NoxaRadius.full))
+                                .background(NoxaLime)
+                        )
+                    }
+                }
+            }
+        }
 
-        // MINI WEEKLY RECAP
-        Text(
-            text = "Rekap Minggu Ini",
-            color = NoxaTextPrimary,
-            fontSize = 16.sp,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
-        )
+        // ------------------------------------------- Jurnal Dengar (3.3.3)
+        // Mood hari ini + tujuh hari terakhir. Mood disimpan lokal per hari
+        // (epoch day yang sama dengan heatmap), jadi sejarah kecil tersimpan
+        // tanpa akun dan tanpa jaringan.
+        val journal = remember(context) { JournalStore(context) }
+        val todayIndex = remember { ListeningHeatmap.dayIndex(System.currentTimeMillis()) }
+        var todayMood by remember { mutableStateOf(journal.moodFor(todayIndex)) }
+        val lastSevenDays = remember(yearListening) {
+            yearListening.stats?.cells?.takeLast(7).orEmpty()
+        }
+        val weekMoods = remember(todayMood) {
+            journal.moodsFor(lastSevenDays.map { it.dayIndex })
+        }
+        SettingsSectionLabel("Jurnal Dengar")
+        SettingsGroup(tag = "journal_card") {
+            Row(
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Default.MenuBook,
+                    contentDescription = null,
+                    tint = NoxaEmber,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Hari ini",
+                    color = NoxaTextPrimary,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.weight(1f))
+                Text(
+                    text = "${lastSevenDays.lastOrNull()?.plays ?: 0} lagu",
+                    color = NoxaTextSecondary,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+            SettingsRowDivider(hasIcon = false)
 
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp)
-                .testTag("weekly_recap_card"),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = NoxaSurfaceElevated),
-            border = androidx.compose.foundation.BorderStroke(1.dp, NoxaBorder)
-        ) {
+            // Pilih mood hari ini — chip nada, bukan emoji: emoji tidak
+            // konsisten di launcher OEM, chip warna selalu terbaca.
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                horizontalArrangement = Arrangement.spacedBy(7.dp)
+            ) {
+                JournalMoods.ALL.forEach { mood ->
+                    val selected = todayMood == mood.id
+                    val moodColor = journalColor(mood.id)
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(NoxaRadius.full))
+                            .background(
+                                if (selected) moodColor.copy(alpha = 0.22f) else NoxaSurfaceSecondary
+                            )
+                            .noxaTap {
+                                todayMood = if (selected) null else mood.id
+                                journal.setMood(todayIndex, if (selected) "" else mood.id)
+                            }
+                            .padding(horizontal = 11.dp, vertical = 6.dp)
+                            .testTag("journal_mood_${mood.id}"),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = mood.label,
+                            color = if (selected) moodColor else NoxaTextSecondary,
+                            fontSize = 11.sp,
+                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+                        )
+                    }
+                }
+            }
+
+            // Tujuh hari terakhir: bar kecil per hari (intensitas lime) +
+            // titik mood bila hari itu diberi catatan.
+            if (lastSevenDays.isNotEmpty()) {
+                SettingsRowDivider(hasIcon = false)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.Bottom
+                ) {
+                    val best = (lastSevenDays.maxOfOrNull { it.plays } ?: 0).coerceAtLeast(1)
+                    lastSevenDays.forEach { cell ->
+                        val mood = weekMoods[cell.dayIndex]
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height((8 + 26 * cell.plays / best).dp)
+                                    .clip(RoundedCornerShape(NoxaRadius.xs))
+                                    .background(
+                                        if (cell.plays > 0) NoxaLime.copy(
+                                            alpha = 0.35f + 0.65f * cell.plays / best
+                                        ) else NoxaSurfaceSecondary
+                                    )
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .size(5.dp)
+                                    .clip(CircleShape)
+                                    .background(mood?.let { journalColor(it) } ?: NoxaSurfaceTertiary)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // --------------------------------------------- Kirim Lagu (3.3.3)
+        // Inbox kiriman teman — hanya untuk akun masuk. Kirim lagunya lewat
+        // menu Bagikan di pemutar/list; halaman ini menerima & memutar.
+        if (currentUser != null) {
+            val unread = gifts.count { !it.read }
+            SettingsSectionLabel("Lagu untukmu")
+            SettingsGroup(tag = "gifts_inbox") {
+                Row(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Redeem,
+                        contentDescription = null,
+                        tint = NoxaPurple,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Kiriman teman",
+                        color = NoxaTextPrimary,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.weight(1f))
+                    if (unread > 0) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(NoxaRadius.full))
+                                .background(NoxaLime)
+                                .padding(horizontal = 8.dp, vertical = 2.dp)
+                        ) {
+                            Text(
+                                text = "$unread baru",
+                                color = NoxaBlack,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Black
+                            )
+                        }
+                    }
+                }
+                if (gifts.isEmpty()) {
+                    Text(
+                        text = "Belum ada lagu masuk. Minta teman kirim lewat menu " +
+                            "Bagikan di lagu — nanti muncul di sini.",
+                        color = NoxaTextTertiary,
+                        fontSize = 12.sp,
+                        lineHeight = 17.sp,
+                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 14.dp)
+                    )
+                } else {
+                    gifts.take(8).forEachIndexed { index, gift ->
+                        if (index > 0) SettingsRowDivider(hasIcon = false)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .noxaTap {
+                                    onPlayGift(gift)
+                                    if (!gift.read) onMarkGiftRead(gift.id)
+                                }
+                                .padding(horizontal = 16.dp, vertical = 10.dp)
+                                .testTag("gift_row_${gift.id}"),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            coil.compose.AsyncImage(
+                                model = gift.artwork,
+                                contentDescription = null,
+                                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                                modifier = Modifier
+                                    .size(42.dp)
+                                    .clip(RoundedCornerShape(NoxaRadius.xs))
+                                    .background(NoxaSurfaceSecondary)
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    if (!gift.read) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(6.dp)
+                                                .clip(CircleShape)
+                                                .background(NoxaLime)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                    }
+                                    Text(
+                                        text = gift.title,
+                                        color = NoxaTextPrimary,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                Text(
+                                    text = "dari ${gift.fromName} · ${gift.artist}",
+                                    color = NoxaTextSecondary,
+                                    fontSize = 11.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                if (gift.message.isNotBlank()) {
+                                    Text(
+                                        text = "\u201c${gift.message}\u201d",
+                                        color = NoxaTextTertiary,
+                                        fontSize = 11.sp,
+                                        fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                            Icon(
+                                imageVector = Icons.Default.PlayArrow,
+                                contentDescription = "Putar",
+                                tint = NoxaLime,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // MINI WEEKLY RECAP — shelf header + grup inset (tanpa border).
+        SectionHeader(title = "Rekap minggu ini", subtitle = "Dari 7 hari terakhir")
+        Spacer(modifier = Modifier.height(10.dp))
+
+        SettingsGroup(tag = "weekly_recap_card") {
             if (weeklyRecap.plays == 0) {
                 Text(
                     text = "Belum ada lagu yang diputar minggu ini. Putar lagu dulu ya.",
@@ -509,414 +899,87 @@ fun ProfileScreen(
             }
         }
 
-        Spacer(modifier = Modifier.height(24.dp))
-
         // PETA PANAS DENGAR — a year of listening, day by day.
         ListeningHeatmapCard(yearListening = yearListening)
-
-        Spacer(modifier = Modifier.height(24.dp))
 
         // NOXA WRAPPED MINI — the deep recap.
         WrappedMiniCard(yearListening = yearListening, onOpenWrapped = onOpenWrapped)
 
-        Spacer(modifier = Modifier.height(24.dp))
-
         // KARTU PROFIL NOXA — the shareable identity card.
+        SectionHeader(
+            title = "Kartu Profil",
+            subtitle = "Avatar, nama, dan statistik dalam satu gambar"
+        )
+        Spacer(modifier = Modifier.height(10.dp))
         NoxaProfileCard(currentUser = currentUser, yearListening = yearListening)
 
-        Spacer(modifier = Modifier.height(24.dp))
-
-        // DEVELOPER SECTION — ABOUT SKY PROMINENT CARD
-        Text(
-            text = "Developer & Vision",
-            color = NoxaTextPrimary,
-            fontSize = 16.sp,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
-        )
-
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp)
-                .clickable { onNavigateToAboutSky() }
-                .testTag("about_sky_nav_card"),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = NoxaSurfaceSecondary),
-            border = androidx.compose.foundation.BorderStroke(1.5.dp, NoxaLime)
-        ) {
-            Row(
-                modifier = Modifier.padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.weight(1f)
-                ) {
+        // JELAJAHI — About Sky, NOXA AI, dan Dengar Bareng dalam satu grup
+        // inset: baris biasa dengan chevron, bukan tiga kartu berbingkai.
+        SettingsSectionLabel("Jelajahi")
+        SettingsGroup(tag = "explore_group") {
+            SettingsRow(
+                icon = Icons.Default.Code,
+                iconTint = NoxaLime,
+                title = "About Sky",
+                subtitle = "Meet the architect behind NOXA and Sky Vibes",
+                onClick = onNavigateToAboutSky,
+                tag = "about_sky_nav_card",
+                trailing = {
                     Box(
                         modifier = Modifier
-                            .size(46.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(NoxaLime),
-                        contentAlignment = Alignment.Center
+                            .clip(RoundedCornerShape(NoxaRadius.xs))
+                            .background(NoxaLime.copy(alpha = 0.16f))
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Code,
-                            contentDescription = "About Sky",
-                            tint = NoxaBlack,
-                            modifier = Modifier.size(24.dp)
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.width(14.dp))
-
-                    Column {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                text = "About Sky",
-                                color = NoxaTextPrimary,
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(4.dp))
-                                    .background(NoxaLime.copy(alpha = 0.2f))
-                                    .padding(horizontal = 6.dp, vertical = 2.dp)
-                            ) {
-                                Text(
-                                    text = "CREATOR",
-                                    color = NoxaLime,
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Black
-                                )
-                            }
-                        }
                         Text(
-                            text = "Meet the architect behind NOXA and Sky Vibes",
-                            color = NoxaTextSecondary,
-                            fontSize = 12.sp
+                            text = "CREATOR",
+                            color = NoxaLime,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Black
                         )
                     }
                 }
+            )
+            SettingsRowDivider()
+            SettingsRow(
+                title = "Chat dengan NOXA AI",
+                subtitle = "Minta putar lagu, bikin playlist, atau curhat",
+                leading = { com.example.ui.screens.AiAvatar(size = 30.dp) },
+                onClick = onOpenAiChat,
+                tag = "ai_chat_nav_card"
+            )
+            SettingsRowDivider()
+            SettingsRow(
+                icon = Icons.Default.Group,
+                iconTint = NoxaHaze,
+                title = "Dengar Bareng",
+                subtitle = "Bikin room, kode — lagu & posisi sinkron bareng teman",
+                onClick = onOpenRoom,
+                tag = "room_nav_card"
+            )
+        }
 
-                Icon(
-                    imageVector = Icons.Default.ChevronRight,
-                    contentDescription = "Navigate to About Sky",
-                    tint = NoxaLime,
-                    modifier = Modifier.size(24.dp)
+        // BANTUAN — support + admin (admin hanya untuk akun developer).
+        SettingsSectionLabel("Bantuan")
+        SettingsGroup(tag = "help_group") {
+            SettingsRow(
+                icon = Icons.Default.SupportAgent,
+                iconTint = NoxaPurple,
+                title = "Chat dengan NOXA Support",
+                subtitle = "Lapor bug atau keluhan — dibalas langsung di aplikasi",
+                onClick = onOpenSupportChat,
+                tag = "support_chat_nav_card"
+            )
+            if (currentUser?.role == com.example.data.support.AccountRole.DEVELOPER) {
+                SettingsRowDivider()
+                SettingsRow(
+                    icon = Icons.Default.Star,
+                    iconTint = NoxaPurple,
+                    title = "NOXA Admin",
+                    subtitle = "Kelola akun, buat admin/partner, balas laporan user",
+                    onClick = onOpenDevPanel,
+                    tag = "dev_panel_nav_card"
                 )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(20.dp))
-
-        // NOXA AI — asisten musik yang bisa putar lagu & bikin playlist.
-        Text(
-            text = "Asisten",
-            color = NoxaTextPrimary,
-            fontSize = 16.sp,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
-        )
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp)
-                .clickable { onOpenAiChat() }
-                .testTag("ai_chat_nav_card"),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = NoxaSurfaceElevated),
-            border = androidx.compose.foundation.BorderStroke(1.5.dp, NoxaLime.copy(alpha = 0.5f))
-        ) {
-            Row(
-                modifier = Modifier.padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                com.example.ui.screens.AiAvatar(size = 46.dp)
-                Spacer(modifier = Modifier.width(14.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "Chat dengan NOXA AI",
-                        color = NoxaTextPrimary,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        text = "Minta putar lagu, bikin playlist, atau curhat — asisten musik kamu",
-                        color = NoxaTextSecondary,
-                        fontSize = 12.sp
-                    )
-                }
-                Icon(
-                    imageVector = Icons.Default.ChevronRight,
-                    contentDescription = null,
-                    tint = NoxaLime,
-                    modifier = Modifier.size(24.dp)
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // DENGAR BARENG — shared listening room (iOS-style entry card).
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp)
-                .clickable { onOpenRoom() }
-                .testTag("room_nav_card"),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = NoxaSurfaceElevated),
-            border = androidx.compose.foundation.BorderStroke(1.dp, NoxaBorder)
-        ) {
-            Row(
-                modifier = Modifier.padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(46.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(NoxaLime.copy(alpha = 0.15f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Group,
-                        contentDescription = "Dengar Bareng",
-                        tint = NoxaLime,
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
-                Spacer(modifier = Modifier.width(14.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "Dengar Bareng",
-                        color = NoxaTextPrimary,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        text = "Bikin room, bagikan kode — lagu & posisi sinkron bareng teman",
-                        color = NoxaTextSecondary,
-                        fontSize = 12.sp
-                    )
-                }
-                Icon(
-                    imageVector = Icons.Default.ChevronRight,
-                    contentDescription = null,
-                    tint = NoxaLime,
-                    modifier = Modifier.size(24.dp)
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(20.dp))
-
-        // CHAT DENGAN NOXA SUPPORT — lapor bug & keluhan langsung dari app.
-        Text(
-            text = "Bantuan",
-            color = NoxaTextPrimary,
-            fontSize = 16.sp,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
-        )
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp)
-                .clickable { onOpenSupportChat() }
-                .testTag("support_chat_nav_card"),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = NoxaSurfaceElevated),
-            border = androidx.compose.foundation.BorderStroke(1.5.dp, NoxaPurple.copy(alpha = 0.5f))
-        ) {
-            Row(
-                modifier = Modifier.padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(46.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(NoxaPurple),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.SupportAgent,
-                        contentDescription = "NOXA Support",
-                        tint = NoxaTextPrimary,
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
-                Spacer(modifier = Modifier.width(14.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    com.example.ui.components.SupportIdentityRow(name = "Chat dengan NOXA Support")
-                    Text(
-                        text = "Lapor bug atau keluhan — dibalas langsung di aplikasi",
-                        color = NoxaTextSecondary,
-                        fontSize = 12.sp
-                    )
-                }
-                Icon(
-                    imageVector = Icons.Default.ChevronRight,
-                    contentDescription = null,
-                    tint = NoxaPurple,
-                    modifier = Modifier.size(24.dp)
-                )
-            }
-        }
-
-        // NOXA ADMIN — hanya untuk akun developer.
-        if (currentUser?.role == com.example.data.support.AccountRole.DEVELOPER) {
-            Spacer(modifier = Modifier.height(12.dp))
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 20.dp)
-                    .clickable { onOpenDevPanel() }
-                    .testTag("dev_panel_nav_card"),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = NoxaSurfaceSecondary),
-                border = androidx.compose.foundation.BorderStroke(1.5.dp, NoxaPurple)
-            ) {
-                Row(
-                    modifier = Modifier.padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(46.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(NoxaPurpleDeep),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        com.example.ui.components.VerifiedBadgePurple(size = 26.dp)
-                    }
-                    Spacer(modifier = Modifier.width(14.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        com.example.ui.components.SupportIdentityRow(name = "NOXA Admin")
-                        Text(
-                            text = "Kelola akun, buat akun admin/partner, balas laporan user",
-                            color = NoxaTextSecondary,
-                            fontSize = 12.sp
-                        )
-                    }
-                    Icon(
-                        imageVector = Icons.Default.ChevronRight,
-                        contentDescription = null,
-                        tint = NoxaPurple,
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        // Direct Links Card
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = NoxaSurfaceElevated),
-            border = androidx.compose.foundation.BorderStroke(1.dp, NoxaBorder)
-        ) {
-            Column(modifier = Modifier.padding(vertical = 4.dp)) {
-                // Sky Vibes Official Website
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable {
-                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://skyvibes.my.id"))
-                            context.startActivity(intent)
-                        }
-                        .padding(horizontal = 16.dp, vertical = 14.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Language, contentDescription = "Website", tint = NoxaLime, modifier = Modifier.size(20.dp))
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Text("Official Website (skyvibes.my.id)", color = NoxaTextPrimary, fontSize = 14.sp)
-                    }
-                    Icon(Icons.Default.OpenInNew, contentDescription = "Open", tint = NoxaTextTertiary, modifier = Modifier.size(16.dp))
-                }
-
-                Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(NoxaBorder))
-
-                // GitHub
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable {
-                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/skyyy0"))
-                            context.startActivity(intent)
-                        }
-                        .padding(horizontal = 16.dp, vertical = 14.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Code, contentDescription = "GitHub", tint = NoxaLime, modifier = Modifier.size(20.dp))
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Text("GitHub Profile (skyyy0)", color = NoxaTextPrimary, fontSize = 14.sp)
-                    }
-                    Icon(Icons.Default.OpenInNew, contentDescription = "Open", tint = NoxaTextTertiary, modifier = Modifier.size(16.dp))
-                }
-
-                Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(NoxaBorder))
-
-                // Report Bug via Telegram — lapor di aplikasi (Chat NOXA
-                // Support di atas) atau langsung ke Sky di Telegram.
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable {
-                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://t.me/sekaynotdev"))
-                            context.startActivity(intent)
-                        }
-                        .padding(horizontal = 16.dp, vertical = 14.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        // Telegram paper-plane, drawn as a vector: Material has
-                        // no Telegram glyph and emoji never rendered on cards.
-                        Icon(
-                            imageVector = TelegramIcons.Plane,
-                            contentDescription = "Telegram",
-                            tint = Color(0xFF229ED9),
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Text("Telegram Sky — @sekaynotdev", color = NoxaTextPrimary, fontSize = 14.sp)
-                    }
-                    Icon(Icons.Default.OpenInNew, contentDescription = "Open", tint = NoxaTextTertiary, modifier = Modifier.size(16.dp))
-                }
-
-                Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(NoxaBorder))
-
-                // Support Developer NOXA — klik untuk popup QRIS donasi
-                // pembangunan & pengembangan NOXA.
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { showQrisDialog = true }
-                        .padding(horizontal = 16.dp, vertical = 14.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.QrCode, contentDescription = "QRIS", tint = NoxaLime, modifier = Modifier.size(20.dp))
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Text("Support Developer NOXA", color = NoxaTextPrimary, fontSize = 14.sp)
-                    }
-                    Icon(Icons.Default.ChevronRight, contentDescription = null, tint = NoxaPurple, modifier = Modifier.size(20.dp))
-                }
             }
         }
 
@@ -924,190 +987,159 @@ fun ProfileScreen(
             QrisSupportDialog(onDismiss = { showQrisDialog = false })
         }
 
-        Spacer(modifier = Modifier.height(24.dp))
+        // TAUTAN — situs, GitHub, Telegram, QRIS dalam satu grup.
+        SettingsSectionLabel("Tautan")
+        SettingsGroup(tag = "links_group") {
+            SettingsRow(
+                icon = Icons.Default.Language,
+                iconTint = NoxaLime,
+                title = "Official Website",
+                value = "skyvibes.my.id",
+                onClick = {
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://skyvibes.my.id"))
+                    context.startActivity(intent)
+                },
+                tag = "link_website"
+            )
+            SettingsRowDivider()
+            SettingsRow(
+                icon = Icons.Default.Code,
+                iconTint = NoxaTextSecondary,
+                title = "GitHub Profile",
+                value = "skyyy0",
+                onClick = {
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/skyyy0"))
+                    context.startActivity(intent)
+                },
+                tag = "link_github"
+            )
+            SettingsRowDivider()
+            SettingsRow(
+                // Telegram paper-plane digambar sebagai vektor: Material tidak
+                // punya glif Telegram dan emoji tidak konsisten di kartu.
+                icon = TelegramIcons.Plane,
+                iconTint = Color(0xFF229ED9),
+                title = "Telegram Sky",
+                value = "@sekaynotdev",
+                onClick = {
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://t.me/sekaynotdev"))
+                    context.startActivity(intent)
+                },
+                tag = "link_telegram"
+            )
+            SettingsRowDivider()
+            SettingsRow(
+                icon = Icons.Default.QrCode,
+                iconTint = NoxaPurple,
+                title = "Support Developer NOXA",
+                subtitle = "Scan QRIS — dukung pembangunan & pengembangan NOXA",
+                onClick = { showQrisDialog = true },
+                tag = "link_qris"
+            )
+        }
 
-        // Audio & Playback Settings
-        Text(
-            text = "Audio Quality & Streaming",
-            color = NoxaTextPrimary,
-            fontSize = 16.sp,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
-        )
+        Spacer(modifier = Modifier.height(4.dp))
 
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = NoxaSurfaceElevated),
-            border = androidx.compose.foundation.BorderStroke(1.dp, NoxaBorder)
-        ) {
-            Column(modifier = Modifier.padding(vertical = 8.dp)) {
-                listOf(
-                    "Hi-Res Lossless (24-bit/96kHz)",
-                    "High Quality (320 kbps)",
-                    "Standard (192 kbps)"
-                ).forEach { quality ->
-                    val isSelected = selectedQuality == quality
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { selectedQuality = quality }
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = quality,
-                            color = if (isSelected) NoxaLime else NoxaTextPrimary,
-                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                            fontSize = 14.sp
-                        )
-                        if (isSelected) {
-                            Box(
-                                modifier = Modifier
-                                    .size(8.dp)
-                                    .clip(CircleShape)
-                                    .background(NoxaLime)
-                            )
-                        }
-                    }
-                }
+        // Audio & Playback Settings — pilihan kualitas dalam satu grup inset.
+        SettingsSectionLabel("Kualitas Audio")
+        SettingsGroup(tag = "audio_quality_group") {
+            listOf(
+                "Hi-Res Lossless (24-bit/96kHz)",
+                "High Quality (320 kbps)",
+                "Standard (192 kbps)"
+            ).forEachIndexed { index, quality ->
+                if (index > 0) SettingsRowDivider(hasIcon = false)
+                SettingsChoiceRow(
+                    label = quality,
+                    selected = selectedQuality == quality,
+                    onClick = { selectedQuality = quality },
+                    tag = "quality_${quality.hashCode()}"
+                )
             }
         }
 
-        Spacer(modifier = Modifier.height(20.dp))
+        // PLAYER FEATURES — MV quality + toggles dalam satu grup.
+        SettingsSectionLabel("Fitur Pemutar")
+        SettingsGroup(tag = "player_features_group") {
+            Text(
+                text = "Kualitas video MV",
+                color = NoxaTextSecondary,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+            )
+            AppSettingsStore.MV_QUALITY_CHOICES.forEachIndexed { index, height ->
+                if (index > 0) SettingsRowDivider(hasIcon = false)
+                SettingsChoiceRow(
+                    label = "${height}p",
+                    selected = appSettings.mvQualityHeight == height,
+                    onClick = { onSetMvQuality(height) },
+                    tag = "mv_quality_${height}"
+                )
+            }
 
-        // PLAYER FEATURES — MV quality + the extra toggles.
-        Text(
-            text = "Fitur Pemutar",
-            color = NoxaTextPrimary,
-            fontSize = 16.sp,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
-        )
+            SettingsRowDivider(hasIcon = false)
 
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = NoxaSurfaceElevated),
-            border = androidx.compose.foundation.BorderStroke(1.dp, NoxaBorder)
-        ) {
-            Column(modifier = Modifier.padding(vertical = 8.dp)) {
-                Text(
-                    text = "Kualitas video MV",
-                    color = NoxaTextSecondary,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
-                )
-                AppSettingsStore.MV_QUALITY_CHOICES.forEach { height ->
-                    val isSelected = appSettings.mvQualityHeight == height
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { onSetMvQuality(height) }
-                            .padding(horizontal = 16.dp, vertical = 10.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "${height}p",
-                            color = if (isSelected) NoxaLime else NoxaTextPrimary,
-                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                            fontSize = 14.sp
-                        )
-                        if (isSelected) {
-                            Box(
-                                modifier = Modifier
-                                    .size(8.dp)
-                                    .clip(CircleShape)
-                                    .background(NoxaLime)
-                            )
-                        }
-                    }
-                }
+            SettingsToggleRow(
+                title = "Autoplay lagu serupa",
+                subtitle = "Lanjutkan dengan lagu serupa saat antrian habis",
+                checked = appSettings.autoplaySimilar,
+                onCheckedChange = onSetAutoplaySimilar,
+                tag = "setting_autoplay_similar"
+            )
+            SettingsToggleRow(
+                title = "Lirik karaoke",
+                subtitle = "Tampilkan baris lirik sinkron di atas artwork",
+                checked = appSettings.karaokeOverlay,
+                onCheckedChange = onSetKaraokeOverlay,
+                tag = "setting_karaoke_overlay"
+            )
+            SettingsToggleRow(
+                title = "Mulai otomatis saat dibuka",
+                subtitle = "Lanjutkan sesi terakhir begitu aplikasi dibuka",
+                checked = appSettings.autoResumeOnOpen,
+                onCheckedChange = onSetAutoResumeOnOpen,
+                tag = "setting_auto_resume"
+            )
+            SettingsToggleRow(
+                title = "Crossfade lembut",
+                subtitle = if (perfProfile?.crossfadeAllowed == false) {
+                    "Nonaktif di perangkat kelas Hemat (keputusan Sistem Pintar)"
+                } else {
+                    "Pelankan volume di akhir lagu biar transisi mulus"
+                },
+                checked = appSettings.crossfadeEnabled && perfProfile?.crossfadeAllowed != false,
+                onCheckedChange = onSetCrossfade,
+                tag = "setting_crossfade"
+            )
+        }
 
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(1.dp)
-                        .background(NoxaBorder)
-                )
-
-                SettingsToggleRow(
-                    title = "Autoplay lagu serupa",
-                    subtitle = "Lanjutkan dengan lagu serupa saat antrian habis",
-                    checked = appSettings.autoplaySimilar,
-                    onCheckedChange = onSetAutoplaySimilar,
-                    tag = "setting_autoplay_similar"
-                )
-                SettingsToggleRow(
-                    title = "Lirik karaoke",
-                    subtitle = "Tampilkan baris lirik sinkron di atas artwork",
-                    checked = appSettings.karaokeOverlay,
-                    onCheckedChange = onSetKaraokeOverlay,
-                    tag = "setting_karaoke_overlay"
-                )
-                SettingsToggleRow(
-                    title = "Mulai otomatis saat dibuka",
-                    subtitle = "Lanjutkan sesi terakhir begitu aplikasi dibuka",
-                    checked = appSettings.autoResumeOnOpen,
-                    onCheckedChange = onSetAutoResumeOnOpen,
-                    tag = "setting_auto_resume"
-                )
-                SettingsToggleRow(
-                    title = "Crossfade lembut",
-                    subtitle = if (perfProfile?.crossfadeAllowed == false) {
-                        "Nonaktif di perangkat kelas Hemat (keputusan Sistem Pintar)"
+        // NOXA WAKE — layanan voice terpisah, grupnya sendiri supaya baris
+        // izin yang panjang tidak bercampur dengan toggle pemutar.
+        SettingsSectionLabel("NOXA Wake")
+        SettingsGroup(tag = "wake_group") {
+            SettingsToggleRow(
+                title = "\u201cHi NOXA\u201d",
+                subtitle =
+                    "Dengarkan perintah suara (mis. \u201cputarkan Dewa 19\u201d) walau NOXA " +
+                    "sudah ditutup — layar menyala, izin mikrofon & overlay",
+                checked = wakeRunning,
+                onCheckedChange = { enabled ->
+                    if (enabled) {
+                        startNoxaWake()
                     } else {
-                        "Pelankan volume di akhir lagu biar transisi mulus"
-                    },
-                    checked = appSettings.crossfadeEnabled && perfProfile?.crossfadeAllowed != false,
-                    onCheckedChange = onSetCrossfade,
-                    tag = "setting_crossfade"
-                )
-                SettingsToggleRow(
-                    title = "NOXA Wake \u2014 \u201cHi NOXA\u201d",
-                    subtitle =
-                        "Dengarkan perintah suara (mis. \u201cputarkan Dewa 19\u201d) walau NOXA " +
-                        "sudah ditutup — layar menyala, izin mikrofon & overlay",
-                    checked = wakeRunning,
-                    onCheckedChange = { enabled ->
-                        if (enabled) {
-                            startNoxaWake()
-                        } else {
-                            context.stopService(
-                                Intent(context, com.example.voice.NoxaWakeService::class.java)
-                            )
-                        }
-                    },
-                    tag = "setting_noxa_wake"
-                )
-            }
+                        context.stopService(
+                            Intent(context, com.example.voice.NoxaWakeService::class.java)
+                        )
+                    }
+                },
+                tag = "setting_noxa_wake"
+            )
         }
 
-        // SISTEM PINTAR — hasil pemindaian perangkat sekali di awal; semua
-        // knob performa aplikasi (preload, crossfade, cache gambar) ikut tier ini.
-        Text(
-            text = "Sistem Pintar",
-            color = NoxaTextPrimary,
-            fontSize = 16.sp,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
-        )
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp)
-                .testTag("perf_profile_card"),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = NoxaSurfaceElevated),
-            border = androidx.compose.foundation.BorderStroke(1.dp, NoxaBorder)
-        ) {
+        // SISTEM PINTAR — hasil pemindaian perangkat; info dalam grup inset.
+        SettingsSectionLabel("Sistem Pintar")
+        SettingsGroup(tag = "perf_profile_card") {
             Column(modifier = Modifier.padding(16.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
@@ -1139,70 +1171,41 @@ fun ProfileScreen(
 
         // Senyap — daftar "Jangan putar lagi" yang bisa dibatalkan per item.
         if (mutedArtists.isNotEmpty() || mutedSongs.isNotEmpty()) {
-            Text(
-                text = "Jangan putar lagi",
-                color = NoxaTextPrimary,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
-            )
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 20.dp)
-                    .testTag("muted_entries_card"),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = NoxaSurfaceElevated),
-                border = androidx.compose.foundation.BorderStroke(1.dp, NoxaBorder)
-            ) {
-                Column(modifier = Modifier.padding(vertical = 4.dp)) {
-                    mutedArtists.sorted().forEach { artist ->
-                        MutedEntryRow(
-                            label = artist,
-                            kindLabel = "Artis",
-                            onUndo = {
-                                onUnmute(
-                                    com.example.data.local.MutedEntryEntity.KIND_ARTIST,
-                                    artist
-                                )
-                            }
-                        )
-                    }
-                    mutedSongs.sorted().forEach { songId ->
-                        MutedEntryRow(
-                            label = songId,
-                            kindLabel = "Lagu",
-                            onUndo = {
-                                onUnmute(
-                                    com.example.data.local.MutedEntryEntity.KIND_SONG,
-                                    songId
-                                )
-                            }
-                        )
-                    }
+            SettingsSectionLabel("Jangan putar lagi")
+            SettingsGroup(tag = "muted_entries_card") {
+                mutedArtists.sorted().forEachIndexed { index, artist ->
+                    if (index > 0) SettingsRowDivider()
+                    MutedEntryRow(
+                        label = artist,
+                        kindLabel = "Artis",
+                        onUndo = {
+                            onUnmute(
+                                com.example.data.local.MutedEntryEntity.KIND_ARTIST,
+                                artist
+                            )
+                        }
+                    )
+                }
+                mutedSongs.sorted().forEachIndexed { index, songId ->
+                    if (index > 0) SettingsRowDivider()
+                    MutedEntryRow(
+                        label = songId,
+                        kindLabel = "Lagu",
+                        onUndo = {
+                            onUnmute(
+                                com.example.data.local.MutedEntryEntity.KIND_SONG,
+                                songId
+                            )
+                        }
+                    )
                 }
             }
         }
 
-        Spacer(modifier = Modifier.height(20.dp))
-
-        // PEMBARUAN — cara user menyalakan update opsional yang tadi dipilih
-        // "Nanti Saja" (update wajib tetap memblokir sampai terpasang).
-        Text(
-            text = "Pembaruan",
-            color = NoxaTextPrimary,
-            fontSize = 16.sp,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
-        )
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = NoxaSurfaceElevated),
-            border = androidx.compose.foundation.BorderStroke(1.dp, NoxaBorder)
-        ) {
+        // PEMBARUAN + CACHE + BAHASA — satu grup "Aplikasi" (gaya iOS
+        // Settings): versi & status update, clear cache, pemilih bahasa.
+        SettingsSectionLabel("Aplikasi")
+        SettingsGroup(tag = "app_group") {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1248,115 +1251,33 @@ fun ProfileScreen(
                     }
                 }
             }
+
+            SettingsRowDivider()
+            SettingsRow(
+                icon = Icons.Default.Delete,
+                iconTint = NoxaTextSecondary,
+                title = "Clear Cache",
+                value = if (cacheCleared) "0 MB" else "42.8 MB",
+                showChevron = false,
+                onClick = {
+                    cacheCleared = true
+                    Toast.makeText(context, "Storage cache cleared successfully", Toast.LENGTH_SHORT).show()
+                },
+                tag = "clear_cache_row"
+            )
+
+            SettingsRowDivider()
+            SettingsRow(
+                icon = Icons.Default.Language,
+                iconTint = NoxaHaze,
+                title = "Bahasa",
+                value = language.endonym,
+                onClick = { showLanguagePicker = true },
+                tag = "settings_language_card"
+            )
         }
 
-        Spacer(modifier = Modifier.height(20.dp))
-
-        // Storage & Cache
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = NoxaSurfaceElevated),
-            border = androidx.compose.foundation.BorderStroke(1.dp, NoxaBorder)
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable {
-                        cacheCleared = true
-                        Toast.makeText(context, "Storage cache cleared successfully", Toast.LENGTH_SHORT).show()
-                    }
-                    .padding(16.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Default.Delete,
-                        contentDescription = "Clear Cache",
-                        tint = NoxaTextSecondary,
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Column {
-                        Text("Clear Cache", color = NoxaTextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                        Text(
-                            text = if (cacheCleared) "0 MB cached" else "42.8 MB cached",
-                            color = NoxaTextSecondary,
-                            fontSize = 12.sp
-                        )
-                    }
-                }
-
-                Text(
-                    text = "Clear",
-                    color = NoxaLime,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        // BAHASA — in-app language switcher. Indonesia is the untouched
-        // default; other languages are served by the in-app dictionary and
-        // fall back to the Indonesian copy wherever a key is untranslated.
-        Text(
-            text = "Bahasa",
-            color = NoxaTextPrimary,
-            fontSize = 16.sp,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
-        )
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp)
-                .clickable { showLanguagePicker = true }
-                .testTag("settings_language_card"),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = NoxaSurfaceElevated),
-            border = androidx.compose.foundation.BorderStroke(1.dp, NoxaBorder)
-        ) {
-            Row(
-                modifier = Modifier.padding(16.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Default.Language,
-                        contentDescription = "Bahasa",
-                        tint = NoxaLime,
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Column {
-                        Text(
-                            "Bahasa",
-                            color = NoxaTextPrimary,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Text(
-                            text = language.endonym,
-                            color = NoxaTextSecondary,
-                            fontSize = 12.sp,
-                            modifier = Modifier.testTag("settings_language_value")
-                        )
-                    }
-                }
-                Icon(
-                    Icons.Default.ChevronRight,
-                    contentDescription = null,
-                    tint = NoxaTextTertiary,
-                    modifier = Modifier.size(16.dp)
-                )
-            }
-        }
+        Spacer(modifier = Modifier.height(16.dp))
     }
 
     if (showLanguagePicker) {
@@ -1402,41 +1323,6 @@ fun ProfileScreen(
                 }
             },
             onDismiss = { showDeleteAccountDialog = false }
-        )
-    }
-}
-
-/** One navigation row in the "Pengaturan Akun" card. */
-@Composable
-private fun AccountSettingRow(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    title: String,
-    subtitle: String,
-    onClick: () -> Unit,
-    tag: String
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onClick() }
-            .padding(horizontal = 16.dp, vertical = 14.dp)
-            .testTag(tag),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(icon, contentDescription = null, tint = NoxaLime, modifier = Modifier.size(20.dp))
-            Spacer(modifier = Modifier.width(12.dp))
-            Column {
-                Text(title, color = NoxaTextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                Text(subtitle, color = NoxaTextSecondary, fontSize = 11.sp)
-            }
-        }
-        Icon(
-            Icons.Default.ChevronRight,
-            contentDescription = null,
-            tint = NoxaTextTertiary,
-            modifier = Modifier.size(16.dp)
         )
     }
 }
@@ -1656,6 +1542,29 @@ private fun MutedEntryRow(label: String, kindLabel: String, onUndo: () -> Unit) 
 /** Handle shape for usernames registered through Firestore. */
 private val USERNAME_HANDLE = Regex("^[A-Za-z0-9_.]{3,20}$")
 
+/**
+ * Ikon per misi NOXA Quest — PlayArrow untuk jumlah play, MusicNote untuk
+ * pengulangan lagu, api untuk streak. Dipisah dari [QuestEngine] supaya data
+ * murni tetap bebas dependensi Compose.
+ */
+private fun questIcon(id: String): ImageVector = when (id) {
+    "plays" -> Icons.Default.PlayArrow
+    "repeat" -> Icons.Default.MusicNote
+    else -> Icons.Default.LocalFireDepartment
+}
+
+/**
+ * Warna mood Jurnal Dengar — hue per mood (haze untuk santai, lime untuk
+ * fokus, ember untuk semangat, purple untuk nostalgia) supaya strip 7 hari
+ * terbaca tanpa label dan halaman tidak monokrom.
+ */
+private fun journalColor(moodId: String): Color = when (moodId) {
+    "santai" -> NoxaHaze
+    "fokus" -> NoxaLime
+    "semangat" -> NoxaEmber
+    else -> NoxaPurple
+}
+
 /** One stat line inside the weekly recap card. */
 @Composable
 private fun RecapRow(icon: androidx.compose.ui.graphics.vector.ImageVector, text: String) {
@@ -1727,9 +1636,8 @@ private fun NoxaProfileCard(
             .fillMaxWidth()
             .padding(horizontal = 20.dp)
             .testTag("profile_card_section"),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = NoxaSurfaceElevated),
-        border = androidx.compose.foundation.BorderStroke(1.dp, NoxaBorder)
+        shape = RoundedCornerShape(NoxaRadius.md),
+        colors = CardDefaults.cardColors(containerColor = NoxaSurfaceElevated)
     ) {
         Column(
             modifier = Modifier.padding(16.dp),
@@ -1756,14 +1664,19 @@ private fun NoxaProfileCard(
                 }
                 Column {
                     Text(
-                        text = "Kartu Profil NOXA",
+                        text = cardData.displayName,
                         color = NoxaTextPrimary,
                         fontSize = 15.sp,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     Text(
-                        text = "${cardData.displayName} • " +
-                            if (cardData.totalPlays > 0) "${cardData.totalPlays} lagu tahun ini" else "belum ada stat",
+                        text = if (cardData.totalPlays > 0) {
+                            "${cardData.totalPlays} lagu tahun ini"
+                        } else {
+                            "belum ada stat"
+                        },
                         color = NoxaTextSecondary,
                         fontSize = 12.sp,
                         maxLines = 1,
@@ -1819,22 +1732,16 @@ private fun NoxaProfileCard(
 private fun ListeningHeatmapCard(yearListening: YearListeningUi) {
     val stats = yearListening.stats
 
-    Text(
-        text = "Peta Panas Dengar",
-        color = NoxaTextPrimary,
-        fontSize = 16.sp,
-        fontWeight = FontWeight.Bold,
-        modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
-    )
+    SectionHeader(title = "Peta Panas Dengar", subtitle = "Satu tahun dengar, hari demi hari")
+    Spacer(modifier = Modifier.height(10.dp))
 
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 20.dp)
             .testTag("listening_heatmap_card"),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = NoxaSurfaceElevated),
-        border = androidx.compose.foundation.BorderStroke(1.dp, NoxaBorder)
+        shape = RoundedCornerShape(NoxaRadius.md),
+        colors = CardDefaults.cardColors(containerColor = NoxaSurfaceElevated)
     ) {
         if (stats == null || stats.totalPlays == 0) {
             Text(
@@ -1943,22 +1850,16 @@ private fun WrappedMiniCard(
 ) {
     val stats = yearListening.stats ?: return
 
-    Text(
-        text = "NOXA Wrapped Mini",
-        color = NoxaTextPrimary,
-        fontSize = 16.sp,
-        fontWeight = FontWeight.Bold,
-        modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
-    )
+    SectionHeader(title = "NOXA Wrapped Mini", subtitle = "Lima angka jujur dari setahun dengar")
+    Spacer(modifier = Modifier.height(10.dp))
 
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 20.dp)
             .testTag("wrapped_mini_card"),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = NoxaSurfaceElevated),
-        border = androidx.compose.foundation.BorderStroke(1.dp, NoxaBorder)
+        shape = RoundedCornerShape(NoxaRadius.md),
+        colors = CardDefaults.cardColors(containerColor = NoxaSurfaceElevated)
     ) {
         Column(
             modifier = Modifier
@@ -2125,58 +2026,6 @@ private fun WrappedIconRow(
             text = meta,
             color = NoxaTextSecondary,
             fontSize = 12.sp
-        )
-    }
-}
-
-/** A settings row with a switch — used by the player feature toggles. */
-@Composable
-private fun SettingsToggleRow(
-    title: String,
-    subtitle: String,
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit,
-    tag: String
-) {
-    // Flipping a switch ticks: a heavier pulse than a plain tap so the
-    // settings row feels like a physical toggle, iOS-style.
-    val haptic = LocalHapticFeedback.current
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .noxaTap { onCheckedChange(!checked) }
-            .padding(horizontal = 16.dp, vertical = 10.dp)
-            .testTag(tag),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = title,
-                color = NoxaTextPrimary,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.SemiBold
-            )
-            Text(
-                text = subtitle,
-                color = NoxaTextSecondary,
-                fontSize = 11.sp
-            )
-        }
-        Spacer(modifier = Modifier.width(12.dp))
-        Switch(
-            checked = checked,
-            onCheckedChange = {
-                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                onCheckedChange(it)
-            },
-            colors = SwitchDefaults.colors(
-                checkedTrackColor = NoxaLime,
-                checkedThumbColor = NoxaBlack,
-                uncheckedTrackColor = NoxaSurfaceSecondary,
-                uncheckedThumbColor = NoxaTextSecondary,
-                uncheckedBorderColor = NoxaBorder
-            )
         )
     }
 }

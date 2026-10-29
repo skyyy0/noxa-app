@@ -1,6 +1,5 @@
 package com.example.data.auth
 
-import java.security.Key
 import java.security.SecureRandom
 import javax.crypto.Mac
 
@@ -70,10 +69,17 @@ object PasswordVault {
     )
 
     /**
-     * A bare key holding raw HMAC material. Equivalent to SecretKeySpec for
-     * this use, but without depending on the javax.crypto.spec class name.
+     * A bare key holding raw HMAC material — the same shape as SecretKeySpec
+     * for this use, but without the algorithm/parse ceremony.
+     *
+     * It must be a [javax.crypto.SecretKey] and not merely a bare Key: the JVM's
+     * HmacCore rejects anything else with "Secret key expected", while
+     * Android's provider happens to accept a bare Key — which is exactly the
+     * kind of "passes on one runtime, fails on the other" split that makes a
+     * hash untrustworthy. SecretKey is part of java.base (and of every Android
+     * release since API 1), so naming it costs nothing.
      */
-    private class RawHmacKey(private val bytes: ByteArray) : Key {
+    private class RawHmacKey(private val bytes: ByteArray) : javax.crypto.SecretKey {
         override fun getAlgorithm(): String = "HmacSHA256"
         override fun getEncoded(): ByteArray = bytes
         override fun getFormat(): String = "RAW"

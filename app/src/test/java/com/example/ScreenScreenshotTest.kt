@@ -24,10 +24,17 @@ import com.example.data.remote.HomeMusicSection
 import com.example.media.PlaybackProgress
 import com.example.ui.components.NoxAmbientBackdrop
 import com.example.ui.components.NoxaBottomStack
+import com.example.data.local.AppSettings
+import com.example.data.local.ListeningHeatmap
 import com.example.ui.screens.ArtistScreen
 import com.example.ui.screens.HomeScreen
+import com.example.ui.screens.ProfileScreen
 import com.example.ui.theme.NoxaBlack
 import com.example.ui.viewmodel.ArtistUiState
+import com.example.ui.viewmodel.WeeklyRecap
+import com.example.ui.viewmodel.YearListeningUi
+import com.example.ui.viewmodel.TopArtistTaste
+import com.example.ui.viewmodel.TopSongTaste
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -219,6 +226,66 @@ class ScreenScreenshotTest {
                     modifier = Modifier.align(Alignment.BottomCenter)
                 )
             }
+        }
+    }
+
+    /**
+     * Profile & Settings after the v3.3.3 redesign: hero greeting header,
+     * glance stats, and the inset group list (Akun, NOXA Quest, Jurnal Dengar,
+     * Kirim Lagu, Jelajahi, Bantuan, Tautan, Kualitas Audio, Fitur Pemutar,
+     * NOXA Wake, Sistem Pintar, Aplikasi). Rendered signed-in with a full
+     * year of listening data so every group paints, not just the guest CTA.
+     */
+    @Test
+    fun profileScreenScreenshot() {
+        val today = ListeningHeatmap.dayIndex(System.currentTimeMillis())
+        val dayPlays = (0L until 365L).associate { offset ->
+            (today - offset) to if (offset % 3L == 0L) ((offset % 7L) + 1L).toInt() else 0
+        }
+        val stats = ListeningHeatmap.build(dayPlays, today)
+        renderAndCapture("profile_screen") {
+            ProfileScreen(
+                currentUser = com.example.data.auth.NoxaUser(
+                    uid = "u1",
+                    displayName = "skyyy0",
+                    email = "skyyy0@skyvibes.my.id",
+                    photoUrl = null
+                ),
+                isSigningIn = false,
+                weeklyRecap = WeeklyRecap(
+                    plays = 47,
+                    topArtist = "Dewa 19",
+                    topSongTitle = "Kangen",
+                    topSongPlays = 12
+                ),
+                yearListening = YearListeningUi(
+                    stats = stats,
+                    topArtists = listOf(TopArtistTaste("Dewa 19", 31)),
+                    topSongTitle = "Kangen",
+                    topSongPlays = 12,
+                    topSongs = listOf(TopSongTaste("Kangen", 12)),
+                    distinctArtists = 58,
+                    busiestHour = 21
+                ),
+                appSettings = AppSettings(),
+                onSignInWithGoogle = { _, _ -> },
+                onSignInWithEmail = { _, _, _ -> },
+                onRegisterWithEmail = { _, _, _, _ -> },
+                onSetMvQuality = {},
+                onSetAutoplaySimilar = {},
+                onSetKaraokeOverlay = {},
+                onSetAutoResumeOnOpen = {},
+                onSignOut = {},
+                onNavigateToAboutSky = {},
+                onOpenAiChat = {},
+                onOpenRoom = {},
+                onOpenSupportChat = {},
+                onOpenDevPanel = {},
+                onOpenGetStarted = {},
+                onChangeUsername = { _, _ -> },
+                onChangePassword = { _, _, _ -> },
+                onDeleteAccount = { _, _ -> }
+            )
         }
     }
 

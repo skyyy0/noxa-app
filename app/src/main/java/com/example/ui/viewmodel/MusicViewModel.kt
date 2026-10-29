@@ -2608,6 +2608,78 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // ---------------------------------------------------- Kirim Lagu (3.3.3)
+
+    /** Kiriman lagu masuk untuk akun yang sedang masuk — terbaru dulu. */
+    private val _gifts =
+        MutableStateFlow<List<com.example.data.support.SongGift>>(emptyList())
+    val gifts: StateFlow<List<com.example.data.support.SongGift>> =
+        _gifts.asStateFlow()
+
+    /** Refresh inbox — dipanggil tiap Profil dibuka; diam saat belum masuk. */
+    fun refreshGifts() {
+        val uid = authManager.currentUser.value?.uid ?: return
+        safeScope.launch {
+            val list = runCatching { backend.giftsFor(uid) }.getOrNull() ?: return@launch
+            _gifts.value = list
+        }
+    }
+
+    /**
+     * Mengirim lagu yang sedang dibagikan ke username teman.
+     * `onDone(null)` = sukses; selain itu pesan error berbahasa Indonesia.
+     */
+    fun sendGift(song: Song, toUsername: String, message: String, onDone: (String?) -> Unit) {
+        val user = authManager.currentUser.value
+        if (user == null) {
+            onDone("Masuk dulu untuk mengirim lagu.")
+            return
+        }
+        val name = user.displayName?.takeIf { it.isNotBlank() }
+            ?: user.email?.substringBefore('@')
+            ?: "Pendengar"
+        safeScope.launch {
+            val err = runCatching {
+                backend.sendGift(
+                    toUsername = toUsername,
+                    fromName = name,
+                    songId = song.id,
+                    title = song.title,
+                    artist = song.artist,
+                    artwork = song.artworkUrl,
+                    message = message
+                )
+            }.getOrDefault("Server NOXA tidak bisa dijangkau. Coba lagi nanti.")
+            onDone(err)
+        }
+    }
+
+    /**
+     * Memutar kiriman dari Profil — id lagu membawa prefix provider, jadi
+     * resolusi stream sama persis seperti lagu biasa (tanpa hardcode sumber).
+     */
+    fun playGift(gift: com.example.data.support.SongGift) {
+        if (gift.songId.isBlank()) return
+        val song = Song(
+            id = gift.songId,
+            title = gift.title,
+            artist = gift.artist,
+            artworkUrl = gift.artwork
+        ).withDerivedProviderFields()
+        playSong(song)
+    }
+
+    /** Optimistik: centang lime hilang langsung; tulis ke backend di belakang. */
+    fun markGiftRead(giftId: String) {
+        val uid = authManager.currentUser.value?.uid ?: return
+        _gifts.update { list ->
+            list.map { if (it.id == giftId) it.copy(read = true) else it }
+        }
+        safeScope.launch {
+            runCatching { backend.markGiftRead(uid, giftId) }
+        }
+    }
+
     // ------------------------------------------------------------- updates
 
     /** Latest update published by the developer, when this build is older. */
