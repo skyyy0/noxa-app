@@ -82,6 +82,10 @@
 -keep class com.google.android.libraries.identity.googleid.** { *; }
 -keep class androidx.credentials.** { *; }
 -keep class com.google.protobuf.** { *; }
+# Credentials membawa protobuf-javalite, sementara kelas bersama Firebase
+# (JavaFeaturesProto) mereferensikan kelas protobuf penuh yang tidak ikut
+# dikemas — referensi itu hanya disentuh tooling descriptor, bukan alur login.
+-dontwarn com.google.protobuf.**
 -dontwarn com.google.firebase.**
 -dontwarn com.google.android.gms.**
 
