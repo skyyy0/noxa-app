@@ -95,11 +95,11 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data
                     android:scheme="https"
-                    android:host="skyvibes.my.id"
+                    android:host="skydev.my.id"
                     android:pathPrefix="/track/" />
                 <data
                     android:scheme="https"
-                    android:host="www.skyvibes.my.id"
+                    android:host="www.skydev.my.id"
                     android:pathPrefix="/track/" />
             </intent-filter>
         </activity>

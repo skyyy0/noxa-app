@@ -789,6 +789,86 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     private val _aiError = MutableStateFlow<String?>(null)
     val aiError: StateFlow<String?> = _aiError.asStateFlow()
 
+    // ------------------------------------- NOXA AI v3.5.5: model + memory + flow
+
+    private val songMemoryStore = com.example.data.local.SongMemoryStore(getApplication())
+    private val playlistCoverStore = com.example.data.local.PlaylistCoverStore(getApplication())
+
+    /** Model yang dipilih pengguna di pemilih model NOXA AI. */
+    private val _aiModel = MutableStateFlow(aiRepository.selectedModel)
+    val aiModel: StateFlow<com.example.data.ai.AiModel> = _aiModel.asStateFlow()
+
+    /** Status tiap model (maintenance / tersedia) dari `/v1/models`. */
+    private val _aiModelStatuses =
+        MutableStateFlow(aiRepository.cachedModelStatus())
+    val aiModelStatuses: StateFlow<List<com.example.data.ai.AiModelStatus>> =
+        _aiModelStatuses.asStateFlow()
+
+    fun selectAiModel(model: com.example.data.ai.AiModel) {
+        aiRepository.selectedModel = model
+        _aiModel.value = model
+    }
+
+    /** Refresh daftar model; kegagalan jaringan mempertahankan snapshot lama. */
+    fun refreshAiModelStatus() {
+        safeScope.launch {
+            _aiModelStatuses.value = aiRepository.refreshModelStatus()
+        }
+    }
+
+    /** Memori lagu untuk lagu yang sedang dibuka di sheet pemutar. */
+    private val _songMemory = MutableStateFlow<com.example.data.local.SongMemory?>(null)
+    val songMemory: StateFlow<com.example.data.local.SongMemory?> = _songMemory.asStateFlow()
+
+    fun loadSongMemory(songId: String?) {
+        _songMemory.value = songId?.let { songMemoryStore.forSong(it) }
+    }
+
+    fun saveSongMemory(song: Song, note: String) {
+        songMemoryStore.save(song.id, note, song.title, song.artist)
+        loadSongMemory(song.id)
+    }
+
+    fun clearSongMemory(songId: String) {
+        songMemoryStore.remove(songId)
+        loadSongMemory(songId)
+    }
+
+    fun allSongMemories(): List<com.example.data.local.SongMemory> = songMemoryStore.all()
+
+    /** Flow / AutoMix: weave the upcoming queue instead of shuffling it. */
+    private val _flowEnabled = MutableStateFlow(false)
+    val flowEnabled: StateFlow<Boolean> = _flowEnabled.asStateFlow()
+
+    fun setFlowEnabled(enabled: Boolean) {
+        _flowEnabled.value = enabled
+        if (!enabled) return
+        val state = player.uiState.value
+        val upcoming = state.queue.drop((state.queueIndex + 1).coerceAtLeast(0))
+        if (upcoming.size < 2) {
+            _flowEnabled.value = false
+            player.showError("Flow butuh minimal tiga lagu di antrean.")
+            return
+        }
+        player.setUpcomingQueue(com.example.media.FlowMixer.order(upcoming))
+        player.showError("Flow aktif — antrean diurutkan ulang tanpa jeda.")
+    }
+
+    fun playlistCoverFor(playlistId: Long, name: String): com.example.data.local.PlaylistCover =
+        playlistCoverStore.coverFor(playlistId, name)
+
+    /** Bumped on every cover save so screens recompose with the new cover. */
+    private val _playlistCoverVersion = MutableStateFlow(0)
+    val playlistCoverVersion: StateFlow<Int> = _playlistCoverVersion.asStateFlow()
+
+    fun savePlaylistCover(playlistId: Long, style: Int, seed: Int) {
+        playlistCoverStore.save(
+            playlistId,
+            com.example.data.local.PlaylistCover(style = style, seed = seed)
+        )
+        _playlistCoverVersion.update { it + 1 }
+    }
+
     // ---- collaborative-playlist state (declared BEFORE init on purpose:
     // initializers run in declaration order, and init reloads the stored links
     // — the same ordering trap that caused the v1.15.7 NPE).
@@ -3589,10 +3669,12 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Sends one message to NOXA AI. Replies can carry action tags: a play tag
-     * resolves the song against the catalogue and starts it immediately, a
-     * playlist tag builds the playlist — exactly the "AI controls the music"
-     * behaviour, executed by the app rather than trusted to the model.
+     * Sends one message to NOXA AI (v3.5.5 — official freemodel.in API).
+     *
+     * Replies carry action tags. Every requested track is resolved against the
+     * real catalogue with a *strict* artist+title match, so a "Dewa 19" playlist
+     * can never silently absorb a foreign song: a track that does not match is
+     * skipped and reported, not replaced by the first search hit.
      */
     fun sendAiMessage(text: String) {
         val trimmed = text.trim()
@@ -3602,7 +3684,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         _isAiThinking.value = true
         safeScope.launch {
             val reply = try {
-                aiRepository.chat(trimmed)
+                aiRepository.chat(trimmed, songMemoryStore.contextFor())
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -3616,26 +3698,74 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             var cardSong: Song? = null
             var note: String? = null
             val notes = mutableListOf<String>()
+            var builtPlaylist: AiPlaylistBuild? = null
             for (action in reply.actions) {
                 when (action) {
                     is com.example.data.ai.NoxaAiAction.Play -> {
-                        val song = resolveAiSong(action)
+                        val song = resolveAiTrack(
+                            com.example.data.ai.AiTrackRef(action.artist, action.title)
+                        )
                         if (song != null) {
                             cardSong = song
                             playSong(song)
                         } else {
-                            note = "lagu nggak ketemu di katalog NOXA"
+                            note = "lagu tidak ditemukan di katalog NOXA"
                         }
                     }
 
                     is com.example.data.ai.NoxaAiAction.CreatePlaylist -> {
-                        createPlaylistFromAi(action)?.let { notes.add(it) }
+                        val build = createPlaylistFromAi(action)
+                        if (build != null) {
+                            builtPlaylist = build
+                            notes.add(
+                                "Playlist \"${build.name}\" siap berisi ${build.count} lagu." +
+                                    if (build.skipped > 0) {
+                                        " ${build.skipped} lagu dilewati karena tidak cocok " +
+                                            "dengan artis/judul di katalog."
+                                    } else {
+                                        ""
+                                    }
+                            )
+                        } else {
+                            notes.add(
+                                "Playlist gagal dibuat — sebut artis dan judul dengan lebih " +
+                                    "spesifik supaya bisa dicocokkan ke katalog."
+                            )
+                        }
+                    }
+
+                    is com.example.data.ai.NoxaAiAction.Queue -> {
+                        val songs = action.tracks.mapNotNull { resolveAiTrack(it) }
+                        // playNext inserts right after the current item, so the
+                        // list is inserted in reverse to keep the AI's order.
+                        songs.asReversed().forEach { player.playNext(it) }
+                        notes.add(
+                            if (songs.isEmpty()) "Lagu yang diminta tidak ditemukan di katalog."
+                            else "${songs.size} lagu masuk ke antrean berikutnya."
+                        )
+                    }
+
+                    is com.example.data.ai.NoxaAiAction.ReplaceTrack -> {
+                        notes.add(replacePlaylistTrack(action))
+                    }
+
+                    is com.example.data.ai.NoxaAiAction.Equalizer -> {
+                        notes.add(applyAiEqualizer(action.preset))
                     }
                 }
             }
 
-            val body = if (notes.isEmpty()) reply.text
-            else reply.text + "\n" + notes.joinToString("\n")
+            val body = buildString {
+                append(reply.text)
+                reply.fallbackFrom?.let { down ->
+                    append("\n\n(")
+                    append(down.label)
+                    append(" sedang maintenance — dialihkan ke ")
+                    append(reply.servedBy.label)
+                    append(".)")
+                }
+                notes.forEach { line -> append("\n").append(line) }
+            }
             _aiMessages.update {
                 it + com.example.data.ai.AiChatMessage(
                     fromUser = false,
@@ -3644,7 +3774,11 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                     songTitle = cardSong?.title,
                     songArtist = cardSong?.artist,
                     songArtwork = cardSong?.artworkUrl?.takeIf { url -> url.isNotBlank() },
-                    songNote = note
+                    songNote = note,
+                    playlistName = builtPlaylist?.name,
+                    playlistId = builtPlaylist?.id,
+                    playlistTrackCount = builtPlaylist?.count ?: 0,
+                    playlistCoverSeed = builtPlaylist?.coverSeed ?: 0
                 )
             }
             aiRepository.saveHistory(_aiMessages.value)
@@ -3683,45 +3817,150 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         aiRepository.resetSession()
     }
 
-    /** Finds the AI's requested song in the catalogue, best match first. */
-    private suspend fun resolveAiSong(action: com.example.data.ai.NoxaAiAction.Play): Song? {
-        val query = listOf(action.artist, action.title)
+    /** Result of an AI playlist build, used to render the result card. */
+    private data class AiPlaylistBuild(
+        val id: Long,
+        val name: String,
+        val count: Int,
+        val skipped: Int,
+        val coverSeed: Int
+    )
+
+    /**
+     * Strict catalogue match for one AI track reference.
+     *
+     * Title must match (either direction, punctuation-insensitive) AND the
+     * artist must match when the AI declared one. There is deliberately **no**
+     * "fall back to the first search hit": that fallback is exactly what used
+     * to drop an unrelated song into an artist-specific playlist.
+     */
+    private suspend fun resolveAiTrack(ref: com.example.data.ai.AiTrackRef): Song? {
+        val wantedTitle = normaliseForMatch(ref.title)
+        if (wantedTitle.isBlank()) return null
+        val wantedArtist = normaliseForMatch(ref.artist)
+        val query = listOf(ref.artist, ref.title)
             .filter { it.isNotBlank() }
             .joinToString(" ")
+            .ifBlank { ref.title }
         val results = runCatching { repository.search(query) }.getOrDefault(emptyList())
-        return results.firstOrNull { song ->
-            val titleMatches = song.title.contains(action.title, ignoreCase = true) ||
-                action.title.contains(song.title, ignoreCase = true)
-            val artistMatches = action.artist.isBlank() ||
-                song.artist.contains(action.artist, ignoreCase = true) ||
-                action.artist.contains(song.artist, ignoreCase = true)
-            titleMatches && artistMatches
-        } ?: results.firstOrNull()
+        val pool = if (results.isEmpty() && ref.artist.isNotBlank()) {
+            runCatching { repository.search(ref.title) }.getOrDefault(emptyList())
+        } else {
+            results
+        }
+        return pool.firstOrNull { song ->
+            val songTitle = normaliseForMatch(song.title)
+            val titleOk = songTitle == wantedTitle ||
+                songTitle.contains(wantedTitle) ||
+                wantedTitle.contains(songTitle)
+            titleOk && (wantedArtist.isBlank() || artistMatches(song.artist, wantedArtist))
+        }
     }
 
-    /** Builds the AI-requested playlist; returns a status line for the chat. */
+    /**
+     * Artist comparison that tolerates "Dewa 19" vs "Dewa 19 feat. ..." and
+     * "Sheila On 7" vs "Sheila on 7" without accepting a different artist.
+     */
+    private fun artistMatches(songArtist: String, wantedArtist: String): Boolean {
+        val a = normaliseForMatch(songArtist)
+        val b = normaliseForMatch(wantedArtist)
+        if (a.isBlank() || b.isBlank()) return true
+        if (a.contains(b) || b.contains(a)) return true
+        val aTokens = a.split(' ').filter { it.length > 1 }.toSet()
+        val bTokens = b.split(' ').filter { it.length > 1 }.toSet()
+        if (aTokens.isEmpty() || bTokens.isEmpty()) return false
+        return aTokens.intersect(bTokens).isNotEmpty()
+    }
+
+    /** Lowercase, ASCII-ish, punctuation-free — the shared comparison form. */
+    private fun normaliseForMatch(raw: String): String = raw
+        .lowercase()
+        .replace(Regex("\\([^)]*\\)"), " ")
+        .replace(Regex("\\[[^]]*]"), " ")
+        .replace(Regex("(?i)\\b(remaster(ed)?|feat\\.?|ft\\.?|version|versi|official)\\b"), " ")
+        .replace(Regex("[^a-z0-9 ]"), " ")
+        .replace(Regex("\\s+"), " ")
+        .trim()
+
+    /** Builds the AI playlist from strictly matched tracks only. */
     private suspend fun createPlaylistFromAi(
         action: com.example.data.ai.NoxaAiAction.CreatePlaylist
-    ): String? {
+    ): AiPlaylistBuild? {
         val name = action.name.ifBlank { "Playlist NOXA AI" }
-        var playlistId: Long? = null
-        var added = 0
-        for (track in action.tracks.take(20)) {
-            val song = runCatching { repository.search(track) }
-                .getOrDefault(emptyList())
-                .firstOrNull() ?: continue
-            if (playlistId == null) {
-                playlistId = dao.insertPlaylist(
-                    PlaylistEntity(name = name, description = "Dibuat oleh NOXA AI")
-                )
+        val resolved = LinkedHashMap<String, Song>()
+        var skipped = 0
+        for (ref in action.tracks.take(20)) {
+            val song = resolveAiTrack(ref)
+            if (song == null) {
+                skipped++
+            } else {
+                resolved.putIfAbsent(song.id, song)
             }
-            dao.insertPlaylistSong(PlaylistSongEntity.fromSong(playlistId, song, added))
-            added++
         }
-        return if (playlistId != null && added > 0) {
-            "Playlist \"$name\" sudah jadi, berisi $added lagu. Cek di Library."
+        if (resolved.isEmpty()) return null
+        val playlistId = dao.insertPlaylist(
+            PlaylistEntity(name = name, description = "Dibuat oleh NOXA AI")
+        )
+        resolved.values.forEachIndexed { index, song ->
+            dao.insertPlaylistSong(PlaylistSongEntity.fromSong(playlistId, song, index))
+        }
+        return AiPlaylistBuild(
+            id = playlistId,
+            name = name,
+            count = resolved.size,
+            skipped = skipped,
+            coverSeed = com.example.data.local.PlaylistCoverStore.defaultSeed(name)
+        )
+    }
+
+    /** Swaps one stray track inside an existing playlist. */
+    private suspend fun replacePlaylistTrack(
+        action: com.example.data.ai.NoxaAiAction.ReplaceTrack
+    ): String {
+        val playlists = runCatching { dao.getAllPlaylists().first() }.getOrDefault(emptyList())
+        val target = playlists.firstOrNull {
+            it.name.equals(action.playlistName, ignoreCase = true)
+        } ?: playlists.firstOrNull {
+            it.name.contains(action.playlistName, ignoreCase = true)
+        } ?: return "Playlist \"${action.playlistName}\" tidak ditemukan."
+
+        val songs = runCatching { dao.getPlaylistSongs(target.playlistId).first() }
+            .getOrDefault(emptyList())
+        val wantedTitle = normaliseForMatch(action.old.title)
+        val wantedArtist = normaliseForMatch(action.old.artist)
+        val victim = songs.firstOrNull { entry ->
+            val title = normaliseForMatch(entry.title)
+            (title.contains(wantedTitle) || wantedTitle.contains(title)) &&
+                (wantedArtist.isBlank() || artistMatches(entry.artist, wantedArtist))
+        } ?: return "Lagu \"${action.old.title}\" tidak ada di playlist \"${target.name}\"."
+
+        val replacement = resolveAiTrack(action.new)
+            ?: return "Pengganti \"${action.new.title}\" tidak ditemukan di katalog."
+        dao.deletePlaylistSong(target.playlistId, victim.songId)
+        dao.insertPlaylistSong(
+            PlaylistSongEntity.fromSong(target.playlistId, replacement, victim.position)
+        )
+        return "Di \"${target.name}\": ${victim.title} diganti dengan ${replacement.title}."
+    }
+
+    /** Maps the AI's preset name onto the equalizer's real preset list. */
+    private fun applyAiEqualizer(requested: String): String {
+        val presets = player.uiState.value.equalizerState.presets
+        val wanted = normaliseForMatch(requested)
+        val match = presets.firstOrNull { it.equals(requested, ignoreCase = true) }
+            ?: presets.firstOrNull { preset ->
+                val normalised = normaliseForMatch(preset)
+                normalised.contains(wanted) || wanted.contains(normalised)
+            }
+            ?: presets.firstOrNull { preset ->
+                val normalised = normaliseForMatch(preset)
+                wanted.contains(normalised.substringBefore(' '))
+            }
+        return if (match != null) {
+            setEqualizerPreset(match)
+            "Equalizer diset ke $match."
         } else {
-            "Playlist gagal dibuat — coba sebut judul lagu yang lebih spesifik."
+            "Preset equalizer \"$requested\" tidak tersedia."
         }
     }
 

@@ -40,7 +40,7 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * Shared NOXA links (`https://skyvibes.my.id/track/<id>` or
+     * Shared NOXA links (`https://skydev.my.id/track/<id>` or
      * `noxa://play/<id>`) resolve into a real song and start playing — the
      * recipient lands straight in the player.
      */

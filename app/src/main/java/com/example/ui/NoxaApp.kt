@@ -256,6 +256,13 @@ private fun NoxaAppContent(
 
     val isCurrentFavorite = playerState.currentSong?.id?.let { favoriteIds.contains(it) } ?: false
 
+    // v3.5.5: Memori Lagu (diary per lagu) & Flow/AutoMix.
+    val songMemory by viewModel.songMemory.collectAsStateWithLifecycle()
+    val flowEnabled by viewModel.flowEnabled.collectAsStateWithLifecycle()
+    LaunchedEffect(playerState.currentSong?.id) {
+        viewModel.loadSongMemory(playerState.currentSong?.id)
+    }
+
     // Collected again here (cheap state read) so Pengaturan shows the active
     // language; the tree itself is already wrapped in LocalStrings upstream.
     val appLanguage by viewModel.appLanguage.collectAsStateWithLifecycle()
@@ -432,11 +439,17 @@ private fun NoxaAppContent(
                         navController.popBackStack()
                     } else {
                         val songsFlow = remember(playlistId) { viewModel.playlistSongs(playlistId) }
+                        val playlistName = playlistSummaries
+                            .firstOrNull { it.playlistId == playlistId }?.name
+                            ?: "Playlist"
+                        val coverVersion by viewModel.playlistCoverVersion
+                            .collectAsStateWithLifecycle()
+                        val cover = remember(playlistId, playlistName, coverVersion) {
+                            viewModel.playlistCoverFor(playlistId, playlistName)
+                        }
                         PlaylistDetailScreen(
                             playlistId = playlistId,
-                            playlistName = playlistSummaries
-                                .firstOrNull { it.playlistId == playlistId }?.name
-                                ?: "Playlist",
+                            playlistName = playlistName,
                             songsFlow = songsFlow,
                             favoriteIds = favoriteIds,
                             currentPlayingSongId = playerState.currentSong?.id,
@@ -460,7 +473,11 @@ private fun NoxaAppContent(
                             downloadedIds = downloadedIds,
                             downloadingIds = downloadingIds,
                             onToggleDownload = { viewModel.toggleDownload(it) },
-                            onStartRadio = { viewModel.startSongRadio(it) }
+                            onStartRadio = { viewModel.startSongRadio(it) },
+                            playlistCover = cover,
+                            onSavePlaylistCover = { style, seed ->
+                                viewModel.savePlaylistCover(playlistId, style, seed)
+                            }
                         )
                     }
                 }
@@ -661,14 +678,23 @@ private fun NoxaAppContent(
                     val aiMessages by viewModel.aiMessages.collectAsStateWithLifecycle()
                     val isAiThinking by viewModel.isAiThinking.collectAsStateWithLifecycle()
                     val aiError by viewModel.aiError.collectAsStateWithLifecycle()
+                    val aiModel by viewModel.aiModel.collectAsStateWithLifecycle()
+                    val aiModelStatuses by viewModel.aiModelStatuses.collectAsStateWithLifecycle()
+                    // Model availability is refreshed when the chat opens, so
+                    // the picker never shows a stale "maintenance" badge.
+                    LaunchedEffect(Unit) { viewModel.refreshAiModelStatus() }
                     AiChatScreen(
                         messages = aiMessages,
                         isThinking = isAiThinking,
                         error = aiError,
                         playingSongId = playerState.currentSong?.id,
+                        selectedModel = aiModel,
+                        modelStatuses = aiModelStatuses,
+                        onSelectModel = { viewModel.selectAiModel(it) },
                         onBack = { navController.popBackStack() },
                         onSend = { viewModel.sendAiMessage(it) },
                         onPlaySongMessage = { viewModel.playAiSongMessage(it) },
+                        onOpenPlaylist = { navController.navigate(Screen.Playlist.routeFor(it)) },
                         onClearChat = { viewModel.clearAiChat() }
                     )
                 }
@@ -821,6 +847,14 @@ private fun NoxaAppContent(
             onSetVideoMode = { enabled -> viewModel.setVideoMode(enabled) },
             onAttachVideoSurface = { surface -> viewModel.attachMvSurface(surface) },
             karaokeOverlayEnabled = appSettings.karaokeOverlay,
+            songMemory = songMemory,
+            onSaveSongMemory = { note ->
+                playerState.currentSong?.let { song ->
+                    viewModel.saveSongMemory(song, note)
+                }
+            },
+            flowEnabled = flowEnabled,
+            onToggleFlow = { viewModel.setFlowEnabled(!flowEnabled) },
             onOpenArtist = { artistId, artistName ->
                 viewModel.openArtistProfile(artistId, artistName) { resolvedId ->
                     viewModel.closeFullPlayer()

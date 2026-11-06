@@ -34,8 +34,8 @@ android {
     applicationId = "com.noxa.music"
     minSdk = 24
     targetSdk = 36
-    versionCode = 26
-    versionName = "3.3.3"
+    versionCode = 27
+    versionName = "3.5.5"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -82,11 +82,16 @@ android {
 
   buildTypes {
     release {
-      // Konsisten dengan versi 1.15.0: tanpa minifikasi / resource
-      // shrinking. Konfigurasi resource (Google/Firebase) tetap utuh dan
-      // ukuran APK berada di kisaran 30–50 MB sesuai ekspektasi user.
+      // R8 FULL MODE (v3.5.5). Kelas aplikasi diobfuscate & di-shrink, tetapi
+      // Firebase Auth / GMS / Credentials DIPERTAHANKAN UTUH lewat
+      // proguard-rules.pro — login Google & email tidak boleh rusak hanya
+      // demi APK lebih kecil.
+      //
+      // Resource shrinking sengaja TETAP OFF: `default_web_client_id`
+      // (OAuth client) dibaca lewat getIdentifier() oleh AuthManager, dan
+      // resource yang dirujuk namanya bisa ikut terhapus.
       isCrunchPngs = true
-      isMinifyEnabled = false
+      isMinifyEnabled = true
       isShrinkResources = false
       signingConfigs.findByName("release")?.let { signingConfig = it }
     }

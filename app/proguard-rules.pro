@@ -64,6 +64,63 @@
 -dontwarn kotlin.**
 -dontwarn kotlinx.coroutines.**
 
+# ---------------------------------------------------------------------------
+# R8 FULL MODE (v3.5.5) — "login must never break" section.
+#
+# Full mode assumes nothing is reached reflectively unless a keep rule says
+# so. Firebase Auth, Google Sign-In and Credentials all resolve provider
+# classes, Parcelables and callbacks by name at runtime, so every one of
+# those packages is kept whole on purpose. The APK cost is a few MB; a broken
+# Google login is not an acceptable trade for it.
+# ---------------------------------------------------------------------------
+-keep class com.google.firebase.** { *; }
+-keep class com.google.android.gms.** { *; }
+-keep class com.google.android.libraries.identity.googleid.** { *; }
+-keep class androidx.credentials.** { *; }
+-keep class com.google.protobuf.** { *; }
+-dontwarn com.google.firebase.**
+-dontwarn com.google.android.gms.**
+
+# Firebase reads provider ids / scopes from annotations and instantiates
+# activities named in google-services.json — attributes must survive.
+-keepattributes RuntimeVisibleAnnotations,RuntimeVisibleParameterAnnotations
+-keepclassmembers @com.google.firebase.firestore.PropertyName class * { *; }
+
+# Room: the generated implementation is looked up through the database class
+# name; entities are read by generated code, not by reflection, but the DAO
+# implementations are instantiated by class name.
+-keep class * extends androidx.room.RoomDatabase { <init>(); }
+-keep class androidx.room.RoomDatabase { *; }
+-dontwarn androidx.room.paging.**
+
+# Retrofit/OkHttp service interfaces are proxied reflectively.
+-keep,allowobfuscation,allowshrinking interface retrofit2.Call
+-keep,allowobfuscation,allowshrinking class retrofit2.Response
+-keep,allowobfuscation interface * extends retrofit2.Call
+-keepclasseswithmembers class * {
+    @retrofit2.http.* <methods>;
+}
+
+# Enums persisted by name (PerfProfile.Tier, DSPSource, dst.) break when R8
+# renames the constants — SharedPreferences would fail valueOf() after update.
+-keepclassmembers enum * { *; }
+
+# --- App code: only what genuinely has to survive -----------------------
+# Everything else under com.example.* is deliberately renamed, shrunk and
+# repackaged. The APK is public; the repository is the readable copy.
+#
+# Room instantiates the generated database implementation by class name, so
+# the database hierarchy keeps its names. Entities and DAOs are called
+# directly from generated code and need no keep rule of their own.
+-keep class * extends androidx.room.RoomDatabase { <init>(); }
+
+# Moshi resolves code-generated adapters with Class.forName("<pkg>.<Dto>JsonAdapter").
+-keepnames class **JsonAdapter
+
+# Compose rememberSaveable / DevPanel state objects are restored by shape.
+-keep class com.example.ui.screens.DevUiState** { *; }
+-dontwarn org.conscrypt.**
+
 # --- Credentials / Google ID ------------------------------------------
 -dontwarn androidx.credentials.**
 -dontwarn com.google.android.libraries.identity.**
@@ -72,16 +129,22 @@
 -dontwarn androidx.compose.**
 -dontwarn androidx.media3.**
 
-# Kotlin metadata used by reflection-based frameworks (Moshi/Room codegen).
+# Kotlin metadata is read reflectively by Moshi/KSP codegen and by
+# kotlinx.coroutines' internal lookup.
 -keep class kotlin.Metadata { *; }
+-dontwarn kotlin.reflect.**
 -keepclassmembers class kotlinx.coroutines.** { volatile <fields>; }
 
-# Keep the Room entities/daos generated accessors working under R8.
--keep class com.example.data.local.** { *; }
+# BuildConfig dibaca lewat refleksi (`Secrets.get(name)`), jadi field-nya
+# TIDAK boleh dihapus/di-rename R8 full mode — kalau hilang, key opsional
+# (YouTube, resolver) dan override FREEMODEL_API_KEY diam-diam jadi kosong.
+-keep class com.example.BuildConfig { *; }
+-keepclassmembers class **.BuildConfig {
+    public static <fields>;
+}
 
-# The support/backend JSON models are written with org.json field names —
-# keep data-class shapes used by the keyless registry.
--keep class com.example.data.support.** { *; }
--keep class com.example.data.ai.** { *; }
--keep class com.example.data.model.** { *; }
--keep class com.example.data.auth.** { *; }
+# Flatten our own packages. Without this the package names alone
+# (com.example.data.remote, .auth, .ai) still tell a reader where the
+# interesting code lives, even when every class inside is renamed.
+-allowaccessmodification
+-repackageclasses ''

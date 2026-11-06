@@ -57,7 +57,7 @@ import kotlinx.coroutines.delay
  *
  * Shown exactly once, on the first launch after install: NOXA measures RAM,
  * CPU cores and the chipset, then announces the profile it will run with
- * (Hemat / Seimbang / Ngebut). The staggered check-in rows are real state —
+ * (Slow / Balanced / Fast). The staggered check-in rows are real state —
  * each row lights up as that probe completes, and the app continues the
  * moment [isScanning] flips to false (the view model drives both).
  */
@@ -145,7 +145,7 @@ fun DeviceScanScreen(
             Spacer(modifier = Modifier.height(8.dp))
             Text(
                 text = if (isScanning) {
-                    "NOXA mendeteksi perangkatmu agar performanya pas —\nringan di HP biasa, ngebut di HP kencang."
+                    "NOXA mendeteksi perangkatmu agar performanya pas —\nslow di HP biasa, fast di HP kencang."
                 } else {
                     "Profil performa disimpan. Selamat mendengar!"
                 },

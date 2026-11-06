@@ -326,12 +326,15 @@ class YouTubeSourceRepository {
             }
         }
 
-        // Audio: device extractor first (no instance dependency). Video (MV):
-        // instances only, raced in parallel — the device path is audio-focused
-        // and can never satisfy a video request, so it used to burn seconds of
-        // scraping before the MV even started resolving.
+        // Audio: device extractor first (no instance dependency).
+        // Video (MV, v3.5.5): device extractor FIRST too — the old code went
+        // straight to public instances, so every instance outage looked like
+        // "MV tidak tersedia" even though the video existed. Instances are now
+        // the fallback (still raced in parallel).
         val fresh = if (requireVideo) {
-            videoStreamsRacing(videoId, videoHeight) ?: return null
+            runCatching { deviceVideoStreams(videoId, videoHeight) }.getOrNull()
+                ?: videoStreamsRacing(videoId, videoHeight)
+                ?: return null
         } else {
             runCatching { deviceStreams(videoId) }.getOrNull()
                 ?: pipedStreams(videoId, videoHeight)
@@ -343,6 +346,16 @@ class YouTubeSourceRepository {
             if (fresh.audioUrl != null) streamCache[videoId] = fresh
         }
         return fresh
+    }
+
+    /** Video URL straight from the device extractor (muted MV, any resolution). */
+    private suspend fun deviceVideoStreams(videoId: String, videoHeight: Int): CachedStreams? {
+        val videoUrl = DeviceYouTubeExtractor.extractVideoUrl(videoId, videoHeight) ?: return null
+        return CachedStreams(
+            audioUrl = null,
+            videoUrl = videoUrl,
+            fetchedAtMs = System.currentTimeMillis()
+        )
     }
 
     /** Audio-only streams straight from the device extractor (full duration). */

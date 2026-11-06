@@ -411,7 +411,7 @@ object ShareCardRenderer {
             textSize = 30f
             textAlign = Paint.Align.CENTER
         }
-        canvas.drawText("skyvibes.my.id", CARD_SIZE / 2f, 1150f, linkPaint)
+        canvas.drawText("skydev.my.id", CARD_SIZE / 2f, 1150f, linkPaint)
 
         return bitmap
     }
@@ -517,7 +517,7 @@ object ShareCardRenderer {
             textSize = 30f
             textAlign = Paint.Align.CENTER
         }
-        canvas.drawText("skyvibes.my.id", CARD_SIZE / 2f, footerTop + 110f, linkPaint)
+        canvas.drawText("skydev.my.id", CARD_SIZE / 2f, footerTop + 110f, linkPaint)
 
         return bitmap
     }
@@ -709,7 +709,7 @@ object ShareCardRenderer {
             textSize = 30f
             textAlign = Paint.Align.CENTER
         }
-        canvas.drawText("skyvibes.my.id", CARD_SIZE / 2f, footerTop + 110f, linkPaint)
+        canvas.drawText("skydev.my.id", CARD_SIZE / 2f, footerTop + 110f, linkPaint)
 
         return bitmap
     }

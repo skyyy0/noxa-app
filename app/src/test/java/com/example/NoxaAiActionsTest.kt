@@ -28,14 +28,48 @@ class NoxaAiActionsTest {
     }
 
     @Test
-    fun `playlist tag carries name and tracks`() {
-        val reply = "Playlist Galau Mode jadi ya.\n[NOXA_PLAYLIST|Galau Mode|The One That Got Away;Tak Segampang Itu]"
+    fun `playlist tag carries name and artist-aware tracks`() {
+        val reply = "Playlist Dewa 19 jadi ya.\n[NOXA_PLAYLIST|Dewa 19|Dewa 19 - Kangen;Dewa 19 - Separuh Nafas]"
         val (text, actions) = NoxaAiActions.parse(reply)
 
         assertFalse(text.contains("NOXA_PLAYLIST"))
         val playlist = actions[0] as NoxaAiAction.CreatePlaylist
-        assertEquals("Galau Mode", playlist.name)
-        assertEquals(listOf("The One That Got Away", "Tak Segampang Itu"), playlist.tracks)
+        assertEquals("Dewa 19", playlist.name)
+        assertEquals(2, playlist.tracks.size)
+        // v3.5.5: setiap entri membawa artis, supaya app bisa menolak lagu
+        // yang artisnya tidak cocok (bug "album Dewa 19 tapi ada lagu nyasar").
+        assertTrue(playlist.tracks.all { it.artist == "Dewa 19" })
+        assertEquals("Kangen", playlist.tracks[0].title)
+        assertEquals("Dewa 19 - Kangen", playlist.tracks[0].wire)
+    }
+
+    @Test
+    fun `title-only track keeps a blank artist`() {
+        val reply = "[NOXA_PLAYLIST|Galau|The One That Got Away]"
+        val (_, actions) = NoxaAiActions.parse(reply)
+        val playlist = actions[0] as NoxaAiAction.CreatePlaylist
+        assertEquals(1, playlist.tracks.size)
+        assertEquals("", playlist.tracks[0].artist)
+        assertEquals("The One That Got Away", playlist.tracks[0].title)
+    }
+
+    @Test
+    fun `queue replace and equalizer tags are parsed`() {
+        val reply = "Siap.\n" +
+            "[NOXA_QUEUE|Dewa 19 - Kangen;Sheila On 7 - Dan]\n" +
+            "[NOXA_REPLACE|Galau|A - Lama|Dewa 19 - Kangen]\n" +
+            "[NOXA_EQ|Bass Boost]"
+        val (text, actions) = NoxaAiActions.parse(reply)
+
+        assertEquals("Siap.", text)
+        assertEquals(3, actions.size)
+        val queue = actions[0] as NoxaAiAction.Queue
+        assertEquals(listOf("Kangen", "Dan"), queue.tracks.map { it.title })
+        val replace = actions[1] as NoxaAiAction.ReplaceTrack
+        assertEquals("Galau", replace.playlistName)
+        assertEquals("Lama", replace.old.title)
+        assertEquals("Dewa 19", replace.new.artist)
+        assertEquals("Bass Boost", (actions[2] as NoxaAiAction.Equalizer).preset)
     }
 
     @Test

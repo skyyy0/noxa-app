@@ -378,7 +378,7 @@ fun AboutSkyScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable {
-                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://skyvibes.my.id"))
+                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://skydev.my.id"))
                             context.startActivity(intent)
                         }
                         .padding(horizontal = 16.dp, vertical = 14.dp),
@@ -390,7 +390,7 @@ fun AboutSkyScreen(
                         Spacer(modifier = Modifier.width(12.dp))
                         Column {
                             Text("Official Website", color = NoxaTextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                            Text("skyvibes.my.id", color = NoxaTextSecondary, fontSize = 12.sp)
+                            Text("skydev.my.id", color = NoxaTextSecondary, fontSize = 12.sp)
                         }
                     }
                     Icon(Icons.Default.OpenInNew, contentDescription = "Open", tint = NoxaTextTertiary, modifier = Modifier.size(16.dp))

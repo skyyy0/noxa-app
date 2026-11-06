@@ -59,12 +59,16 @@ data class PerfProfile(
             Tier.NGEBUT -> 240
         }
 
-    /** Human label for the settings card. */
+    /**
+     * Human label for the settings card. English tier names (v3.5.5):
+     * Fast / Balanced / Slow — the same wording chipset performance modes use,
+     * so the label reads as a spec, not as slang.
+     */
     val tierLabel: String
         get() = when (tier) {
-            Tier.HEMAT -> "Hemat"
-            Tier.SEIMBANG -> "Seimbang"
-            Tier.NGEBUT -> "Ngebut"
+            Tier.HEMAT -> "Slow"
+            Tier.SEIMBANG -> "Balanced"
+            Tier.NGEBUT -> "Fast"
         }
 
     val totalMemGb: Double

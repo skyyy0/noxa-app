@@ -15,6 +15,7 @@ import org.schabi.newpipe.extractor.localization.ContentCountry
 import org.schabi.newpipe.extractor.localization.Localization
 import org.schabi.newpipe.extractor.search.SearchInfo
 import org.schabi.newpipe.extractor.stream.AudioStream
+import org.schabi.newpipe.extractor.stream.VideoStream
 import org.schabi.newpipe.extractor.stream.StreamInfoItem
 import java.util.concurrent.TimeUnit
 
@@ -89,6 +90,53 @@ object DeviceYouTubeExtractor {
             Log.w(TAG, "Extraction failed for $videoId: ${t.message}")
             null
         }
+    }
+
+    /**
+     * **MV (v3.5.5)** — best video URL for [videoId] at roughly [targetHeight].
+     *
+     * The music video used to be resolved only through public Piped/Invidious
+     * instances; when those flapped (or returned 403 on the googlevideo URL),
+     * the player showed "MV tidak tersedia" even though the video was there.
+     * Extracting on the device removes that dependency entirely — instances are
+     * now the fallback, not the requirement.
+     *
+     * Muxed streams (audio+video) are preferred because they are the most
+     * robust to play; the MV player is muted anyway, so a video-only DASH
+     * stream is an acceptable second choice.
+     */
+    suspend fun extractVideoUrl(videoId: String, targetHeight: Int): String? =
+        withContext(Dispatchers.IO) {
+            if (videoId.isBlank() || !ensureInitialized()) return@withContext null
+            try {
+                val extractor = ServiceList.YouTube.getStreamExtractor(
+                    "https://www.youtube.com/watch?v=$videoId"
+                )
+                extractor.fetchPage()
+                val stream = pickVideoStream(extractor.videoStreams, targetHeight)
+                    ?: return@withContext null
+                if (stream.isUrl) stream.content else null
+            } catch (t: Throwable) {
+                Log.w(TAG, "Video extraction failed for $videoId: ${t.message}")
+                null
+            }
+        }
+
+    /**
+     * Picks the video stream closest to [targetHeight] without exceeding it
+     * (falling back to the smallest available). Muxed first. Pure so the
+     * preference rule can be reasoned about without a device.
+     */
+    internal fun pickVideoStream(
+        streams: List<VideoStream>?,
+        targetHeight: Int
+    ): VideoStream? {
+        val usable = streams.orEmpty().filter { it.isUrl && it.height > 0 }
+        if (usable.isEmpty()) return null
+        val muxed = usable.filter { !it.isVideoOnly }
+        val pool = muxed.ifEmpty { usable }
+        return pool.filter { it.height <= targetHeight }.maxByOrNull { it.height }
+            ?: pool.minByOrNull { it.height }
     }
 
     /**

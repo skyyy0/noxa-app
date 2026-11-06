@@ -1,5 +1,7 @@
 <resources>
-    <string name="app_name">NOXA</string>
-    <string name="widget_name">NOXA — Now Playing</string>
+    <!-- Nama tampilan produk. applicationId TIDAK berubah (com.noxa.music),
+         jadi pembaruan in-place tetap bekerja dengan tanda tangan yang sama. -->
+    <string name="app_name">NOXA Music</string>
+    <string name="widget_name">NOXA Music — Now Playing</string>
     <string name="widget_description">Kontrol lagu yang sedang diputar langsung dari layar utama.</string>
 </resources>

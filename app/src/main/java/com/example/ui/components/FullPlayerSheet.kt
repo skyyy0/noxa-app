@@ -45,6 +45,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.GraphicEq
@@ -67,8 +68,13 @@ import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Subject
 import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ModalBottomSheet
@@ -173,11 +179,20 @@ fun FullPlayerSheet(
     karaokeOverlayEnabled: Boolean = true,
     /** Opens the artist profile from the now-playing artist line (nullable). */
     onOpenArtist: ((String, String) -> Unit)? = null,
+    // --------------------------------------- v3.5.5: Memori Lagu & Flow/AutoMix
+    /** Diary entry for the current song (null: none yet). */
+    songMemory: com.example.data.local.SongMemory? = null,
+    /** Saves the memory text; blank text deletes it. Null hides the pill. */
+    onSaveSongMemory: ((String) -> Unit)? = null,
+    flowEnabled: Boolean = false,
+    onToggleFlow: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     var showQueueSheet by remember { mutableStateOf(false) }
     var showLyricsSheet by remember { mutableStateOf(false) }
     var showSleepTimerDialog by remember { mutableStateOf(false) }
+    var showMemoryDialog by remember { mutableStateOf(false) }
+    var memoryDraft by remember { mutableStateOf("") }
 
     // ------------------------------------------------ spectrum visualizer
     // One icon in the top bar arms it; the style chips only surface while
@@ -599,6 +614,107 @@ fun FullPlayerSheet(
                                 .noxaPop(trigger = isFavorite)
                         )
                     }
+                }
+
+                // ------------------------------ v3.5.5: Memori Lagu & Flow
+                if (onSaveSongMemory != null || onToggleFlow != null) {
+                    Spacer(modifier = Modifier.height(14.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        onSaveSongMemory?.let {
+                            PlayerFeaturePill(
+                                icon = Icons.Default.EditNote,
+                                title = "Memori",
+                                subtitle = songMemory?.note?.let { note ->
+                                    if (note.length > 28) note.take(28) + "…" else note
+                                } ?: "Catat momen lagu ini",
+                                active = songMemory != null,
+                                onClick = {
+                                    memoryDraft = songMemory?.note.orEmpty()
+                                    showMemoryDialog = true
+                                },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                        onToggleFlow?.let { toggle ->
+                            PlayerFeaturePill(
+                                icon = Icons.Default.GraphicEq,
+                                title = "Flow",
+                                subtitle = if (flowEnabled) "Antrean di-weave" else "AutoMix tanpa jeda",
+                                active = flowEnabled,
+                                onClick = toggle,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
+                }
+
+                // Memori Lagu dialog — saved locally per song id.
+                if (showMemoryDialog && onSaveSongMemory != null) {
+                    val song = playerState.currentSong
+                    AlertDialog(
+                        onDismissRequest = { showMemoryDialog = false },
+                        containerColor = NoxaSurfaceElevated,
+                        title = {
+                            Text(
+                                "Memori lagu",
+                                color = NoxaTextPrimary,
+                                fontSize = 17.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        },
+                        text = {
+                            Column {
+                                Text(
+                                    song?.let { "${it.artist} — ${it.title}" }.orEmpty(),
+                                    color = NoxaTextSecondary,
+                                    fontSize = 12.sp
+                                )
+                                Spacer(modifier = Modifier.height(10.dp))
+                                OutlinedTextField(
+                                    value = memoryDraft,
+                                    onValueChange = { memoryDraft = it.take(280) },
+                                    placeholder = {
+                                        Text(
+                                            "Contoh: ini lagu yang saya dengar waktu nunggu hasil",
+                                            color = NoxaTextTertiary,
+                                            fontSize = 12.sp
+                                        )
+                                    },
+                                    minLines = 3,
+                                    maxLines = 5,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                                Text(
+                                    "Disimpan di perangkat dan bisa disebut lagi oleh NOXA AI.",
+                                    color = NoxaTextTertiary,
+                                    fontSize = 10.5.sp,
+                                    modifier = Modifier.padding(top = 8.dp)
+                                )
+                            }
+                        },
+                        confirmButton = {
+                            Button(
+                                onClick = {
+                                    onSaveSongMemory(memoryDraft)
+                                    showMemoryDialog = false
+                                },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = NoxaLime,
+                                    contentColor = NoxaBlack
+                                )
+                            ) {
+                                Text("Simpan", fontWeight = FontWeight.Bold)
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { showMemoryDialog = false }) {
+                                Text("Tutup", color = NoxaTextSecondary)
+                            }
+                        }
+                    )
                 }
 
                 Spacer(modifier = Modifier.height(16.dp))
@@ -1631,6 +1747,58 @@ private fun PinnedQuoteBlock(song: Song) {
             lineHeight = 18.sp,
             modifier = Modifier.testTag("pinned_quote_text")
         )
+    }
+}
+
+/**
+ * Compact feature pill used by Memori Lagu and Flow in the player sheet.
+ * Inactive = neutral surface; active = lime tinted, so an armed feature is
+ * visible at a glance without a switch widget.
+ */
+@Composable
+private fun PlayerFeaturePill(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    subtitle: String,
+    active: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(16.dp))
+            .background(if (active) NoxaLime.copy(alpha = 0.12f) else NoxaSurfaceSecondary)
+            .border(
+                1.dp,
+                if (active) NoxaLime.copy(alpha = 0.45f) else NoxaBorder,
+                RoundedCornerShape(16.dp)
+            )
+            .noxaTap(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = if (active) NoxaLime else NoxaTextSecondary,
+            modifier = Modifier.size(17.dp)
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                color = if (active) NoxaLime else NoxaTextPrimary,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                text = subtitle,
+                color = NoxaTextTertiary,
+                fontSize = 9.5.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
     }
 }
 

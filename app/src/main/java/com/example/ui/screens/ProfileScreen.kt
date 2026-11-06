@@ -31,6 +31,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowForward
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Code
@@ -140,7 +141,7 @@ fun ProfileScreen(
     onSetAutoplaySimilar: (Boolean) -> Unit,
     onSetKaraokeOverlay: (Boolean) -> Unit,
     onSetAutoResumeOnOpen: (Boolean) -> Unit,
-    /** v2.0.0 — crossfade lembut antar lagu (Sistem Pintar mematikan di HP kelas Hemat). */
+    /** v2.0.0 — crossfade lembut antar lagu (Sistem Pintar mematikan di HP kelas Slow). */
     onSetCrossfade: (Boolean) -> Unit = {},
     /** v2.0.0 — profil perangkat hasil pemindaian sekali di awal. */
     perfProfile: com.example.data.local.PerfProfile? = null,
@@ -913,7 +914,12 @@ fun ProfileScreen(
         Spacer(modifier = Modifier.height(10.dp))
         NoxaProfileCard(currentUser = currentUser, yearListening = yearListening)
 
-        // JELAJAHI — About Sky, NOXA AI, dan Dengar Bareng dalam satu grup
+        // NOXA AI DITONJOLKAN (v3.5.5) — dulu tersembunyi di dalam grup
+        // "Jelajahi" dan pengguna sulit menemukannya. Sekarang kartu sorotan
+        // penuh dengan gradien lime, di atas semua bagian lain.
+        NoxaAiSpotlightCard(onClick = onOpenAiChat)
+
+        // JELAJAHI — About Sky dan Dengar Bareng dalam satu grup
         // inset: baris biasa dengan chevron, bukan tiga kartu berbingkai.
         SettingsSectionLabel("Jelajahi")
         SettingsGroup(tag = "explore_group") {
@@ -921,7 +927,7 @@ fun ProfileScreen(
                 icon = Icons.Default.Code,
                 iconTint = NoxaLime,
                 title = "About Sky",
-                subtitle = "Meet the architect behind NOXA and Sky Vibes",
+                subtitle = "Meet the architect behind NOXA Music",
                 onClick = onNavigateToAboutSky,
                 tag = "about_sky_nav_card",
                 trailing = {
@@ -939,14 +945,6 @@ fun ProfileScreen(
                         )
                     }
                 }
-            )
-            SettingsRowDivider()
-            SettingsRow(
-                title = "Chat dengan NOXA AI",
-                subtitle = "Minta putar lagu, bikin playlist, atau curhat",
-                leading = { com.example.ui.screens.AiAvatar(size = 30.dp) },
-                onClick = onOpenAiChat,
-                tag = "ai_chat_nav_card"
             )
             SettingsRowDivider()
             SettingsRow(
@@ -994,9 +992,9 @@ fun ProfileScreen(
                 icon = Icons.Default.Language,
                 iconTint = NoxaLime,
                 title = "Official Website",
-                value = "skyvibes.my.id",
+                value = "skydev.my.id",
                 onClick = {
-                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://skyvibes.my.id"))
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://skydev.my.id"))
                     context.startActivity(intent)
                 },
                 tag = "link_website"
@@ -1104,7 +1102,7 @@ fun ProfileScreen(
             SettingsToggleRow(
                 title = "Crossfade lembut",
                 subtitle = if (perfProfile?.crossfadeAllowed == false) {
-                    "Nonaktif di perangkat kelas Hemat (keputusan Sistem Pintar)"
+                    "Nonaktif di perangkat kelas Slow (keputusan Sistem Pintar)"
                 } else {
                     "Pelankan volume di akhir lagu biar transisi mulus"
                 },
@@ -1143,7 +1141,7 @@ fun ProfileScreen(
             Column(modifier = Modifier.padding(16.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = perfProfile?.tierLabel ?: "Seimbang",
+                        text = perfProfile?.tierLabel ?: "Balanced",
                         color = NoxaLime,
                         fontSize = 15.sp,
                         fontWeight = FontWeight.Bold
@@ -1563,6 +1561,84 @@ private fun journalColor(moodId: String): Color = when (moodId) {
     "fokus" -> NoxaLime
     "semangat" -> NoxaEmber
     else -> NoxaPurple
+}
+
+/**
+ * **NOXA AI spotlight** (v3.5.5) — the assistant is the app's best feature and
+ * used to be buried three rows deep in a settings group. This card sits above
+ * every section, in the same lime language as Home, and is impossible to miss.
+ */
+@Composable
+private fun NoxaAiSpotlightCard(onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp)
+            .clip(RoundedCornerShape(22.dp))
+            .background(
+                Brush.linearGradient(
+                    listOf(
+                        NoxaLime.copy(alpha = 0.20f),
+                        NoxaHaze.copy(alpha = 0.12f),
+                        NoxaSurfaceElevated
+                    )
+                )
+            )
+            .border(1.dp, NoxaLime.copy(alpha = 0.32f), RoundedCornerShape(22.dp))
+            .testTag("ai_spotlight_card")
+            .noxaTap(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        com.example.ui.screens.AiAvatar(size = 46.dp)
+        Spacer(modifier = Modifier.width(14.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "NOXA AI",
+                    color = NoxaTextPrimary,
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(NoxaLime.copy(alpha = 0.18f))
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        text = "BARU",
+                        color = NoxaLime,
+                        fontSize = 8.sp,
+                        fontWeight = FontWeight.Black
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(3.dp))
+            Text(
+                text = "Putar lagu, bikin playlist, atur antrean & equalizer — cukup ngobrol",
+                color = NoxaTextSecondary,
+                fontSize = 11.5.sp,
+                lineHeight = 16.sp
+            )
+        }
+        Spacer(modifier = Modifier.width(8.dp))
+        Box(
+            modifier = Modifier
+                .size(36.dp)
+                .clip(RoundedCornerShape(50))
+                .background(NoxaLime),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Default.ArrowForward,
+                contentDescription = null,
+                tint = NoxaBlack,
+                modifier = Modifier.size(18.dp)
+            )
+        }
+    }
 }
 
 /** One stat line inside the weekly recap card. */

@@ -482,6 +482,29 @@ class NoxaAudioPlayer(private val context: Context) {
     }
 
     /**
+     * **Flow / AutoMix** — replaces everything AFTER the current track with
+     * [songs], with the current track kept in place.
+     *
+     * Playback is not restarted and the position is not touched: the user keeps
+     * listening to the same second of the same song while the rest of the queue
+     * is re-woven around it. Already-played items stay in the queue as history.
+     */
+    fun setUpcomingQueue(songs: List<Song>) {
+        val currentIndex = exoPlayer.currentMediaItemIndex
+        if (exoPlayer.mediaItemCount == 0 || currentIndex < 0) return
+        val currentId = exoPlayer.getMediaItemAt(currentIndex).mediaId
+        while (exoPlayer.mediaItemCount > currentIndex + 1) {
+            exoPlayer.removeMediaItem(exoPlayer.mediaItemCount - 1)
+        }
+        songs.filter { it.id != currentId }.forEach { song ->
+            songsById[song.id] = song
+            exoPlayer.addMediaItem(song.toMediaItem())
+        }
+        syncQueueFromPlayer()
+        persistSession(force = true)
+    }
+
+    /**
      * Replaces the queued media item for [song] with its freshly resolved
      * stream URL (YouTube tracks resolve lazily, one by one, after playback
      * already started). The currently playing item is never touched — it is

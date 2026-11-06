@@ -129,12 +129,31 @@ fun PlaylistDetailScreen(
     downloadingIds: Set<String> = emptySet(),
     onToggleDownload: (Song) -> Unit = {},
     onStartRadio: (Song) -> Unit = {},
+    // ------------------------------------------- v3.5.5: studio cover
+    playlistCover: com.example.data.local.PlaylistCover =
+        com.example.data.local.PlaylistCover(
+            style = 0,
+            seed = com.example.data.local.PlaylistCoverStore.defaultSeed(playlistName)
+        ),
+    onSavePlaylistCover: (Int, Int) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
     val songs by songsFlow.collectAsStateWithLifecycle(initialValue = emptyList())
     val haptic = LocalHapticFeedback.current
     var showShareResult by remember { mutableStateOf(false) }
     var justCopied by remember { mutableStateOf(false) }
+    var showCoverStudio by remember { mutableStateOf(false) }
+
+    PlaylistCoverStudioHost(
+        visible = showCoverStudio,
+        playlistName = playlistName,
+        cover = playlistCover,
+        onDismiss = { showCoverStudio = false },
+        onSave = { style, seed ->
+            onSavePlaylistCover(style, seed)
+            showCoverStudio = false
+        }
+    )
 
     // A successful publish opens the code sheet; errors fall through to the
     // inline banner below (honest feedback for both paths).
@@ -311,6 +330,57 @@ fun PlaylistDetailScreen(
                             .padding(horizontal = 12.dp, vertical = 8.dp)
                             .noxaAppear(60)
                     ) {
+                        // STUDIO COVER (v3.5.5) — cover digenerate di perangkat,
+                        // bisa diganti gaya & paletnya, lalu tersimpan.
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 12.dp)
+                                .clip(RoundedCornerShape(20.dp))
+                                .background(NoxaSurfaceSecondary)
+                                .border(1.dp, NoxaBorder, RoundedCornerShape(20.dp))
+                                .noxaTap { showCoverStudio = true }
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            com.example.ui.components.PlaylistCoverArt(
+                                name = playlistName,
+                                cover = playlistCover,
+                                modifier = Modifier.size(84.dp),
+                                cornerRadius = 18.dp
+                            )
+                            Spacer(modifier = Modifier.width(14.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Studio Cover",
+                                    color = NoxaTextPrimary,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Spacer(modifier = Modifier.height(3.dp))
+                                Text(
+                                    text = "Ganti gaya cover playlist ini — dibuat di " +
+                                        "perangkat, tanpa unggah",
+                                    color = NoxaTextTertiary,
+                                    fontSize = 11.sp,
+                                    lineHeight = 15.sp
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(50))
+                                    .background(NoxaLime.copy(alpha = 0.16f))
+                                    .padding(horizontal = 10.dp, vertical = 6.dp)
+                            ) {
+                                Text(
+                                    text = "Atur",
+                                    color = NoxaLime,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -557,6 +627,24 @@ fun PlaylistDetailScreen(
             }
         }
     }
+}
+
+@Composable
+@OptIn(ExperimentalMaterial3Api::class)
+private fun PlaylistCoverStudioHost(
+    visible: Boolean,
+    playlistName: String,
+    cover: com.example.data.local.PlaylistCover,
+    onDismiss: () -> Unit,
+    onSave: (Int, Int) -> Unit
+) {
+    if (!visible) return
+    com.example.ui.components.PlaylistCoverStudioSheet(
+        playlistName = playlistName,
+        initial = cover,
+        onDismiss = onDismiss,
+        onSave = { picked -> onSave(picked.style, picked.seed) }
+    )
 }
 
 /** Outlined pill button used by the collaborative actions. */
