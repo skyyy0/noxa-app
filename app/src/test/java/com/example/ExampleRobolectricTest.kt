@@ -32,6 +32,8 @@ class ExampleRobolectricTest {
   fun `read string from context`() {
     val context = ApplicationProvider.getApplicationContext<Context>()
     val appName = context.getString(R.string.app_name)
-    assertEquals("NOXA", appName)
+    // v3.5.5: nama tampilan produk "NOXA Music" (applicationId TIDAK berubah,
+    // jadi update dari versi lama tetap dipasang di atas aplikasi yang sama).
+    assertEquals("NOXA Music", appName)
   }
 }

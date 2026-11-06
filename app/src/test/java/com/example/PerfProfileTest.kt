@@ -91,9 +91,10 @@ class PerfProfileTest {
 
     @Test
     fun `tier labels are human readable`() {
-        assertEquals("Hemat", profile(1.0, 4).tierLabel)
-        assertEquals("Seimbang", profile(4.0, 4).tierLabel)
-        assertEquals("Ngebut", profile(12.0, 8).tierLabel)
+        // v3.5.5: label bahasa Inggris mengikuti istilah mode performa chipset.
+        assertEquals("Slow", profile(1.0, 4).tierLabel)
+        assertEquals("Balanced", profile(4.0, 4).tierLabel)
+        assertEquals("Fast", profile(12.0, 8).tierLabel)
     }
 
     @Test
