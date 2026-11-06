@@ -93,6 +93,14 @@ android {
       isCrunchPngs = true
       isMinifyEnabled = true
       isShrinkResources = false
+      // WAJIB: tanpa baris ini R8 berjalan hanya dengan aturan bawaan dan
+      // seluruh keep rule di app/proguard-rules.pro (Firebase/GMS, Moshi,
+      // Room, BuildConfig, NewPipe) tidak pernah terpakai — build release
+      // langsung gagal di minifyReleaseWithR8.
+      proguardFiles(
+        getDefaultProguardFile("proguard-android-optimize.txt"),
+        "proguard-rules.pro"
+      )
       signingConfigs.findByName("release")?.let { signingConfig = it }
     }
     debug {

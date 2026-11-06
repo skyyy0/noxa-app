@@ -55,6 +55,10 @@
 # absent by design, not accidentally missing from our dependency set.
 -dontwarn java.beans.**
 -dontwarn javax.script.**
+-dontwarn org.mozilla.javascript.**
+-dontwarn java.awt.**
+-dontwarn javax.lang.model.**
+-dontwarn java.nio.file.**
 
 # --- Firebase (AI, Auth, Firestore, App Check) -------------------------
 # Official consumer rules ship with the SDKs; these only silence optional
