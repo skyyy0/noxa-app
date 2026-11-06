@@ -47,7 +47,19 @@ class PlaybackSessionStore(context: Context) {
     fun load(): PlaybackSession? {
         val raw = prefs.getString(KEY_SESSION, null) ?: return null
         return try {
-            adapter.fromJson(raw)?.takeIf { it.songs.isNotEmpty() }
+            val session = adapter.fromJson(raw) ?: return null
+            // Sessions written by 3.5.5 before the @JsonClass fix can carry
+            // null titles/artists inside non-null fields; repair them instead
+            // of letting a null reach Compose text (startup crash).
+            val songs = session.songs
+                .map { it.sanitised() }
+                .filter { it.id.isNotBlank() }
+            if (songs.isEmpty()) return null
+            session.copy(
+                songs = songs,
+                index = session.index.coerceIn(0, songs.lastIndex),
+                positionMs = session.positionMs.coerceAtLeast(0L)
+            )
         } catch (e: Exception) {
             null
         }

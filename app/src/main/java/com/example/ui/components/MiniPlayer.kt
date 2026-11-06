@@ -168,7 +168,9 @@ fun MiniPlayer(
                         modifier = Modifier.weight(1f)
                     ) {
                         Text(
-                            text = currentSong.title,
+                            // displayTitle, not title: a null title reaching
+                            // SpannableString took the app down on launch.
+                            text = currentSong.displayTitle,
                             color = NoxaTextPrimary,
                             fontWeight = FontWeight.Bold,
                             fontSize = 14.sp,
@@ -178,7 +180,7 @@ fun MiniPlayer(
                             modifier = Modifier.basicMarquee()
                         )
                         Text(
-                            text = currentSong.artist,
+                            text = currentSong.displayArtist,
                             color = NoxaTextSecondary,
                             fontSize = 12.sp,
                             maxLines = 1,

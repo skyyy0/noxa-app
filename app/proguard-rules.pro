@@ -21,6 +21,10 @@
 # Adapters are code-generated (KSP) and looked up by the generated factory
 # names; data classes keep their @Json members.
 -keep @com.squareup.moshi.JsonClass class * { *; }
+# Model data classes (Song, MusicSource) are written to disk inside the
+# playback session. Their JSON is read by name, so renamed fields turn a saved
+# session into nulls — the 3.5.5 startup crash. Keep the package readable.
+-keep class com.example.data.model.** { *; }
 -keepclassmembers class * {
     @com.squareup.moshi.Json <fields>;
 }

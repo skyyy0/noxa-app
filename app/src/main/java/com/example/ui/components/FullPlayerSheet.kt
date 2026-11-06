@@ -552,7 +552,9 @@ fun FullPlayerSheet(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = song.title,
+                            // Same guard as the mini player: never hand a null
+                            // CharSequence to the text measurer.
+                            text = song.displayTitle,
                             color = NoxaTextPrimary,
                             fontSize = 20.sp,
                             fontWeight = FontWeight.Bold,
@@ -565,7 +567,7 @@ fun FullPlayerSheet(
                         Spacer(modifier = Modifier.height(4.dp))
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
-                                text = song.artist,
+                                text = song.displayArtist,
                                 color = NoxaTextSecondary,
                                 fontSize = 15.sp,
                                 maxLines = 1,
