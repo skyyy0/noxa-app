@@ -64,7 +64,7 @@ data class OfflineTrackEntity(
             shareUrl = shareUrl,
             artistId = artistId,
             isPreview = isPreview
-        ).normalized()
+        ).sanitised()
     }
 
     companion object {

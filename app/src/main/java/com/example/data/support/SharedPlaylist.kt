@@ -23,7 +23,7 @@ data class SharedPlaylistSong(
         artist = artist,
         artworkUrl = artwork,
         durationMs = durationMs
-    ).withDerivedProviderFields().normalized()
+    ).withDerivedProviderFields().sanitised()
 
     companion object {
         fun fromSong(song: Song): SharedPlaylistSong = SharedPlaylistSong(

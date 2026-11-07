@@ -330,7 +330,7 @@ class NoxaAudioPlayer(private val context: Context) {
      * song should continue where it stopped, not from the top.
      */
     private fun replaceCurrentStreamKeepPosition(song: Song, resumeMs: Long) {
-        val safeSong = song.normalized()
+        val safeSong = song.sanitised()
         val index = exoPlayer.currentMediaItemIndex
         if (index < 0 || index >= exoPlayer.mediaItemCount) {
             exoPlayer.prepare()
@@ -369,8 +369,8 @@ class NoxaAudioPlayer(private val context: Context) {
     }
 
     fun playSong(song: Song, queue: List<Song> = listOf(song), index: Int = 0) {
-        val safeSong = song.normalized()
-        val songs = (if (queue.isEmpty()) listOf(song) else queue).map { it.normalized() }
+        val safeSong = song.sanitised()
+        val songs = (if (queue.isEmpty()) listOf(song) else queue).map { it.sanitised() }
         val targetIndex = if (safeSong.id in songs.map { it.id }) {
             songs.indexOfFirst { it.id == safeSong.id }
         } else {
@@ -470,7 +470,7 @@ class NoxaAudioPlayer(private val context: Context) {
 
     /** Appends [song] to the end of the queue. */
     fun addToQueue(song: Song) {
-        val safeSong = song.normalized()
+        val safeSong = song.sanitised()
         if (exoPlayer.mediaItemCount == 0) {
             playSong(safeSong)
             return
@@ -499,7 +499,7 @@ class NoxaAudioPlayer(private val context: Context) {
         while (exoPlayer.mediaItemCount > currentIndex + 1) {
             exoPlayer.removeMediaItem(exoPlayer.mediaItemCount - 1)
         }
-        songs.map { it.normalized() }.filter { it.id != currentId }.forEach { song ->
+        songs.map { it.sanitised() }.filter { it.id != currentId }.forEach { song ->
             songsById[song.id] = song
             exoPlayer.addMediaItem(song.toMediaItem())
         }
@@ -514,7 +514,7 @@ class NoxaAudioPlayer(private val context: Context) {
      * already streaming from its own URL.
      */
     fun updateSongStream(song: Song) {
-        val safeSong = song.normalized()
+        val safeSong = song.sanitised()
         if (!isPlayable(safeSong.streamUrl)) return
         val index = (0 until exoPlayer.mediaItemCount)
             .firstOrNull { exoPlayer.getMediaItemAt(it).mediaId == safeSong.id } ?: return
@@ -549,7 +549,7 @@ class NoxaAudioPlayer(private val context: Context) {
      * as if it were the song.
      */
     fun swapCurrentStreamAndRestart(song: Song) {
-        val safeSong = song.normalized()
+        val safeSong = song.sanitised()
         if (!isPlayable(safeSong.streamUrl)) {
             resumeAfterHold()
             return
@@ -789,7 +789,7 @@ class NoxaAudioPlayer(private val context: Context) {
      */
     fun restoreSession(session: PlaybackSession): Boolean {
         if (session.songs.isEmpty() || _uiState.value.currentSong != null) return false
-        val songs = session.songs.map { it.normalized() }
+        val songs = session.songs.map { it.sanitised() }
         val index = session.index.coerceIn(0, songs.size - 1)
         _uiState.update {
             it.copy(

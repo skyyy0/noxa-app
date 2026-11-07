@@ -24,7 +24,7 @@ data class FavoriteSongEntity(
         streamUrl = streamUrl,
         durationMs = durationMs,
         isFavorite = true
-    ).normalized()
+    ).sanitised()
 
     companion object {
         fun fromSong(song: Song): FavoriteSongEntity = FavoriteSongEntity(
@@ -59,7 +59,7 @@ data class HistorySongEntity(
         streamUrl = streamUrl,
         durationMs = durationMs,
         isFavorite = isFav
-    ).normalized()
+    ).sanitised()
 
     companion object {
         fun fromSong(song: Song): HistorySongEntity = HistorySongEntity(
