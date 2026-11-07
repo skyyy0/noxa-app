@@ -13,6 +13,7 @@ import com.example.ui.components.MiniPlayer
 import com.example.ui.components.SongListItem
 import com.example.ui.screens.GetStartedScreen
 import com.example.ui.screens.HomeScreen
+import com.example.ui.theme.NoxaTheme
 import com.example.ui.viewmodel.LyricsUiState
 import com.example.ui.viewmodel.VideoUiState
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -59,6 +60,37 @@ class UiRenderSmokeTest {
                 onToggleFavorite = {},
                 onClick = {}
             )
+        }
+        compose.waitForIdle()
+    }
+
+    @Test
+    fun miniPlayerRendersSongWithNullTitleFromLegacySession() {
+        val legacy = song("deezer:legacy", "Kangen", "Dewa 19")
+        Song::class.java.getDeclaredField("title").apply {
+            isAccessible = true
+            set(legacy, null)
+        }
+        Song::class.java.getDeclaredField("artist").apply {
+            isAccessible = true
+            set(legacy, null)
+        }
+
+        val progress = MutableStateFlow(PlaybackProgress())
+        compose.setContent {
+            NoxaTheme {
+                MiniPlayer(
+                    currentSong = legacy,
+                    isPlaying = true,
+                    isBuffering = false,
+                    progressFlow = progress,
+                    isFavorite = false,
+                    onTogglePlayPause = {},
+                    onNext = {},
+                    onToggleFavorite = {},
+                    onClick = {}
+                )
+            }
         }
         compose.waitForIdle()
     }
