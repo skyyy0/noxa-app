@@ -40,7 +40,7 @@ data class PlaylistSongEntity(
         remoteId = remoteId,
         isPreview = isPreview,
         shareUrl = shareUrl
-    )
+    ).normalized()
 
     companion object {
         fun fromSong(playlistId: Long, song: Song, position: Int): PlaylistSongEntity =
