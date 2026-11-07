@@ -257,7 +257,9 @@ fun SearchScreen(
                     }
                 },
                 singleLine = true,
-                shape = RoundedCornerShape(12.dp),
+                // Capsule field, iOS style: a rounded rectangle reads as a form
+                // box, a pill reads as search.
+                shape = RoundedCornerShape(50),
                 colors = TextFieldDefaults.colors(
                     focusedContainerColor = NoxaSurfaceSecondary,
                     unfocusedContainerColor = NoxaSurfaceSecondary,
@@ -280,7 +282,7 @@ fun SearchScreen(
         Row(
             modifier = Modifier
                 .padding(horizontal = 20.dp, vertical = 6.dp)
-                .clip(RoundedCornerShape(10.dp))
+                .clip(RoundedCornerShape(50))
                 .background(NoxaSurfaceSecondary)
                 .padding(3.dp),
             horizontalArrangement = Arrangement.spacedBy(3.dp)
@@ -594,7 +596,7 @@ private fun SearchModeChip(
 ) {
     Box(
         modifier = modifier
-            .clip(RoundedCornerShape(8.dp))
+            .clip(RoundedCornerShape(50))
             .then(if (selected) Modifier.background(NoxaSurfaceElevated) else Modifier)
             .noxaTap { onClick() }
             .padding(vertical = 8.dp)

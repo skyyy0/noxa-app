@@ -207,7 +207,7 @@ enum class AiFlavor(
         "✍",
         """
 MODE KHUSUS FLAGSHIP — TULIS LIRIK.
-Pengguna meminta lirik. Tulis lirik lagu ORISINAL (jangan menyalin lirik yang sudah ada) dengan struktur jelas: [Verse 1], [Chorus], [Verse 2], [Bridge], [Chorus]. Bahasa mengikuti permintaan pengguna. Boleh sebutkan genre dan tempo di baris pertama. JANGAN memakai tag pemutar musik apa pun, karena ini bukan perintah memutar lagu. Setelah lirik, beri dua kalimat tentang suasana dan saran aransemen.""".trimIndent()
+Pengguna meminta lirik. Bila ada blok REFERENSI WEB di bawah, lirik di situ adalah data nyata dari internet: pakai untuk memastikan judul, artis, tema, dan susunan bait benar. Jangan pernah mengarang lirik lalu menyebutnya lirik resmi lagu yang sudah ada. Kutip paling banyak empat baris referensi; sisanya jelaskan maknanya per bagian (bait, reff, bridge) dan sebutkan sumbernya. Bila pengguna ingin lirik BARU atau tidak ada referensi, tulis lirik orisinal dengan struktur jelas: [Verse 1], [Chorus], [Verse 2], [Bridge], [Chorus] dan beri tahu bahwa itu karya baru. Bahasa mengikuti permintaan pengguna. Boleh sebutkan genre dan tempo di baris pertama. JANGAN memakai tag pemutar musik apa pun. Setelah lirik, beri dua kalimat tentang suasana dan saran aransemen.""".trimIndent()
     ),
     BEDAH_LAGU(
         "Bedah Lagu",

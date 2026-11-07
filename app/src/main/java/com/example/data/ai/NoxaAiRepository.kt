@@ -327,7 +327,9 @@ class NoxaAiRepository(context: Context) {
     suspend fun chat(
         userMessage: String,
         memoryContext: String? = null,
-        flavor: AiFlavor? = null
+        flavor: AiFlavor? = null,
+        /** Real lyrics fetched from the web for "Tulis Lirik" grounding. */
+        lyricReference: String? = null
     ): AiReply = withContext(Dispatchers.IO) {
         val requested = selectedModel
         // Flagship-only working modes: a free model never receives an addendum
@@ -338,7 +340,9 @@ class NoxaAiRepository(context: Context) {
         val gate = quotaFor(requested)
         if (gate.exhausted) throw AiQuotaExceeded(requested, gate)
 
-        val attempt = runCatching { requestCompletion(requested, userMessage, memoryContext, mode) }
+        val attempt = runCatching {
+            requestCompletion(requested, userMessage, memoryContext, mode, lyricReference)
+        }
         attempt.exceptionOrNull()?.let { error ->
             if (error is CancellationException) throw error
         }
@@ -351,7 +355,7 @@ class NoxaAiRepository(context: Context) {
         if (requested == AiModel.DEFAULT) throw failure
         // Maintenance or a dead key never costs the user their message: the
         // free default model answers instead, and the bubble says so.
-        val fallback = requestCompletion(AiModel.DEFAULT, userMessage, memoryContext, null)
+        val fallback = requestCompletion(AiModel.DEFAULT, userMessage, memoryContext, null, null)
             ?: throw failure
         parseReply(fallback, AiModel.DEFAULT, fallbackFrom = requested)
     }
@@ -366,14 +370,15 @@ class NoxaAiRepository(context: Context) {
         model: AiModel,
         userMessage: String,
         memoryContext: String?,
-        flavor: AiFlavor? = null
+        flavor: AiFlavor? = null,
+        lyricReference: String? = null
     ): String? {
         val keys = keysFor(model)
         if (keys.isEmpty()) throw IllegalStateException("kredensial NOXA AI kosong")
         var lastFailure: HttpFailure? = null
         keys.forEachIndexed { index, key ->
             val result = runCatching {
-                requestCompletionWithKey(model, key, userMessage, memoryContext, flavor)
+                requestCompletionWithKey(model, key, userMessage, memoryContext, flavor, lyricReference)
             }
             result.getOrNull()?.let { content ->
                 rememberKey(model, index)
@@ -417,11 +422,14 @@ class NoxaAiRepository(context: Context) {
         key: String,
         userMessage: String,
         memoryContext: String?,
-        flavor: AiFlavor? = null
+        flavor: AiFlavor? = null,
+        lyricReference: String? = null
     ): String? {
         val messages = JSONArray()
         messages.put(
-            JSONObject().put("role", "system").put("content", systemPrompt(memoryContext, flavor))
+            JSONObject()
+                .put("role", "system")
+                .put("content", systemPrompt(memoryContext, flavor, lyricReference))
         )
         // Replay a short window of the transcript for continuity.
         loadHistory().takeLast(HISTORY_TURNS)
@@ -624,11 +632,32 @@ ATURAN GAYA:
 - Jangan menyebut dirimu model bahasa atau AI dari perusahaan lain. Kamu NOXA AI, bagian dari NOXA Music.
 """.trimIndent()
 
-        /** System prompt plus optional song memory and flagship mode. */
-        internal fun systemPrompt(memoryContext: String?, flavor: AiFlavor? = null): String {
+        /**
+         * System prompt plus optional song memory, flagship mode, and web
+         * grounding for the lyric mode.
+         */
+        internal fun systemPrompt(
+            memoryContext: String?,
+            flavor: AiFlavor? = null,
+            lyricReference: String? = null
+        ): String {
             val base = if (memoryContext.isNullOrBlank()) SYSTEM_PROMPT
             else SYSTEM_PROMPT + "\n\n" + memoryContext
-            return if (flavor == null) base else base + "\n\n" + flavor.addendum
+            val withMode = if (flavor == null) base else base + "\n\n" + flavor.addendum
+            if (flavor != AiFlavor.TULIS_LIRIK) return withMode
+            return withMode + "\n\n" + (lyricReference ?: LIRIK_TANPA_REFERENSI)
         }
+
+        /**
+         * Told to the model when the web lookup found no real song. It must not
+         * dress invented words up as the official lyrics.
+         */
+        private val LIRIK_TANPA_REFERENSI = """
+            REFERENSI WEB: tidak ada lirik resmi yang ditemukan untuk permintaan ini.
+            Jika pengguna menyebut lagu yang sudah ada, katakan terus terang bahwa lirik resminya
+            tidak ditemukan dan minta judul serta artisnya dengan tepat — JANGAN mengarang lirik
+            lalu menyebutnya lirik asli lagu tersebut. Jika pengguna meminta lirik baru, tulis
+            lirik orisinal dan sebutkan bahwa itu karya baru, bukan lirik lagu yang sudah ada.
+        """.trimIndent()
     }
 }

@@ -144,6 +144,50 @@ class LyricsRepository {
             hits.values.toList()
         }
 
+    /**
+     * **Grounding for "Tulis Lirik".** When the user asks about a real song the
+     * assistant must not invent lyrics, so the request is reduced to a
+     * title/artist query, looked up on LRCLIB, and the real words are handed to
+     * the model as a reference. Returns null for a purely creative brief
+     * ("lirik tentang hujan") — there is nothing to look up.
+     */
+    suspend fun referenceForRequest(request: String): WebLyricReference? =
+        withContext(Dispatchers.IO) {
+            val query = webQueryFor(request) ?: return@withContext null
+            val body = get("$BASE_URL/api/search?q=${encode(query)}", retryOnBusy = true)
+                ?: return@withContext null
+            val array = try {
+                JSONArray(body)
+            } catch (e: Exception) {
+                return@withContext null
+            }
+            val tokens = query.lowercase().split(' ').filter { it.length > 2 }.toSet()
+            var best: JSONObject? = null
+            var bestScore = 0
+            for (i in 0 until array.length()) {
+                val item = array.optJSONObject(i) ?: continue
+                val title = item.optStringOrNull("trackName") ?: continue
+                val artist = item.optStringOrNull("artistName") ?: continue
+                val lyrics = item.optStringOrNull("plainLyrics") ?: continue
+                if (item.optBoolean("instrumental", false)) continue
+                // Every word the user typed should appear in the title/artist,
+                // otherwise "Kangen" would match a hundred unrelated covers.
+                val haystack = "${title.lowercase()} ${artist.lowercase()}"
+                val score = tokens.count { haystack.contains(it) }
+                if (score > bestScore && score >= (tokens.size + 1) / 2) {
+                    bestScore = score
+                    best = item
+                }
+            }
+            val entry = best ?: return@withContext null
+            WebLyricReference(
+                trackName = entry.optStringOrNull("trackName") ?: return@withContext null,
+                artistName = entry.optStringOrNull("artistName") ?: return@withContext null,
+                plainLyrics = (entry.optStringOrNull("plainLyrics") ?: return@withContext null)
+                    .take(MAX_REFERENCE_CHARS)
+            )
+        }
+
     private fun fetchExact(song: Song): TrackLyrics? {
         val url = buildString {
             append(BASE_URL)
@@ -270,6 +314,62 @@ class LyricsRepository {
 
         /** One pause before retrying LRCLIB's transient "server busy" 503. */
         private const val BUSY_RETRY_MS = 600L
+
+        /** How much real lyric text is handed to the model as grounding. */
+        private const val MAX_REFERENCE_CHARS = 1_400
+
+        /**
+         * Command words that carry no title/artist signal. Stripping them turns
+         * "tolong tulis lirik lagu Kangen Dewa 19" into "Kangen Dewa 19" —
+         * LRCLIB returns nothing at all when the filler words are left in.
+         */
+        private val FILLER_WORDS = setOf(
+            "tolong", "coba", "mohon", "bantu", "buatkan", "buat", "bikin", "bikinin",
+            "tulis", "tuliskan", "tulisin", "karang", "karangin", "gubah",
+            "lirik", "liriknya", "lagu", "lagunya", "song", "lyrics", "dari", "oleh",
+            "untuk", "versi", "resmi", "asli", "aslinya", "dengan", "pakai", "judul",
+            "berjudul", "yang", "dong", "ya", "yah", "kak", "min",
+            "aku", "saya", "gue", "gua", "mau", "ingin", "pengen", "please",
+            "bisa", "kah", "full", "lengkap"
+        )
+
+        /**
+         * Reduces a chat request to a title/artist query, or null when the user
+         * is asking for brand-new lyrics rather than an existing song.
+         *
+         * "tentang"/"tema" means a creative brief ("lirik tentang hujan"), so
+         * there is nothing to look up and the model should write original words.
+         *
+         * `internal` and pure so it can be unit-tested without the network.
+         */
+        internal fun webQueryFor(request: String): String? {
+            val lower = request.lowercase()
+            if (lower.contains("tentang") || lower.contains("tema")) return null
+            val cleaned = lower
+                .replace(Regex("[^\\p{L}\\p{N} ]"), " ")
+                .split(' ')
+                .filter { it.isNotBlank() && it !in FILLER_WORDS }
+                .joinToString(" ")
+                .trim()
+            return cleaned.takeIf { it.split(' ').size >= 2 }
+        }
+    }
+}
+
+/**
+ * Real lyrics fetched from the web for the "Tulis Lirik" mode: the model gets
+ * these words as ground truth instead of inventing a song that already exists.
+ */
+data class WebLyricReference(
+    val trackName: String,
+    val artistName: String,
+    val plainLyrics: String
+) {
+    /** Compact block injected into the system prompt. */
+    fun asPromptBlock(): String = buildString {
+        appendLine("REFERENSI WEB — LRCLIB (lirik asli untuk \"$trackName\" oleh $artistName):")
+        appendLine(plainLyrics)
+        append("AKHIR REFERENSI. Gunakan ini sebagai satu-satunya kebenaran tentang lagu tersebut.")
     }
 }
 

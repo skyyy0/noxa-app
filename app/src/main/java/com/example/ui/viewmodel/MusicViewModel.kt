@@ -611,15 +611,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 } else {
                     coroutineScope {
                         hits.map { hit ->
-                            async {
-                                // "Artist Title" is the most reliable query shape.
-                                runCatching {
-                                    repository.search("${hit.artistName} ${hit.trackName}").take(5)
-                                }.getOrDefault(emptyList()).firstOrNull { song ->
-                                    song.title.contains(hit.trackName, ignoreCase = true) ||
-                                        hit.trackName.contains(song.title, ignoreCase = true)
-                                }
-                            }
+                            async { resolveLyricHit(hit) }
                         }.awaitAll().filterNotNull().distinctBy { it.id }
                     }
                 }
@@ -639,6 +631,37 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 _isSearching.value = false
             }
         }
+    }
+
+    /**
+     * Turns one web lyric hit into a playable catalogue song.
+     *
+     * "Artist Title" is the strongest query, but it returns nothing for a lot
+     * of Indonesian tracks (Deezer spells the artist differently, or the hit is
+     * a cover). The title alone is therefore tried next before giving up — that
+     * single fallback is what made lyric search look broken when the source had
+     * clearly found the song.
+     */
+    private suspend fun resolveLyricHit(
+        hit: com.example.data.remote.LyricSearchHit
+    ): Song? {
+        fun matches(song: Song): Boolean =
+            song.title.contains(hit.trackName, ignoreCase = true) ||
+                hit.trackName.contains(song.title, ignoreCase = true)
+
+        val byBoth = runCatching {
+            repository.search("${hit.artistName} ${hit.trackName}").take(8)
+        }.getOrDefault(emptyList())
+        byBoth.firstOrNull(::matches)?.let { return it }
+
+        val byTitle = runCatching {
+            repository.search(hit.trackName).take(8)
+        }.getOrDefault(emptyList())
+        byTitle.firstOrNull(::matches)?.let { return it }
+        // Last resort: the artist's own catalogue, matched loosely on title.
+        return runCatching {
+            repository.search(hit.artistName).take(8)
+        }.getOrDefault(emptyList()).firstOrNull(::matches)
     }
 
     /** Clears the lyric-search result (leaving the Search tab). */
@@ -3785,8 +3808,23 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         _aiError.value = null
         _isAiThinking.value = true
         safeScope.launch {
+            // "Tulis Lirik" is grounded on the real web instead of the model's
+            // memory: the request is looked up on LRCLIB first, so an existing
+            // song is described from its actual words rather than invented ones.
+            val reference = if (_aiFlavor.value == com.example.data.ai.AiFlavor.TULIS_LIRIK) {
+                runCatching { lyricsRepository.referenceForRequest(trimmed) }
+                    .getOrNull()
+                    ?.asPromptBlock()
+            } else {
+                null
+            }
             val reply = try {
-                aiRepository.chat(trimmed, songMemoryStore.contextFor(), _aiFlavor.value)
+                aiRepository.chat(
+                    trimmed,
+                    songMemoryStore.contextFor(),
+                    _aiFlavor.value,
+                    reference
+                )
             } catch (e: CancellationException) {
                 throw e
             } catch (e: com.example.data.ai.NoxaAiRepository.AiQuotaExceeded) {
