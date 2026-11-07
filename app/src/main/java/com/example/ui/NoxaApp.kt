@@ -317,10 +317,17 @@ private fun NoxaAppContent(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(bottom = innerPadding.calculateBottomPadding())
-                    // The bottom bar already consumed the navigation-bar inset;
-                    // telling the children keeps imePadding from adding it a
-                    // second time and leaving a dead strip under the composer.
-                    .consumeWindowInsets(innerPadding)
+                    // Only the bottom inset is actually applied above, so only
+                    // that one is marked consumed. Consuming the whole
+                    // PaddingValues also ate the status-bar inset, which made
+                    // `statusBarsPadding()` inside the screens a no-op and slid
+                    // Home's greeting under the clock. Keeping top/ime insets
+                    // alive lets each screen place itself below the notch.
+                    .consumeWindowInsets(
+                        androidx.compose.foundation.layout.PaddingValues(
+                            bottom = innerPadding.calculateBottomPadding()
+                        )
+                    )
             ) {
                 composable(Screen.Home.route) {
                     // One-time first launch: the device scan must finish

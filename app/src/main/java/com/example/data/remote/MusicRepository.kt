@@ -349,7 +349,13 @@ class MusicRepository(
             ArtistShelf("Justin Bieber", "Justin Bieber", "Hits pop global"),
             ArtistShelf("Iwan Fals", "Iwan Fals", "Legenda musik Indonesia"),
             ArtistShelf("Tulus", "Tulus", "Pop & jazz Indonesia"),
-            ArtistShelf("NOAH", "NOAH & Peterpan", "Dari Peterpan sampai NOAH")
+            ArtistShelf("NOAH", "NOAH & Peterpan", "Dari Peterpan sampai NOAH"),
+            // v3.6.1: the feed kept surfacing the same four names; these give
+            // Home and the shelf carousel a wider spread of Indonesian acts.
+            ArtistShelf("Slank", "Slank", "Rock jalanan sepanjang masa"),
+            ArtistShelf("Padi", "Padi", "Balada pop yang lapang"),
+            ArtistShelf("Fourtwnty", "Fourtwnty", "Folk-pop intim"),
+            ArtistShelf("Bernadya", "Bernadya", "Pop akustik masa kini")
         )
     }
 }

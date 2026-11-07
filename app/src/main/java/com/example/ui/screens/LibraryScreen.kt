@@ -137,7 +137,10 @@ fun LibraryScreen(
         }
     }
 
-    val tabs = listOf(
+    // Short words only: an iOS segmented control keeps every label on one line,
+    // and counts now live in the section header instead of inside the control.
+    val tabs = listOf("Favorit", "Playlist", "Riwayat", "Unduhan")
+    val tabsWithCounts = listOf(
         "Favorit (${favorites.size})",
         "Playlist (${playlistSummaries.size})",
         "Riwayat",
@@ -169,7 +172,7 @@ fun LibraryScreen(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 16.dp)
+                .padding(start = 20.dp, end = 12.dp, top = 10.dp, bottom = 12.dp)
                 .noxaAppear(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
@@ -177,8 +180,9 @@ fun LibraryScreen(
             Text(
                 text = "Koleksi Saya",
                 color = NoxaTextPrimary,
-                fontSize = 28.sp,
-                fontWeight = FontWeight.Bold
+                fontSize = 32.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = (-0.9).sp
             )
 
             if (selectedTab == 1) {
@@ -201,7 +205,7 @@ fun LibraryScreen(
                         Icon(
                             imageVector = Icons.Default.Link,
                             contentDescription = "Gabung playlist kolaboratif",
-                            tint = NoxaLime,
+                            tint = NoxaTextPrimary,
                             modifier = Modifier.size(18.dp)
                         )
                     }
@@ -216,7 +220,7 @@ fun LibraryScreen(
                         Icon(
                             imageVector = Icons.Default.Add,
                             contentDescription = "Playlist baru",
-                            tint = NoxaLime,
+                            tint = NoxaTextPrimary,
                             modifier = Modifier.size(20.dp)
                         )
                     }
@@ -231,41 +235,49 @@ fun LibraryScreen(
             }
         }
 
-        TabRow(
-            selectedTabIndex = selectedTab,
-            containerColor = NoxaBlack,
-            contentColor = NoxaLime,
-            indicator = { tabPositions ->
-                TabRowDefaults.SecondaryIndicator(
-                    modifier = Modifier.tabIndicatorOffset(tabPositions[selectedTab]),
-                    color = NoxaLime,
-                    height = 2.5.dp
-                )
-            },
-            divider = {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(1.dp)
-                        .background(NoxaBorder)
-                )
-            }
+        // iOS segmented control: a quiet grey track with a raised white-label
+        // pill for the active segment. No full-width lime indicator strip.
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .clip(RoundedCornerShape(11.dp))
+                .background(NoxaSurfaceSecondary)
+                .padding(3.dp)
         ) {
             tabs.forEachIndexed { index, title ->
-                Tab(
-                    selected = selectedTab == index,
-                    onClick = { selectedTab = index },
-                    text = {
-                        Text(
-                            text = title,
-                            fontSize = 13.sp,
-                            fontWeight = if (selectedTab == index) FontWeight.Bold else FontWeight.Medium,
-                            color = if (selectedTab == index) NoxaLime else NoxaTextSecondary
+                val active = selectedTab == index
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(9.dp))
+                        .then(
+                            if (active) Modifier.background(NoxaSurfaceElevated) else Modifier
                         )
-                    }
-                )
+                        .noxaTap { selectedTab = index }
+                        .padding(vertical = 7.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = title,
+                        color = if (active) NoxaTextPrimary else NoxaTextSecondary,
+                        fontSize = 11.5.sp,
+                        fontWeight = if (active) FontWeight.SemiBold else FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
             }
         }
+
+        Text(
+            text = tabsWithCounts[selectedTab],
+            color = NoxaTextTertiary,
+            fontSize = 10.5.sp,
+            fontWeight = FontWeight.Medium,
+            letterSpacing = 1.2.sp,
+            modifier = Modifier.padding(start = 24.dp, top = 12.dp)
+        )
 
         when (selectedTab) {
             0 -> {
@@ -281,50 +293,56 @@ fun LibraryScreen(
                         contentPadding = PaddingValues(bottom = 24.dp, top = 12.dp, start = 8.dp, end = 8.dp)
                     ) {
                         item(key = "fav_actions") {
+                            // Compact pill + circle instead of two half-screen
+                            // slabs. Lime stays on the one action that matters.
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                    .padding(horizontal = 16.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Button(
-                                    onClick = { onPlaySong(favorites[0], favorites, 0) },
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = NoxaLime,
-                                        contentColor = NoxaBlack
-                                    ),
-                                    shape = RoundedCornerShape(20.dp),
-                                    modifier = Modifier.weight(1f)
+                                Row(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(50))
+                                        .background(NoxaLime)
+                                        .noxaTap { onPlaySong(favorites[0], favorites, 0) }
+                                        .padding(horizontal = 16.dp, vertical = 9.dp),
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Icon(
                                         imageVector = Icons.Default.PlayArrow,
                                         contentDescription = null,
-                                        modifier = Modifier.size(18.dp)
+                                        tint = NoxaBlack,
+                                        modifier = Modifier.size(16.dp)
                                     )
                                     Spacer(modifier = Modifier.width(6.dp))
-                                    Text("Putar semua", fontWeight = FontWeight.Bold)
+                                    Text(
+                                        "Putar",
+                                        color = NoxaBlack,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
                                 }
 
-                                Button(
-                                    onClick = {
-                                        val shuffled = favorites.shuffled()
-                                        onPlaySong(shuffled[0], shuffled, 0)
-                                    },
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = NoxaSurfaceSecondary,
-                                        contentColor = NoxaTextPrimary
-                                    ),
-                                    shape = RoundedCornerShape(20.dp),
-                                    modifier = Modifier.weight(1f)
+                                Spacer(modifier = Modifier.width(10.dp))
+
+                                Box(
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .clip(CircleShape)
+                                        .background(NoxaSurfaceSecondary)
+                                        .noxaTap {
+                                            val shuffled = favorites.shuffled()
+                                            onPlaySong(shuffled[0], shuffled, 0)
+                                        },
+                                    contentAlignment = Alignment.Center
                                 ) {
                                     Icon(
                                         imageVector = Icons.Default.Shuffle,
-                                        contentDescription = null,
-                                        tint = NoxaLime,
-                                        modifier = Modifier.size(18.dp)
+                                        contentDescription = "Acak",
+                                        tint = NoxaTextPrimary,
+                                        modifier = Modifier.size(17.dp)
                                     )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text("Acak", fontWeight = FontWeight.Bold)
                                 }
                             }
                         }

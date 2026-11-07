@@ -164,6 +164,10 @@ fun SearchScreen(
             BrowseGenre("Iwan Fals", Color(0xFFF59E0B)),
             BrowseGenre("NOAH", Color(0xFF8B5CF6)),
             BrowseGenre("Tulus", Color(0xFF06B6D4)),
+            BrowseGenre("Slank", Color(0xFFF97316)),
+            BrowseGenre("Padi", Color(0xFF0EA5E9)),
+            BrowseGenre("Fourtwnty", Color(0xFF84CC16)),
+            BrowseGenre("Bernadya", Color(0xFFF472B6)),
             BrowseGenre("Justin Bieber", Color(0xFFEC4899)),
             BrowseGenre("Global Top 50", Color(0xFFEF4444)),
             BrowseGenre("Rock & Metal", Color(0xFF10B981))
@@ -177,13 +181,15 @@ fun SearchScreen(
             .statusBarsPadding()
             .testTag("search_screen")
     ) {
-        // Search Header
+        // Search Header — same large-title rhythm as Home, so the two tabs read
+        // as one app instead of two different skins.
         Text(
-            text = "Search",
+            text = "Cari",
             color = NoxaTextPrimary,
-            fontSize = 28.sp,
+            fontSize = 32.sp,
             fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 12.dp)
+            letterSpacing = (-0.9).sp,
+            modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 10.dp, bottom = 12.dp)
         )
 
         // Search Input Bar
@@ -231,7 +237,7 @@ fun SearchScreen(
                             Icon(
                                 imageVector = Icons.Default.Mic,
                                 contentDescription = "Cari dengan suara",
-                                tint = NoxaLime
+                                tint = NoxaTextPrimary
                             )
                         }
                         if (searchQuery.isNotEmpty()) {
@@ -251,11 +257,13 @@ fun SearchScreen(
                     }
                 },
                 singleLine = true,
-                shape = RoundedCornerShape(14.dp),
+                shape = RoundedCornerShape(12.dp),
                 colors = TextFieldDefaults.colors(
-                    focusedContainerColor = NoxaSurfaceElevated,
+                    focusedContainerColor = NoxaSurfaceSecondary,
                     unfocusedContainerColor = NoxaSurfaceSecondary,
-                    focusedIndicatorColor = NoxaLime,
+                    // iOS search fields never light up on focus; the caret is the
+                    // only accent, so the bar stays calm.
+                    focusedIndicatorColor = Color.Transparent,
                     unfocusedIndicatorColor = Color.Transparent,
                     cursorColor = NoxaLime,
                     focusedTextColor = NoxaTextPrimary,
@@ -267,12 +275,15 @@ fun SearchScreen(
             )
         }
 
-        // Mode chips: normal title/artist search vs "Cari pakai lirik".
+        // Mode switch as an iOS segmented control: one grey track, one raised
+        // segment. Two lime pills looked like buttons and shouted.
         Row(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                .padding(horizontal = 20.dp, vertical = 6.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(NoxaSurfaceSecondary)
+                .padding(3.dp),
+            horizontalArrangement = Arrangement.spacedBy(3.dp)
         ) {
             SearchModeChip(
                 label = "Judul & artis",
@@ -283,13 +294,15 @@ fun SearchScreen(
                         onClearLyricSearch()
                     }
                 },
-                testTag = "search_mode_titles"
+                testTag = "search_mode_titles",
+                modifier = Modifier.weight(1f)
             )
             SearchModeChip(
                 label = "Cari pakai lirik",
                 selected = lyricMode,
                 onClick = { lyricMode = true },
-                testTag = "search_mode_lyrics"
+                testTag = "search_mode_lyrics",
+                modifier = Modifier.weight(1f)
             )
         }
 
@@ -481,11 +494,12 @@ fun SearchScreen(
                     .padding(horizontal = 20.dp)
             ) {
                 Text(
-                    text = "Explore Genres",
+                    text = "Jelajahi genre",
                     color = NoxaTextPrimary,
-                    fontSize = 18.sp,
+                    fontSize = 20.sp,
                     fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(vertical = 12.dp)
+                    letterSpacing = (-0.4).sp,
+                    modifier = Modifier.padding(top = 10.dp, bottom = 12.dp)
                 )
 
                 LazyVerticalGrid(
@@ -499,10 +513,12 @@ fun SearchScreen(
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(100.dp)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(genre.color.copy(alpha = 0.25f))
-                                .border(1.dp, genre.color.copy(alpha = 0.55f), RoundedCornerShape(12.dp))
+                                .height(96.dp)
+                                .clip(RoundedCornerShape(16.dp))
+                                // A tinted placeholder instead of a drawn border:
+                                // iOS cards separate by colour and shadow, not by
+                                // outlines around every tile.
+                                .background(genre.color.copy(alpha = 0.18f))
                                 .noxaClickable {
                                     onPerformSearch(genre.name)
                                 }
@@ -534,11 +550,26 @@ fun SearchScreen(
                                         )
                                 )
                             }
+                            // Always-on bottom scrim, even on the tinted
+                            // placeholder, so the label never fights the art.
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(
+                                        Brush.verticalGradient(
+                                            colors = listOf(
+                                                Color.Transparent,
+                                                Color.Black.copy(alpha = 0.72f)
+                                            )
+                                        )
+                                    )
+                            )
                             Text(
                                 text = genre.name,
                                 color = NoxaTextPrimary,
                                 fontSize = 14.sp,
-                                fontWeight = FontWeight.Bold,
+                                fontWeight = FontWeight.SemiBold,
+                                letterSpacing = (-0.2).sp,
                                 modifier = Modifier.padding(12.dp)
                             )
                         }
@@ -550,34 +581,32 @@ fun SearchScreen(
 }
 
 /**
- * One pill in the search-mode row (Judul & artis / Cari pakai lirik).
- * Lime-filled when selected; hairline border when not.
+ * One segment of the search-mode control: raised surface when active, plain
+ * track when not. The lime identity lives elsewhere in the screen.
  */
 @Composable
 private fun SearchModeChip(
     label: String,
     selected: Boolean,
     onClick: () -> Unit,
-    testTag: String
+    testTag: String,
+    modifier: Modifier = Modifier
 ) {
     Box(
-        modifier = Modifier
-            .clip(RoundedCornerShape(20.dp))
-            .background(if (selected) NoxaLime else NoxaSurfaceElevated)
-            .border(
-                1.dp,
-                if (selected) NoxaLime else NoxaBorder,
-                RoundedCornerShape(20.dp)
-            )
+        modifier = modifier
+            .clip(RoundedCornerShape(8.dp))
+            .then(if (selected) Modifier.background(NoxaSurfaceElevated) else Modifier)
             .noxaTap { onClick() }
-            .padding(horizontal = 14.dp, vertical = 7.dp)
-            .testTag(testTag)
+            .padding(vertical = 8.dp)
+            .testTag(testTag),
+        contentAlignment = Alignment.Center
     ) {
         Text(
             text = label,
-            color = if (selected) NoxaBlack else NoxaTextSecondary,
+            color = if (selected) NoxaTextPrimary else NoxaTextSecondary,
             fontSize = 12.sp,
-            fontWeight = FontWeight.SemiBold
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+            maxLines = 1
         )
     }
 }

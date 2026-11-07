@@ -24,7 +24,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -34,7 +36,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -1008,71 +1012,64 @@ private fun AiModelSheet(
     onSelect: (AiModel) -> Unit,
     onDismiss: () -> Unit
 ) {
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
+    // iOS-style sheet: it hugs its content and stops at ~¾ of the screen. The
+    // old build let the sheet grow past the top edge, so the last models sat
+    // below the fold inside a non-scrollable column — impossible to reach.
+    val maxSheetHeight = (LocalConfiguration.current.screenHeightDp * 0.72f).dp
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
         containerColor = NoxaBlack,
-        dragHandle = null
+        dragHandle = { SheetGrabber() }
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .heightIn(max = maxSheetHeight)
+                .verticalScroll(rememberScrollState())
+                .navigationBarsPadding()
                 .padding(horizontal = 20.dp)
-                .padding(top = 18.dp, bottom = 28.dp)
+                .padding(top = 2.dp, bottom = 22.dp)
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                AiAvatar(size = 34.dp)
-                Spacer(modifier = Modifier.width(10.dp))
-                Column {
-                    Text(
-                        "Pilih model",
-                        color = NoxaTextPrimary,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        "Ganti bila satu model sedang maintenance",
-                        color = NoxaTextTertiary,
-                        fontSize = 11.sp
-                    )
-                }
-            }
-            Spacer(modifier = Modifier.height(14.dp))
-            // Plain-language explanation of the two tiers. No fake paywall: the
-            // flagship models are included with these allowances, and the free
-            // models stay unlimited forever.
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(18.dp))
-                    .background(
-                        Brush.linearGradient(
-                            listOf(NoxaLime.copy(alpha = 0.12f), NoxaSurfaceSecondary)
-                        )
-                    )
-                    .border(1.dp, NoxaLime.copy(alpha = 0.22f), RoundedCornerShape(18.dp))
-                    .padding(14.dp),
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        "Gratis tanpa batas, flagship dengan jatah",
-                        color = NoxaTextPrimary,
-                        fontSize = 12.5.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Spacer(modifier = Modifier.height(3.dp))
-                    Text(
-                        "Model gratis boleh dipakai sepuasnya. Model flagship " +
-                            "memberi jawaban lebih dalam dengan jatah pesan yang " +
-                            "pulih sendiri, plus tiga mode kerja khusus di bawah kotak tulis.",
-                        color = NoxaTextTertiary,
-                        fontSize = 10.5.sp,
-                        lineHeight = 15.sp
-                    )
-                }
+                Text(
+                    "Pilih model",
+                    color = NoxaTextPrimary,
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    letterSpacing = (-0.2).sp
+                )
+                Text(
+                    "Selesai",
+                    color = NoxaLime,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50))
+                        .noxaTap { onDismiss() }
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                )
             }
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                "Ganti bila satu model sedang maintenance",
+                color = NoxaTextTertiary,
+                fontSize = 11.sp
+            )
+            Spacer(modifier = Modifier.height(14.dp))
+            // No paywall card here — one quiet footnote keeps the sheet airy and
+            // the lime stays a accent instead of a wall of colour.
+            Text(
+                "Model gratis tanpa batas · flagship punya jatah pesan yang pulih sendiri.",
+                color = NoxaTextTertiary,
+                fontSize = 10.5.sp,
+                lineHeight = 15.sp
+            )
             Spacer(modifier = Modifier.height(14.dp))
             var lastTier: AiTier? = null
             AiModel.entries.forEach { model ->
@@ -1096,12 +1093,7 @@ private fun AiModelSheet(
                         .fillMaxWidth()
                         .padding(bottom = 8.dp)
                         .clip(RoundedCornerShape(18.dp))
-                        .background(if (isSelected) NoxaLime.copy(alpha = 0.12f) else NoxaSurfaceSecondary)
-                        .border(
-                            1.dp,
-                            if (isSelected) NoxaLime.copy(alpha = 0.42f) else NoxaBorder,
-                            RoundedCornerShape(18.dp)
-                        )
+                        .background(if (isSelected) NoxaLime.copy(alpha = 0.10f) else NoxaSurfaceSecondary)
                         .noxaTap { if (available) onSelect(model) }
                         .padding(horizontal = 14.dp, vertical = 13.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -1173,6 +1165,19 @@ private fun AiModelSheet(
             )
         }
     }
+}
+
+/** The little drag pill iOS sheets carry — content, not chrome. */
+@Composable
+private fun SheetGrabber() {
+    Box(
+        modifier = Modifier
+            .padding(top = 8.dp, bottom = 4.dp)
+            .width(36.dp)
+            .height(5.dp)
+            .clip(RoundedCornerShape(50))
+            .background(NoxaBorder)
+    )
 }
 
 @Composable
