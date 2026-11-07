@@ -1,6 +1,13 @@
 package com.example.ui.components
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
@@ -53,6 +60,8 @@ import kotlinx.coroutines.flow.StateFlow
  */
 @Composable
 internal fun NoxaBottomStack(
+    /** False on the NOXA AI screen: the composer needs that height. */
+    miniPlayerVisible: Boolean = true,
     currentSong: Song?,
     isPlaying: Boolean,
     isBuffering: Boolean,
@@ -79,25 +88,39 @@ internal fun NoxaBottomStack(
             .fillMaxWidth()
             .navigationBarsPadding()
     ) {
-        MiniPlayer(
-            currentSong = currentSong,
-            isPlaying = isPlaying,
-            isBuffering = isBuffering,
-            progressFlow = progressFlow,
-            isFavorite = isFavorite,
-            onTogglePlayPause = onTogglePlayPause,
-            onNext = onNext,
-            onToggleFavorite = onToggleFavorite,
-            onClick = onOpenPlayer,
-            // Inset from both edges: the panel floats, it is not a
-            // full-width strip welded to the screen.
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-        )
+        AnimatedVisibility(
+            visible = miniPlayerVisible,
+            enter = fadeIn(tween(180)) + expandVertically(
+                animationSpec = tween(240, easing = FastOutSlowInEasing),
+                expandFrom = Alignment.Bottom
+            ),
+            exit = fadeOut(tween(140)) + shrinkVertically(
+                animationSpec = tween(200, easing = FastOutSlowInEasing),
+                shrinkTowards = Alignment.Bottom
+            )
+        ) {
+            Column {
+                MiniPlayer(
+                    currentSong = currentSong,
+                    isPlaying = isPlaying,
+                    isBuffering = isBuffering,
+                    progressFlow = progressFlow,
+                    isFavorite = isFavorite,
+                    onTogglePlayPause = onTogglePlayPause,
+                    onNext = onNext,
+                    onToggleFavorite = onToggleFavorite,
+                    onClick = onOpenPlayer,
+                    // Inset from both edges: the panel floats, it is not a
+                    // full-width strip welded to the screen.
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                )
 
-        // The gap only exists while a song is loaded — a standing
-        // spacer would lift the bar for no reason.
-        if (currentSong != null) {
-            Spacer(modifier = Modifier.height(6.dp))
+                // The gap only exists while a song is loaded — a standing
+                // spacer would lift the bar for no reason.
+                if (currentSong != null) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                }
+            }
         }
 
         // A true pill, not a slab: rounded to half its own height,

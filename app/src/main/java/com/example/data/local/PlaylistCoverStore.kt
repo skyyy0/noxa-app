@@ -12,9 +12,18 @@ import android.content.Context
  * derived deterministically from the playlist name, so every playlist already
  * has a cover before the user opens the studio.
  */
+/**
+ * A playlist cover: palette style, deterministic seed, and (v3.6.0) an optional
+ * printed texture plus a typographic voice for the monogram.
+ *
+ * Texture/font default to 0 = "none", so covers saved by older versions keep
+ * looking exactly the same after an update.
+ */
 data class PlaylistCover(
     val style: Int,
-    val seed: Int
+    val seed: Int,
+    val texture: Int = 0,
+    val font: Int = 0
 )
 
 class PlaylistCoverStore(context: Context) {
@@ -25,18 +34,32 @@ class PlaylistCoverStore(context: Context) {
     fun coverFor(playlistId: Long, name: String): PlaylistCover {
         val style = prefs.getInt(key(playlistId, "style"), STYLE_AUTO)
         val seed = prefs.getInt(key(playlistId, "seed"), defaultSeed(name))
-        return PlaylistCover(style = style.coerceIn(0, STYLE_COUNT - 1), seed = seed)
+        val texture = prefs.getInt(key(playlistId, "texture"), 0)
+        val font = prefs.getInt(key(playlistId, "font"), 0)
+        return PlaylistCover(
+            style = style.coerceIn(0, STYLE_COUNT - 1),
+            seed = seed,
+            texture = texture.coerceIn(0, TEXTURE_COUNT - 1),
+            font = font.coerceIn(0, FONT_COUNT - 1)
+        )
     }
 
     fun save(playlistId: Long, cover: PlaylistCover) {
         prefs.edit()
             .putInt(key(playlistId, "style"), cover.style.coerceIn(0, STYLE_COUNT - 1))
             .putInt(key(playlistId, "seed"), cover.seed)
+            .putInt(key(playlistId, "texture"), cover.texture.coerceIn(0, TEXTURE_COUNT - 1))
+            .putInt(key(playlistId, "font"), cover.font.coerceIn(0, FONT_COUNT - 1))
             .apply()
     }
 
     fun clear(playlistId: Long) {
-        prefs.edit().remove(key(playlistId, "style")).remove(key(playlistId, "seed")).apply()
+        prefs.edit()
+            .remove(key(playlistId, "style"))
+            .remove(key(playlistId, "seed"))
+            .remove(key(playlistId, "texture"))
+            .remove(key(playlistId, "font"))
+            .apply()
     }
 
     private fun key(playlistId: Long, field: String) = "p$playlistId:$field"
@@ -45,8 +68,16 @@ class PlaylistCoverStore(context: Context) {
         private const val NAME = "noxa_playlist_covers"
         private const val STYLE_AUTO = 0
         const val STYLE_COUNT = 4
+        const val TEXTURE_COUNT = 5
+        const val FONT_COUNT = 4
 
         val STYLE_LABELS = listOf("Aurora", "Tape", "Prism", "Pulse")
+
+        /** Texture overlays: index 0 is "clean" (no texture). */
+        val TEXTURE_LABELS = listOf("Bersih", "Grain", "Halftone", "Gelombang", "Scanline")
+
+        /** Typographic voices for the monogram. */
+        val FONT_LABELS = listOf("Grotesk", "Playfair", "Sans", "Mono")
 
         /** Stable seed from the name — the same playlist always looks the same. */
         fun defaultSeed(name: String): Int = name.fold(17) { acc, ch -> acc * 31 + ch.code } and 0x7FFFFFFF

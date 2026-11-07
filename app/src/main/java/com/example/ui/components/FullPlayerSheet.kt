@@ -1,8 +1,11 @@
 package com.example.ui.components
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.content.pm.PackageManager
 import android.view.SurfaceView
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -39,6 +42,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -73,6 +77,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Slider
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Icon
@@ -186,6 +191,12 @@ fun FullPlayerSheet(
     onSaveSongMemory: ((String) -> Unit)? = null,
     flowEnabled: Boolean = false,
     onToggleFlow: (() -> Unit)? = null,
+    // ------------------------------------- v3.6.0: Timer Tidur + ambience
+    /** Soundscape currently mixed under the music (null = none). */
+    ambience: com.example.media.Ambience? = null,
+    ambienceVolume: Float = 0.45f,
+    onSelectAmbience: ((com.example.media.Ambience?) -> Unit)? = null,
+    onAmbienceVolume: ((Float) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     var showQueueSheet by remember { mutableStateOf(false) }
@@ -253,7 +264,8 @@ fun FullPlayerSheet(
 
     // Foto vs Video MV: the video view exists while the stream is resolving
     // (spinner) or ready (surface).
-    val isVideoActive = videoUiState is VideoUiState.Loading || videoUiState is VideoUiState.Ready
+    val isVideoActive = videoUiState is VideoUiState.Loading ||
+        videoUiState is VideoUiState.Ready || videoUiState is VideoUiState.Embed
 
     // ------------------------------------------- v2.0.0: tema dinamis artwork
     // The background glow takes the dominant colour of the current cover so
@@ -483,6 +495,17 @@ fun FullPlayerSheet(
                                     factory = { context -> SurfaceView(context) },
                                     update = { surface -> onAttachVideoSurface(surface) },
                                     onRelease = { onAttachVideoSurface(null) },
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
+
+                            isVideoActive && videoUiState is VideoUiState.Embed -> {
+                                // Fallback path: YouTube's own embedded player.
+                                // It streams from youtube.com, so an expired
+                                // googlevideo URL or a dead Invidious instance
+                                // can no longer leave the MV unplayable.
+                                YouTubeMvEmbed(
+                                    videoId = videoUiState.videoId,
                                     modifier = Modifier.fillMaxSize()
                                 )
                             }
@@ -1120,6 +1143,10 @@ fun FullPlayerSheet(
                 SleepTimerSheet(
                     playerState = playerState,
                     progressFlow = progressFlow,
+                    ambience = ambience,
+                    ambienceVolume = ambienceVolume,
+                    onSelectAmbience = onSelectAmbience,
+                    onAmbienceVolume = onAmbienceVolume,
                     onSelectMinutes = { mins ->
                         onSetSleepTimer(mins)
                         showSleepTimerDialog = false
@@ -1149,6 +1176,10 @@ fun FullPlayerSheet(
 private fun SleepTimerSheet(
     playerState: PlayerUiState,
     progressFlow: StateFlow<PlaybackProgress>,
+    ambience: com.example.media.Ambience?,
+    ambienceVolume: Float,
+    onSelectAmbience: ((com.example.media.Ambience?) -> Unit)?,
+    onAmbienceVolume: ((Float) -> Unit)?,
     onSelectMinutes: (Int) -> Unit,
     onSetEndOfTrack: (Boolean) -> Unit,
     onCancel: () -> Unit
@@ -1272,6 +1303,78 @@ private fun SleepTimerSheet(
             )
         }
 
+        // Ambience: a real soundscape mixed under the music, so the timer can
+        // put the listener to sleep with rain instead of silence.
+        Spacer(modifier = Modifier.height(22.dp))
+        Text(
+            text = "SUASANA MALAM",
+            color = NoxaTextTertiary,
+            fontSize = 9.5.sp,
+            fontWeight = FontWeight.Black,
+            letterSpacing = 1.1.sp
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = "Suara pengiring yang diputar bersamaan dengan musik Anda, " +
+                "tanpa menghentikannya.",
+            color = NoxaTextTertiary,
+            fontSize = 11.5.sp,
+            lineHeight = 16.sp
+        )
+        Spacer(modifier = Modifier.height(10.dp))
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            AmbienceChip(
+                label = "Mati",
+                selected = ambience == null,
+                onClick = { onSelectAmbience?.invoke(null) }
+            )
+            com.example.media.Ambience.entries.forEach { option ->
+                AmbienceChip(
+                    label = option.label,
+                    selected = ambience == option,
+                    onClick = { onSelectAmbience?.invoke(option) }
+                )
+            }
+        }
+        ambience?.let { selected ->
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = selected.blurb,
+                color = NoxaTextSecondary,
+                fontSize = 11.sp
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "Volume ambience",
+                    color = NoxaTextTertiary,
+                    fontSize = 11.sp,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    text = "${(ambienceVolume * 100).toInt()}%",
+                    color = NoxaLime,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            Slider(
+                value = ambienceVolume,
+                onValueChange = { onAmbienceVolume?.invoke(it) },
+                valueRange = 0f..1f,
+                colors = androidx.compose.material3.SliderDefaults.colors(
+                    thumbColor = NoxaLime,
+                    activeTrackColor = NoxaLime.copy(alpha = 0.75f),
+                    inactiveTrackColor = NoxaBorder
+                )
+            )
+        }
+
         Spacer(modifier = Modifier.height(14.dp))
         Text(
             text = "Volume diredupkan pelan ±10 detik sebelum berhenti — tidak ada " +
@@ -1281,6 +1384,35 @@ private fun SleepTimerSheet(
             lineHeight = 17.sp,
             textAlign = TextAlign.Center,
             modifier = Modifier.fillMaxWidth()
+        )
+    }
+}
+
+/** Small pill for one ambience choice (or "off"). */
+@Composable
+private fun AmbienceChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(if (selected) NoxaLime else NoxaSurfaceElevated)
+            .border(
+                1.dp,
+                if (selected) NoxaLime else NoxaBorder,
+                RoundedCornerShape(50)
+            )
+            .noxaTap { onClick() }
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            color = if (selected) NoxaBlack else NoxaTextSecondary,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold
         )
     }
 }
@@ -1824,4 +1956,52 @@ private fun AudioQualityBadge(song: Song) {
             fontWeight = FontWeight.Bold
         )
     }
+}
+
+/**
+ * The last-resort MV player: YouTube's official embed inside a WebView.
+ *
+ * Why this exists: MVs are normally resolved to a direct `googlevideo` URL and
+ * rendered on a SurfaceView. Those URLs carry a short signature and are refused
+ * by many instances, which is why "Video MV" sometimes did nothing at all.
+ * The embed talks to YouTube in the page itself, so playback survives an
+ * expired signature, a throttled instance, or a quality the resolver cannot
+ * give us.
+ *
+ * Autoplay is enabled through `mediaPlaybackRequiresUserGesture = false` and the
+ * `playsinline` parameter; if YouTube still requires a tap, the native controls
+ * are right there, so the user is never stuck on a black rectangle.
+ */
+@SuppressLint("SetJavaScriptEnabled")
+@Composable
+private fun YouTubeMvEmbed(videoId: String, modifier: Modifier = Modifier) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val webView = remember(videoId) {
+        WebView(context).apply {
+            setBackgroundColor(android.graphics.Color.BLACK)
+            settings.javaScriptEnabled = true
+            settings.domStorageEnabled = true
+            settings.mediaPlaybackRequiresUserGesture = false
+            settings.loadWithOverviewMode = true
+            settings.useWideViewPort = true
+            // A desktop-ish UA gets the full player instead of YouTube's
+            // "open in app" interstitial.
+            settings.userAgentString = settings.userAgentString
+                ?.replace("Mobile", "")
+                ?.replace("Android", "X11")
+            webViewClient = WebViewClient()
+            loadUrl(
+                "https://www.youtube-nocookie.com/embed/$videoId" +
+                    "?autoplay=1&playsinline=1&rel=0&modestbranding=1"
+            )
+        }
+    }
+    DisposableEffect(webView) {
+        onDispose {
+            webView.stopLoading()
+            webView.loadUrl("about:blank")
+            webView.destroy()
+        }
+    }
+    AndroidView(factory = { webView }, modifier = modifier)
 }

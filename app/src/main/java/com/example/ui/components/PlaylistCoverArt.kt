@@ -27,6 +27,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.Image
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.font.FontFamily
+import com.example.R
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -92,18 +98,48 @@ fun PlaylistCoverArt(
                 else -> drawAurora(palette, random)
             }
         }
+        // Printed texture over the gradient — the "album sleeve" cue. Files
+        // live in drawable-nodpi (1024px tiles) so one asset serves every size.
+        if (cover.texture != 0) {
+            Image(
+                painter = painterResource(textureRes(cover.texture)),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                alpha = 0.55f,
+                modifier = Modifier.matchParentSize()
+            )
+        }
         if (showInitials) {
             Text(
                 text = initials(name),
                 color = NoxaTextPrimary.copy(alpha = 0.92f),
                 fontSize = 26.sp,
                 fontWeight = FontWeight.Black,
+                fontFamily = monogramFont(cover.font),
                 modifier = Modifier
                     .align(Alignment.BottomStart)
                     .padding(14.dp)
             )
         }
     }
+}
+
+/** Texture index → bundled PNG overlay (0 = none). */
+private fun textureRes(texture: Int): Int = when (texture) {
+    1 -> R.drawable.tex_grain
+    2 -> R.drawable.tex_halftone
+    3 -> R.drawable.tex_waves
+    4 -> R.drawable.tex_scanline
+    else -> R.drawable.tex_grain
+}
+
+/** Font index → typographic voice for the monogram. */
+@Composable
+private fun monogramFont(font: Int): FontFamily = when (font) {
+    1 -> FontFamily(Font(R.font.playfair_display, weight = FontWeight.Black))
+    2 -> FontFamily.SansSerif
+    3 -> FontFamily.Monospace
+    else -> FontFamily(Font(R.font.space_grotesk, weight = FontWeight.Black))
 }
 
 /** Two-letter monogram from the playlist name (max two words). */
@@ -224,7 +260,9 @@ fun PlaylistCoverStudioSheet(
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var style by remember { mutableIntStateOf(initial.style) }
     var seed by remember { mutableIntStateOf(initial.seed) }
-    val preview = PlaylistCover(style, seed)
+    var texture by remember { mutableIntStateOf(initial.texture) }
+    var font by remember { mutableIntStateOf(initial.font) }
+    val preview = PlaylistCover(style, seed, texture, font)
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -264,6 +302,50 @@ fun PlaylistCoverStudioSheet(
                         label = label,
                         selected = style == index,
                         onClick = { style = index },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(14.dp))
+            Text(
+                "TEKSTUR",
+                color = NoxaTextTertiary,
+                fontSize = 9.5.sp,
+                fontWeight = FontWeight.Black,
+                letterSpacing = 1.sp
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                PlaylistCoverStore.TEXTURE_LABELS.forEachIndexed { index, label ->
+                    CoverStyleChip(
+                        label = label,
+                        selected = texture == index,
+                        onClick = { texture = index },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                "HURUF MONOGRAM",
+                color = NoxaTextTertiary,
+                fontSize = 9.5.sp,
+                fontWeight = FontWeight.Black,
+                letterSpacing = 1.sp
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                PlaylistCoverStore.FONT_LABELS.forEachIndexed { index, label ->
+                    CoverStyleChip(
+                        label = label,
+                        selected = font == index,
+                        onClick = { font = index },
                         modifier = Modifier.weight(1f)
                     )
                 }

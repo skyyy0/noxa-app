@@ -194,6 +194,13 @@ sealed interface VideoUiState {
     /** Video mode with a playable (video-only) stream URL. */
     data class Ready(val url: String) : VideoUiState
 
+    /**
+     * Direct stream URLs expire and some instances refuse them; the embedded
+     * YouTube player is the fallback that always plays, because it streams
+     * from YouTube itself instead of a signed googlevideo link.
+     */
+    data class Embed(val videoId: String) : VideoUiState
+
     /** Video mode requested but no instance could provide a video stream. */
     data class Unavailable(val message: String) : VideoUiState
 }
@@ -269,6 +276,39 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Auto-retries guard: one free retry per user toggle. */
     private var mvAutoRetries = 0
+
+    // ------------------------------------------------- timer tidur + ambience
+
+    private val ambiencePlayer = com.example.media.AmbiencePlayer(application)
+
+    private val _ambience = MutableStateFlow<com.example.media.Ambience?>(null)
+
+    /** Soundscape mixed under the music; null = off. */
+    val ambience: StateFlow<com.example.media.Ambience?> = _ambience.asStateFlow()
+
+    private val _ambienceVolume = MutableStateFlow(0.45f)
+    val ambienceVolume: StateFlow<Float> = _ambienceVolume.asStateFlow()
+
+    init {
+        // The ambience is part of "going to sleep": when the countdown reaches
+        // zero the music pauses and the rain should not keep playing alone.
+        player.onSleepTimerFinished = {
+            ambiencePlayer.stop()
+            _ambience.value = null
+        }
+    }
+
+    fun setAmbience(ambience: com.example.media.Ambience?) {
+        _ambience.value = ambience
+        if (ambience == null) ambiencePlayer.stop()
+        else ambiencePlayer.play(ambience, _ambienceVolume.value)
+    }
+
+    fun setAmbienceVolume(volume: Float) {
+        val clamped = volume.coerceIn(0f, 1f)
+        _ambienceVolume.value = clamped
+        ambiencePlayer.setVolume(clamped)
+    }
 
     /** Tried in order after the chosen MV quality fails to resolve. */
     private val MV_FALLBACK_QUALITIES = listOf(360, 240)
@@ -804,16 +844,58 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     val aiModelStatuses: StateFlow<List<com.example.data.ai.AiModelStatus>> =
         _aiModelStatuses.asStateFlow()
 
+    /**
+     * Kuota tiap model di perangkat ini. Model flagship berbagi satu jatah,
+     * Fable 5.1 dan Haiku punya jatah sendiri; akun developer unlimited.
+     */
+    private val _aiQuotas =
+        MutableStateFlow(aiRepository.quotas())
+    val aiQuotas: StateFlow<Map<com.example.data.ai.AiModel, com.example.data.ai.AiQuotaState>> =
+        _aiQuotas.asStateFlow()
+
+    /** True untuk akun developer: semua batas pesan dilewati. */
+    private fun syncAiDeveloperFlag() {
+        aiRepository.isDeveloper =
+            authManager.currentUser.value?.role == com.example.data.support.AccountRole.DEVELOPER
+    }
+
+    /**
+     * Mode kerja flagship yang aktif (Tulis Lirik / Bedah Lagu / Setlist).
+     * Selalu null untuk model gratis — mode ini bagian dari nilai flagship.
+     */
+    private val _aiFlavor = MutableStateFlow<com.example.data.ai.AiFlavor?>(null)
+    val aiFlavor: StateFlow<com.example.data.ai.AiFlavor?> = _aiFlavor.asStateFlow()
+
+    fun selectAiFlavor(flavor: com.example.data.ai.AiFlavor?) {
+        _aiFlavor.value = flavor
+    }
+
     fun selectAiModel(model: com.example.data.ai.AiModel) {
         aiRepository.selectedModel = model
         _aiModel.value = model
+        if (model.tier != com.example.data.ai.AiTier.FLAGSHIP) _aiFlavor.value = null
+        syncAiDeveloperFlag()
+        _aiQuotas.value = aiRepository.quotas()
     }
 
     /** Refresh daftar model; kegagalan jaringan mempertahankan snapshot lama. */
     fun refreshAiModelStatus() {
+        syncAiDeveloperFlag()
+        _aiQuotas.value = aiRepository.quotas()
         safeScope.launch {
             _aiModelStatuses.value = aiRepository.refreshModelStatus()
         }
+    }
+
+    /** Pesan ramah saat jatah model habis, lengkap dengan sisa waktunya. */
+    private fun aiQuotaMessage(
+        error: com.example.data.ai.NoxaAiRepository.AiQuotaExceeded
+    ): String {
+        val minutes = (
+            (error.state.resetAtMs - System.currentTimeMillis()).coerceAtLeast(0L) / 60_000L
+            ) + 1L
+        return "Jatah ${error.model.label} sudah habis (${error.state.limit} pesan). " +
+            "Jatah kembali dalam sekitar $minutes menit. Model gratis tetap bisa dipakai sekarang."
     }
 
     /** Memori lagu untuk lagu yang sedang dibuka di sheet pemutar. */
@@ -861,11 +943,8 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     private val _playlistCoverVersion = MutableStateFlow(0)
     val playlistCoverVersion: StateFlow<Int> = _playlistCoverVersion.asStateFlow()
 
-    fun savePlaylistCover(playlistId: Long, style: Int, seed: Int) {
-        playlistCoverStore.save(
-            playlistId,
-            com.example.data.local.PlaylistCover(style = style, seed = seed)
-        )
+    fun savePlaylistCover(playlistId: Long, cover: com.example.data.local.PlaylistCover) {
+        playlistCoverStore.save(playlistId, cover)
         _playlistCoverVersion.update { it + 1 }
     }
 
@@ -2237,10 +2316,26 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             delay(750)
             url = youtubeRepository.resolveVideoUrl(song, requested)
         }
-        return if (url == null) {
-            VideoUiState.Unavailable("MV tidak tersedia untuk lagu ini.")
+        if (url != null) return VideoUiState.Ready(url)
+        // Direct stream refused (expired signature, dead instance, or a track
+        // YouTube will not serve as a bare URL). Every MV-capable song knows
+        // its video id, so hand the rest to the embedded player instead of
+        // telling the user the MV does not exist.
+        val videoId = mvVideoIdOf(song)
+        return if (videoId.isNotBlank()) {
+            VideoUiState.Embed(videoId)
         } else {
-            VideoUiState.Ready(url)
+            VideoUiState.Unavailable("MV tidak tersedia untuk lagu ini.")
+        }
+    }
+
+    /** YouTube video id for [song], from the match or the namespaced track id. */
+    private fun mvVideoIdOf(song: Song): String {
+        if (song.matchedVideoId.isNotBlank()) return song.matchedVideoId
+        return if (song.source == MusicSource.YOUTUBE) {
+            song.id.removePrefix("youtube:").takeIf { it.isNotBlank() } ?: ""
+        } else {
+            ""
         }
     }
 
@@ -2251,7 +2346,12 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         val song = player.uiState.value.currentSong ?: return
         mvPlayer.release()
         if (mvAutoRetries >= 1) {
-            _videoUiState.value = VideoUiState.Unavailable("MV gagal diputar. Coba lagi nanti.")
+            val videoId = mvVideoIdOf(song)
+            _videoUiState.value = if (videoId.isNotBlank()) {
+                VideoUiState.Embed(videoId)
+            } else {
+                VideoUiState.Unavailable("MV gagal diputar. Coba lagi nanti.")
+            }
             return
         }
         mvAutoRetries++
@@ -2605,6 +2705,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         mvPlayer.release()
+        ambiencePlayer.release()
         // Lepas handler suara: setelah UI mati, NOXA Wake jatuh ke engine
         // lokal (WakeCommandEngine) — perintah tetap jalan saat app ditutup.
         if (com.example.voice.NoxaWakeBus.handler === voiceCommandHandler) {
@@ -3679,14 +3780,20 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     fun sendAiMessage(text: String) {
         val trimmed = text.trim()
         if (trimmed.isEmpty() || _isAiThinking.value) return
+        syncAiDeveloperFlag()
         _aiMessages.update { it + com.example.data.ai.AiChatMessage(fromUser = true, text = trimmed) }
         _aiError.value = null
         _isAiThinking.value = true
         safeScope.launch {
             val reply = try {
-                aiRepository.chat(trimmed, songMemoryStore.contextFor())
+                aiRepository.chat(trimmed, songMemoryStore.contextFor(), _aiFlavor.value)
             } catch (e: CancellationException) {
                 throw e
+            } catch (e: com.example.data.ai.NoxaAiRepository.AiQuotaExceeded) {
+                _isAiThinking.value = false
+                _aiQuotas.value = aiRepository.quotas()
+                _aiError.value = aiQuotaMessage(e)
+                return@launch
             } catch (e: Exception) {
                 Log.w(TAG, "NOXA AI failed: ${e.javaClass.simpleName}: ${e.message}")
                 _aiError.value =
@@ -3782,6 +3889,12 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
             aiRepository.saveHistory(_aiMessages.value)
+            _aiQuotas.value = aiRepository.quotas()
+            // A maintenance fallback is worth re-reading: the badge in the
+            // header and the picker should reflect it immediately.
+            if (reply.fallbackFrom != null) {
+                _aiModelStatuses.value = aiRepository.refreshModelStatus()
+            }
             _isAiThinking.value = false
         }
     }

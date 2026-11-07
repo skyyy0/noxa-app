@@ -135,7 +135,7 @@ fun PlaylistDetailScreen(
             style = 0,
             seed = com.example.data.local.PlaylistCoverStore.defaultSeed(playlistName)
         ),
-    onSavePlaylistCover: (Int, Int) -> Unit = { _, _ -> },
+    onSavePlaylistCover: (com.example.data.local.PlaylistCover) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val songs by songsFlow.collectAsStateWithLifecycle(initialValue = emptyList())
@@ -149,8 +149,8 @@ fun PlaylistDetailScreen(
         playlistName = playlistName,
         cover = playlistCover,
         onDismiss = { showCoverStudio = false },
-        onSave = { style, seed ->
-            onSavePlaylistCover(style, seed)
+        onSave = { picked ->
+            onSavePlaylistCover(picked)
             showCoverStudio = false
         }
     )
@@ -636,14 +636,14 @@ private fun PlaylistCoverStudioHost(
     playlistName: String,
     cover: com.example.data.local.PlaylistCover,
     onDismiss: () -> Unit,
-    onSave: (Int, Int) -> Unit
+    onSave: (com.example.data.local.PlaylistCover) -> Unit
 ) {
     if (!visible) return
     com.example.ui.components.PlaylistCoverStudioSheet(
         playlistName = playlistName,
         initial = cover,
         onDismiss = onDismiss,
-        onSave = { picked -> onSave(picked.style, picked.seed) }
+        onSave = onSave
     )
 }
 

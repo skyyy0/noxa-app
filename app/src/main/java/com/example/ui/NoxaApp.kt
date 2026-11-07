@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
@@ -259,6 +260,8 @@ private fun NoxaAppContent(
     // v3.5.5: Memori Lagu (diary per lagu) & Flow/AutoMix.
     val songMemory by viewModel.songMemory.collectAsStateWithLifecycle()
     val flowEnabled by viewModel.flowEnabled.collectAsStateWithLifecycle()
+    val ambience by viewModel.ambience.collectAsStateWithLifecycle()
+    val ambienceVolume by viewModel.ambienceVolume.collectAsStateWithLifecycle()
     LaunchedEffect(playerState.currentSong?.id) {
         viewModel.loadSongMemory(playerState.currentSong?.id)
     }
@@ -286,6 +289,11 @@ private fun NoxaAppContent(
                 // Two surfaces, one system — see NoxaBottomStack for the
                 // material story (glass mini player above its own nav pill).
                 NoxaBottomStack(
+                    // The assistant owns its whole screen: a mini player there
+                    // reserved the exact space the composer needs when the
+                    // keyboard opens, so it now animates away on that route
+                    // and comes back the moment the user leaves the chat.
+                    miniPlayerVisible = currentRoute != Screen.AiChat.route,
                     currentSong = playerState.currentSong,
                     isPlaying = playerState.isPlaying,
                     isBuffering = playerState.isBuffering,
@@ -309,6 +317,10 @@ private fun NoxaAppContent(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(bottom = innerPadding.calculateBottomPadding())
+                    // The bottom bar already consumed the navigation-bar inset;
+                    // telling the children keeps imePadding from adding it a
+                    // second time and leaving a dead strip under the composer.
+                    .consumeWindowInsets(innerPadding)
             ) {
                 composable(Screen.Home.route) {
                     // One-time first launch: the device scan must finish
@@ -475,8 +487,8 @@ private fun NoxaAppContent(
                             onToggleDownload = { viewModel.toggleDownload(it) },
                             onStartRadio = { viewModel.startSongRadio(it) },
                             playlistCover = cover,
-                            onSavePlaylistCover = { style, seed ->
-                                viewModel.savePlaylistCover(playlistId, style, seed)
+                            onSavePlaylistCover = { cover ->
+                                viewModel.savePlaylistCover(playlistId, cover)
                             }
                         )
                     }
@@ -680,6 +692,8 @@ private fun NoxaAppContent(
                     val aiError by viewModel.aiError.collectAsStateWithLifecycle()
                     val aiModel by viewModel.aiModel.collectAsStateWithLifecycle()
                     val aiModelStatuses by viewModel.aiModelStatuses.collectAsStateWithLifecycle()
+                    val aiQuotas by viewModel.aiQuotas.collectAsStateWithLifecycle()
+                    val aiFlavor by viewModel.aiFlavor.collectAsStateWithLifecycle()
                     // Model availability is refreshed when the chat opens, so
                     // the picker never shows a stale "maintenance" badge.
                     LaunchedEffect(Unit) { viewModel.refreshAiModelStatus() }
@@ -690,6 +704,9 @@ private fun NoxaAppContent(
                         playingSongId = playerState.currentSong?.id,
                         selectedModel = aiModel,
                         modelStatuses = aiModelStatuses,
+                        quotas = aiQuotas,
+                        activeFlavor = aiFlavor,
+                        onSelectFlavor = { viewModel.selectAiFlavor(it) },
                         onSelectModel = { viewModel.selectAiModel(it) },
                         onBack = { navController.popBackStack() },
                         onSend = { viewModel.sendAiMessage(it) },
@@ -847,6 +864,10 @@ private fun NoxaAppContent(
             onSetVideoMode = { enabled -> viewModel.setVideoMode(enabled) },
             onAttachVideoSurface = { surface -> viewModel.attachMvSurface(surface) },
             karaokeOverlayEnabled = appSettings.karaokeOverlay,
+            ambience = ambience,
+            ambienceVolume = ambienceVolume,
+            onSelectAmbience = { viewModel.setAmbience(it) },
+            onAmbienceVolume = { viewModel.setAmbienceVolume(it) },
             songMemory = songMemory,
             onSaveSongMemory = { note ->
                 playerState.currentSong?.let { song ->

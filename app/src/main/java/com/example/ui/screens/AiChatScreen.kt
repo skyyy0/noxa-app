@@ -25,7 +25,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -34,6 +33,8 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -77,8 +78,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.example.data.ai.AiChatMessage
+import com.example.data.ai.AiFlavor
 import com.example.data.ai.AiModel
 import com.example.data.ai.AiModelStatus
+import com.example.data.ai.AiQuotaState
+import com.example.data.ai.AiTier
 import com.example.data.local.PlaylistCover
 import com.example.ui.components.PlaylistCoverArt
 import com.example.ui.components.noxaTap
@@ -127,6 +131,9 @@ fun AiChatScreen(
     playingSongId: String?,
     selectedModel: AiModel,
     modelStatuses: List<AiModelStatus>,
+    quotas: Map<AiModel, AiQuotaState> = emptyMap(),
+    activeFlavor: AiFlavor? = null,
+    onSelectFlavor: (AiFlavor?) -> Unit = {},
     onSelectModel: (AiModel) -> Unit,
     onBack: () -> Unit,
     onSend: (String) -> Unit,
@@ -147,6 +154,11 @@ fun AiChatScreen(
     Box(
         modifier = modifier
             .fillMaxSize()
+            // The keyboard inset belongs to the whole screen, not to the
+            // composer row: padding the row alone made it taller than the
+            // screen and pushed the header off the top (the "layar naik"
+            // bug). Here the column simply re-measures in a shorter box.
+            .imePadding()
             .background(NoxaBlack)
     ) {
         // Ambient wash behind the header — depth without a flat black wall.
@@ -170,6 +182,7 @@ fun AiChatScreen(
             AiHeader(
                 selectedModel = selectedModel,
                 modelStatuses = modelStatuses,
+                quota = quotas[selectedModel],
                 onBack = onBack,
                 onClear = onClearChat,
                 onOpenModels = { showModels = true }
@@ -221,6 +234,11 @@ fun AiChatScreen(
                 value = draft,
                 onValueChange = { draft = it },
                 enabled = !isThinking,
+                flavors = AiFlavor.forModel(selectedModel),
+                activeFlavor = activeFlavor,
+                onToggleFlavor = { flavor ->
+                    onSelectFlavor(if (activeFlavor == flavor) null else flavor)
+                },
                 onSend = {
                     val text = draft.trim()
                     if (text.isNotEmpty() && !isThinking) {
@@ -236,6 +254,7 @@ fun AiChatScreen(
         AiModelSheet(
             selected = selectedModel,
             statuses = modelStatuses,
+            quotas = quotas,
             onSelect = {
                 onSelectModel(it)
                 showModels = false
@@ -253,6 +272,7 @@ fun AiChatScreen(
 private fun AiHeader(
     selectedModel: AiModel,
     modelStatuses: List<AiModelStatus>,
+    quota: AiQuotaState?,
     onBack: () -> Unit,
     onClear: () -> Unit,
     onOpenModels: () -> Unit
@@ -339,6 +359,27 @@ private fun AiHeader(
                     contentDescription = "Ganti model",
                     tint = if (down != null) Color(0xFFFF8A3D) else NoxaLime,
                     modifier = Modifier.size(16.dp)
+                )
+            }
+            // Flagship allowance, visible without opening the picker: the
+            // user can see how many messages are left before typing.
+            if (quota != null && !quota.unlimited && quota.limit > 0) {
+                val tint = if (quota.exhausted) Color(0xFFFF6B61) else NoxaTextTertiary
+                Text(
+                    text = if (quota.exhausted) "jatah habis · ${quota.limit}/${quota.limit}"
+                    else "sisa ${quota.remaining}/${quota.limit} pesan",
+                    color = tint,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.align(Alignment.CenterVertically)
+                )
+            } else if (quota?.unlimited == true) {
+                Text(
+                    text = "unlimited",
+                    color = NoxaLime.copy(alpha = 0.75f),
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.align(Alignment.CenterVertically)
                 )
             }
         }
@@ -851,14 +892,57 @@ private fun AiComposer(
     value: String,
     onValueChange: (String) -> Unit,
     enabled: Boolean,
+    flavors: List<AiFlavor> = emptyList(),
+    activeFlavor: AiFlavor? = null,
+    onToggleFlavor: (AiFlavor) -> Unit = {},
     onSend: () -> Unit
 ) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+    if (flavors.isNotEmpty()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(start = 14.dp, end = 14.dp, top = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(7.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                "KHUSUS FLAGSHIP",
+                color = NoxaLime.copy(alpha = 0.7f),
+                fontSize = 8.5.sp,
+                fontWeight = FontWeight.Black,
+                letterSpacing = 0.6.sp
+            )
+            flavors.forEach { flavor ->
+                val on = flavor == activeFlavor
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(if (on) NoxaLime.copy(alpha = 0.18f) else NoxaSurfaceSecondary)
+                        .border(
+                            1.dp,
+                            if (on) NoxaLime.copy(alpha = 0.55f) else NoxaBorder,
+                            RoundedCornerShape(50)
+                        )
+                        .noxaTap { onToggleFlavor(flavor) }
+                        .padding(horizontal = 10.dp, vertical = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        flavor.label,
+                        color = if (on) NoxaLime else NoxaTextSecondary,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
+        }
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .imePadding()
-            .navigationBarsPadding()
-            .padding(horizontal = 14.dp, vertical = 10.dp),
+            .padding(horizontal = 14.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         OutlinedTextField(
@@ -907,6 +991,7 @@ private fun AiComposer(
             )
         }
     }
+    }
 }
 
 /**
@@ -919,6 +1004,7 @@ private fun AiComposer(
 private fun AiModelSheet(
     selected: AiModel,
     statuses: List<AiModelStatus>,
+    quotas: Map<AiModel, AiQuotaState> = emptyMap(),
     onSelect: (AiModel) -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -952,8 +1038,57 @@ private fun AiModelSheet(
                     )
                 }
             }
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(14.dp))
+            // Plain-language explanation of the two tiers. No fake paywall: the
+            // flagship models are included with these allowances, and the free
+            // models stay unlimited forever.
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(
+                        Brush.linearGradient(
+                            listOf(NoxaLime.copy(alpha = 0.12f), NoxaSurfaceSecondary)
+                        )
+                    )
+                    .border(1.dp, NoxaLime.copy(alpha = 0.22f), RoundedCornerShape(18.dp))
+                    .padding(14.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        "Gratis tanpa batas, flagship dengan jatah",
+                        color = NoxaTextPrimary,
+                        fontSize = 12.5.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(3.dp))
+                    Text(
+                        "Model gratis boleh dipakai sepuasnya. Model flagship " +
+                            "memberi jawaban lebih dalam dengan jatah pesan yang " +
+                            "pulih sendiri, plus tiga mode kerja khusus di bawah kotak tulis.",
+                        color = NoxaTextTertiary,
+                        fontSize = 10.5.sp,
+                        lineHeight = 15.sp
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(14.dp))
+            var lastTier: AiTier? = null
             AiModel.entries.forEach { model ->
+                if (model.tier != lastTier) {
+                    lastTier = model.tier
+                    Text(
+                        if (model.tier == AiTier.FREE) "TANPA BATAS" else "FLAGSHIP",
+                        color = if (model.tier == AiTier.FREE) NoxaTextTertiary
+                        else NoxaLime.copy(alpha = 0.85f),
+                        fontSize = 9.5.sp,
+                        fontWeight = FontWeight.Black,
+                        letterSpacing = 1.1.sp,
+                        modifier = Modifier.padding(start = 4.dp, bottom = 6.dp, top = 2.dp)
+                    )
+                }
+                val quota = quotas[model]
                 val available = statuses.firstOrNull { it.model == model }?.available ?: true
                 val isSelected = model == selected
                 Row(
@@ -998,6 +1133,26 @@ private fun AiModelSheet(
                             color = NoxaTextTertiary,
                             fontSize = 11.sp
                         )
+                        if (quota != null && quota.limit > 0) {
+                            Spacer(modifier = Modifier.height(2.dp))
+                            val minutes = (
+                                (quota.resetAtMs - System.currentTimeMillis())
+                                    .coerceAtLeast(0L) / 60_000L
+                                ) + 1L
+                            Text(
+                                when {
+                                    quota.unlimited -> "Akun developer — tanpa batas"
+                                    quota.exhausted ->
+                                        "Jatah habis · pulih dalam ~$minutes menit"
+                                    else -> "Sisa ${quota.remaining} dari ${quota.limit} pesan · " +
+                                        "jatah pulih bertahap"
+                                },
+                                color = if (quota.exhausted && !quota.unlimited)
+                                    Color(0xFFFF6B61) else NoxaLime.copy(alpha = 0.8f),
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
                     }
                     if (isSelected) {
                         Icon(

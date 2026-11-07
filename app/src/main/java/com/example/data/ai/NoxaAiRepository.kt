@@ -1,6 +1,8 @@
 package com.example.data.ai
 
 import android.content.Context
+import com.example.BuildConfig
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -194,6 +196,15 @@ class NoxaAiRepository(context: Context) {
 
     private val json = "application/json; charset=utf-8".toMediaType()
 
+    private val quotaStore = AiQuotaStore(prefs)
+
+    /**
+     * Set by the ViewModel from the signed-in account. Developer accounts (and
+     * Sky's own) skip every limit, so the owner can never lock themselves out
+     * of their own assistant.
+     */
+    var isDeveloper: Boolean = false
+
     // --------------------------------------------------------------- model
 
     /** Model currently selected by the user (persisted). */
@@ -218,9 +229,46 @@ class NoxaAiRepository(context: Context) {
         AiModel.entries.map { AiModelStatus(it, true) }
 
     /**
-     * Refreshes model availability from `/v1/models`. A network failure keeps
-     * the previous snapshot (never blocks the chat), because the important
-     * signal is "absent from a successful list", not "we could not ask".
+     * Kuota model ini **sekarang**: berapa pesan terpakai, batasnya, dan kapan
+     * jatah paling awal kembali. Developer selalu unlimited.
+     */
+    fun quotaFor(model: AiModel): AiQuotaState = quotaStore.state(model.quota, isDeveloper)
+
+    /** Kuota semua model, untuk ditampilkan di pemilih model. */
+    fun quotas(): Map<AiModel, AiQuotaState> =
+        AiModel.entries.associateWith { quotaFor(it) }
+
+    /**
+     * Model yang baru saja menjawab 503 `model_under_maintenance`. Ditandai
+     * selama [MAINTENANCE_TTL_MS] supaya pemilih model jujur menampilkan
+     * "maintenance" tanpa harus menembak request yang pasti gagal.
+     */
+    private fun markMaintenance(model: AiModel) {
+        val marks = maintenanceMarks().apply {
+            put(model.id, System.currentTimeMillis() + MAINTENANCE_TTL_MS)
+        }
+        prefs.edit().putString(KEY_MAINTENANCE, JSONObject(marks as Map<*, *>).toString()).apply()
+    }
+
+    private fun maintenanceMarks(): MutableMap<String, Long> {
+        val raw = prefs.getString(KEY_MAINTENANCE, null) ?: return mutableMapOf()
+        return runCatching {
+            val obj = JSONObject(raw)
+            val now = System.currentTimeMillis()
+            buildMap {
+                obj.keys().forEach { id ->
+                    val until = obj.optLong(id, 0L)
+                    if (until > now) put(id, until)
+                }
+            }.toMutableMap()
+        }.getOrDefault(mutableMapOf())
+    }
+
+    /**
+     * Refreshes model availability from `/v1/models`, digabung dengan tanda
+     * maintenance dari respons 503 terakhir. A network failure keeps the
+     * previous snapshot (never blocks the chat), because the important signal
+     * is "absent from a successful list", not "we could not ask".
      */
     suspend fun refreshModelStatus(): List<AiModelStatus> = withContext(Dispatchers.IO) {
         val request = Request.Builder()
@@ -245,9 +293,20 @@ class NoxaAiRepository(context: Context) {
 
         if (ids.isNullOrEmpty()) return@withContext cachedModelStatus()
 
+        val marks = maintenanceMarks()
         val statuses = AiModel.entries.map { model ->
-            AiModelStatus(model, ids.any { it.equals(model.id, ignoreCase = true) })
+            val listed = ids.any { it.equals(model.id, ignoreCase = true) }
+            // A model that reappears in the official list is healthy again, so
+            // a stale maintenance mark must not hide it.
+            if (listed) marks.remove(model.id)
+            val down = !listed || marks.containsKey(model.id)
+            AiModelStatus(
+                model = model,
+                available = !down,
+                note = if (!down) null else "maintenance terjadwal"
+            )
         }
+        prefs.edit().putString(KEY_MAINTENANCE, JSONObject(marks as Map<*, *>).toString()).apply()
         val cache = JSONObject()
         statuses.forEach { cache.put(it.model.id, it.available) }
         prefs.edit().putString(KEY_MODEL_STATUS, cache.toString()).apply()
@@ -267,30 +326,103 @@ class NoxaAiRepository(context: Context) {
      */
     suspend fun chat(
         userMessage: String,
-        memoryContext: String? = null
+        memoryContext: String? = null,
+        flavor: AiFlavor? = null
     ): AiReply = withContext(Dispatchers.IO) {
         val requested = selectedModel
-        try {
-            requestCompletion(requested, userMessage, memoryContext)?.let { raw ->
-                return@withContext parseReply(raw, requested, fallbackFrom = null)
-            }
-            throw IllegalStateException("empty reply")
-        } catch (e: Exception) {
-            if (requested == AiModel.DEFAULT) throw e
-            val fallback = requestCompletion(AiModel.DEFAULT, userMessage, memoryContext)
-                ?: throw e
-            parseReply(fallback, AiModel.DEFAULT, fallbackFrom = requested)
+        // Flagship-only working modes: a free model never receives an addendum
+        // it was not trained to follow, so the tier promise stays honest.
+        val mode = flavor?.takeIf { requested.tier == AiTier.FLAGSHIP }
+        // Quota is enforced before the key is even touched: a flagship user who
+        // spent the allowance gets a clear message instead of a failed request.
+        val gate = quotaFor(requested)
+        if (gate.exhausted) throw AiQuotaExceeded(requested, gate)
+
+        val attempt = runCatching { requestCompletion(requested, userMessage, memoryContext, mode) }
+        attempt.exceptionOrNull()?.let { error ->
+            if (error is CancellationException) throw error
         }
+        val raw = attempt.getOrNull()
+        if (raw != null) {
+            quotaStore.consume(requested.quota)
+            return@withContext parseReply(raw, requested, fallbackFrom = null)
+        }
+        val failure = attempt.exceptionOrNull() ?: IllegalStateException("empty reply")
+        if (requested == AiModel.DEFAULT) throw failure
+        // Maintenance or a dead key never costs the user their message: the
+        // free default model answers instead, and the bubble says so.
+        val fallback = requestCompletion(AiModel.DEFAULT, userMessage, memoryContext, null)
+            ?: throw failure
+        parseReply(fallback, AiModel.DEFAULT, fallbackFrom = requested)
     }
 
-    /** One POST; returns the assistant content or null. Throws on hard failure. */
+    /**
+     * One POST with key rotation. Flagship models try the primary key first and
+     * silently retry with the backup key when the first one is rejected or out
+     * of credit; the last working key is remembered so the next message does not
+     * pay that extra round-trip again.
+     */
     private fun requestCompletion(
         model: AiModel,
         userMessage: String,
-        memoryContext: String?
+        memoryContext: String?,
+        flavor: AiFlavor? = null
+    ): String? {
+        val keys = keysFor(model)
+        if (keys.isEmpty()) throw IllegalStateException("kredensial NOXA AI kosong")
+        var lastFailure: HttpFailure? = null
+        keys.forEachIndexed { index, key ->
+            val result = runCatching {
+                requestCompletionWithKey(model, key, userMessage, memoryContext, flavor)
+            }
+            result.getOrNull()?.let { content ->
+                rememberKey(model, index)
+                return content
+            }
+            val error = result.exceptionOrNull() ?: return@forEachIndexed
+            if (error is HttpFailure && error.maintenance) {
+                markMaintenance(model)
+                throw AiMaintenance(model)
+            }
+            if (error is HttpFailure && (error.keyRejected || error.rateLimited)) {
+                lastFailure = error
+                return@forEachIndexed
+            }
+            throw error
+        }
+        throw lastFailure ?: IllegalStateException("tidak ada key yang bisa dipakai")
+    }
+
+    /** Key candidates for [model], starting from the one that worked last time. */
+    private fun keysFor(model: AiModel): List<String> {
+        if (!model.usesFlagshipKey) {
+            return listOf(NoxaAiConfig.apiKey).filter { it.isNotBlank() }
+        }
+        val pool = NoxaAiConfig.flagshipKeys
+        if (pool.isEmpty()) return emptyList()
+        val start = prefs.getInt(KEY_KEY_INDEX, 0).coerceIn(0, pool.lastIndex)
+        return pool.indices.map { pool[(start + it) % pool.size] }
+    }
+
+    private fun rememberKey(model: AiModel, index: Int) {
+        if (!model.usesFlagshipKey) return
+        if (prefs.getInt(KEY_KEY_INDEX, 0) != index) {
+            prefs.edit().putInt(KEY_KEY_INDEX, index).apply()
+        }
+    }
+
+    /** One POST with one explicit key; returns the assistant content or null. */
+    private fun requestCompletionWithKey(
+        model: AiModel,
+        key: String,
+        userMessage: String,
+        memoryContext: String?,
+        flavor: AiFlavor? = null
     ): String? {
         val messages = JSONArray()
-        messages.put(JSONObject().put("role", "system").put("content", systemPrompt(memoryContext)))
+        messages.put(
+            JSONObject().put("role", "system").put("content", systemPrompt(memoryContext, flavor))
+        )
         // Replay a short window of the transcript for continuity.
         loadHistory().takeLast(HISTORY_TURNS)
             .filter { it.text.isNotBlank() }
@@ -312,9 +444,9 @@ class NoxaAiRepository(context: Context) {
 
         val request = Request.Builder()
             .url(NoxaAiConfig.chatUrl)
-            .header("Authorization", "Bearer ${NoxaAiConfig.apiKey}")
+            .header("Authorization", "Bearer $key")
             .header("Content-Type", "application/json")
-            .header("User-Agent", "NOXA-Music/3.5.5")
+            .header("User-Agent", "NOXA-Music/${BuildConfig.VERSION_NAME}")
             .post(payload.toRequestBody(json))
             .build()
 
@@ -413,13 +545,43 @@ class NoxaAiRepository(context: Context) {
 
     /** HTTP failure with the status code kept for fallback decisions. */
     class HttpFailure(val code: Int, val body: String) :
-        Exception("HTTP $code ${body.take(120)}")
+        Exception("HTTP $code ${body.take(120)}") {
+
+        /** Provider says the model is in a scheduled maintenance window. */
+        val maintenance: Boolean
+            get() = body.contains("model_under_maintenance") || body.contains("maintenance_error")
+
+        /** The key itself is unusable (invalid, revoked, no credit left). */
+        val keyRejected: Boolean
+            get() = code == 401 || code == 402 || code == 403 ||
+                body.contains("insufficient_quota") || body.contains("invalid_api_key")
+
+        /** Provider throttled this key — another key may still work. */
+        val rateLimited: Boolean
+            get() = code == 429
+    }
+
+    /** Selected model is under maintenance; the chat falls back to the default. */
+    class AiMaintenance(val model: AiModel) :
+        Exception("${model.label} sedang maintenance")
+
+    /**
+     * The device used up the model's allowance. Carries [state] so the UI can
+     * say exactly how long is left instead of a generic error.
+     */
+    class AiQuotaExceeded(val model: AiModel, val state: AiQuotaState) :
+        Exception("Kuota ${model.label} habis")
 
     companion object {
         private const val KEY_SESSION = "session_id"
         private const val KEY_HISTORY = "history_json"
         private const val KEY_MODEL = "ai_model"
         private const val KEY_MODEL_STATUS = "model_status_json"
+        private const val KEY_MAINTENANCE = "model_maintenance_json"
+        private const val KEY_KEY_INDEX = "flagship_key_index"
+
+        /** How long a 503 maintenance answer keeps a model marked as down. */
+        private const val MAINTENANCE_TTL_MS = 30 * 60 * 1000L
         private const val HISTORY_LIMIT = 120
         private const val HISTORY_TURNS = 12
 
@@ -462,9 +624,11 @@ ATURAN GAYA:
 - Jangan menyebut dirimu model bahasa atau AI dari perusahaan lain. Kamu NOXA AI, bagian dari NOXA Music.
 """.trimIndent()
 
-        /** System prompt plus optional song-memory context. */
-        internal fun systemPrompt(memoryContext: String?): String =
-            if (memoryContext.isNullOrBlank()) SYSTEM_PROMPT
+        /** System prompt plus optional song memory and flagship mode. */
+        internal fun systemPrompt(memoryContext: String?, flavor: AiFlavor? = null): String {
+            val base = if (memoryContext.isNullOrBlank()) SYSTEM_PROMPT
             else SYSTEM_PROMPT + "\n\n" + memoryContext
+            return if (flavor == null) base else base + "\n\n" + flavor.addendum
+        }
     }
 }

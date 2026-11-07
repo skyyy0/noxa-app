@@ -714,10 +714,18 @@ class NoxaAudioPlayer(private val context: Context) {
         if (SleepTimerRules.shouldStop(remaining)) finishSleepTimer()
     }
 
+    /**
+     * Fired once when a sleep timer reaches zero (countdown or end of track).
+     * The ViewModel uses it to stop the ambience loop as well, so the rain does
+     * not keep playing after the music has deliberately gone quiet.
+     */
+    var onSleepTimerFinished: (() -> Unit)? = null
+
     /** Stops playback at zero, clears both timer modes and restores volume. */
     private fun finishSleepTimer() {
         if (exoPlayer.isPlaying) exoPlayer.pause()
         cancelSleepTimer(restoreVolume = true)
+        onSleepTimerFinished?.invoke()
     }
 
     /** Clears timer state; [restoreVolume] undoes a fade already in progress. */
