@@ -361,6 +361,20 @@ class NoxaAiRepository(context: Context) {
     }
 
     /**
+     * One short line for the room chat ("Dengar Bareng").
+     *
+     * Room DJ always runs on the free default model (GLM) — no quota, no
+     * flagship mode, no chat transcript: the room has its own context and the
+     * answer is one sentence. Playback never waits for this: callers fall back
+     * to their own line when it returns null.
+     */
+    suspend fun roomLine(prompt: String): String? = withContext(Dispatchers.IO) {
+        runCatching {
+            requestCompletion(AiModel.GLM, prompt, ROOM_DJ_PROMPT, null, null)
+        }.getOrNull()
+    }
+
+    /**
      * One POST with key rotation. Flagship models try the primary key first and
      * silently retry with the backup key when the first one is rejected or out
      * of credit; the last working key is remembered so the next message does not
@@ -647,6 +661,17 @@ ATURAN GAYA:
             if (flavor != AiFlavor.TULIS_LIRIK) return withMode
             return withMode + "\n\n" + (lyricReference ?: LIRIK_TANPA_REFERENSI)
         }
+
+        /**
+         * Room DJ voice: one casual sentence, no markdown, no playback tags —
+         * the song itself is chosen by the app, never by the model.
+         */
+        private val ROOM_DJ_PROMPT = """
+            Kamu NOXA, DJ di room dengar bareng. Jawab dengan SATU kalimat santai bahasa Indonesia,
+            maksimal 90 karakter, tanpa markdown, tanpa emoji lebih dari satu, tanpa tanda kutip,
+            dan JANGAN memakai tag apa pun. Jangan mengarang judul lagu lain — sebut hanya lagu
+            yang diberikan di pesan pengguna.
+        """.trimIndent()
 
         /**
          * Told to the model when the web lookup found no real song. It must not

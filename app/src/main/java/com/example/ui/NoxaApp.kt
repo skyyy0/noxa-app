@@ -747,6 +747,11 @@ private fun NoxaAppContent(
                         onPrevious = { viewModel.previous() },
                         onNext = { viewModel.next() },
                         onVoteSkip = { viewModel.toggleSkipVote() },
+                        onSendMessage = { text -> viewModel.sendRoomMessage(text) },
+                        onAiToggle = { enabled -> viewModel.setRoomAiEnabled(enabled) },
+                        onRadioToggle = { enabled -> viewModel.setRoomAutoRadio(enabled) },
+                        onStopDj = { viewModel.stopRoomDj() },
+                        onClearQueue = { viewModel.clearRoomQueue() },
                         localPositionMs = if (sameSong) roomProgress.positionMs else 0L,
                         localDurationMs = if (sameSong) {
                             roomProgress.durationMs.takeIf { it > 0 }

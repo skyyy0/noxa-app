@@ -3332,6 +3332,30 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** Recently played ids in this room — keeps auto-radio from repeating. */
+    private val roomRadioRecent = mutableListOf<String>()
+
+    /**
+     * While `now < roomMirrorMutedUntil`, members do not publish their own
+     * auto-advance: the room itself is choosing the next song, and letting
+     * every phone publish its private queue would make the room jump around.
+     */
+    @Volatile
+    private var roomMirrorMutedUntil = 0L
+
+    /** One queue/radio advance at a time. */
+    @Volatile
+    private var roomAdvancing = false
+
+    /** Throttles the end-of-song hook so a failed lookup cannot spam search. */
+    @Volatile
+    private var lastRoomAdvanceAttemptAt = 0L
+
+    private var roomAiJob: kotlinx.coroutines.Job? = null
+
+    private fun roomDisplayName(user: com.example.data.auth.NoxaUser): String =
+        user.displayName ?: user.email ?: "user"
+
     /** Creates a room: a fresh 6-character code, then joins it. */
     fun createRoom() {
         val alphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789" // no 0/O/1/I confusion
@@ -3347,13 +3371,361 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         }
         roomJob?.cancel()
         roomJob = null
+        roomAiJob?.cancel()
+        roomAiJob = null
         roomCode = null
         applyingRemote = false
+        roomMirrorMutedUntil = 0L
+        roomAdvancing = false
+        roomRadioRecent.clear()
         _roomState.value = com.example.ui.screens.RoomUiState.Idle
         val user = authManager.currentUser.value
         if (user != null) {
             safeScope.launch { runCatching { backend.leaveRoom(code, user.uid) } }
         }
+    }
+
+    // ------------------------------------- room chat, NOXA DJ, admin controls
+
+    /**
+     * Sends one chat line. A message that addresses NOXA (`@noxa …`) is also a
+     * request: the line is posted like any other, then NOXA answers in the room
+     * and either plays the track now or queues it ("habis lagu ini").
+     */
+    fun sendRoomMessage(text: String) {
+        val code = roomCode ?: return
+        val user = authManager.currentUser.value ?: return
+        val clean = text.trim()
+            .take(com.example.data.support.NoxaBackend.RoomChatMessage.MAX_CHAT_CHARS)
+        if (clean.isBlank()) return
+        val command = com.example.data.support.RoomAi.command(clean)
+        safeScope.launch {
+            publishRoomChat(code, user, clean)
+            if (command != null) handleRoomMention(code, user, command)
+        }
+    }
+
+    /**
+     * Chat publish. It carries the sender's live position whenever they are on
+     * the room's current song: a chat line bumps `updatedAt`, and everyone else
+     * derives the timeline from it, so a stale position would make the whole
+     * room seek backwards just because somebody said "mantap".
+     */
+    private suspend fun publishRoomChat(
+        code: String,
+        user: com.example.data.auth.NoxaUser,
+        text: String,
+        fromAi: Boolean = false
+    ) {
+        val room = _roomState.value as? com.example.ui.screens.RoomUiState.InRoom
+        val song = playerState.value.currentSong
+        val progress = playbackProgress.value
+        val onRoomSong = room != null && song != null && song.id == room.songId
+        runCatching {
+            backend.sendRoomChat(
+                code = code,
+                uid = user.uid,
+                name = roomDisplayName(user),
+                text = text,
+                fromAi = fromAi,
+                positionMs = if (onRoomSong) progress.positionMs else null,
+                playing = if (onRoomSong) playerState.value.isPlaying else null,
+                durationMs = if (onRoomSong) progress.durationMs.takeIf { it > 0 } else null
+            )
+        }.getOrNull()?.let { published -> lastRemoteAt = published.updatedAt }
+    }
+
+    /**
+     * Executes an `@noxa` request. Playback is decided locally and always
+     * happens, even when the model is unreachable; the model only writes the
+     * one-line reply, on the free default model (GLM).
+     */
+    private fun handleRoomMention(
+        code: String,
+        user: com.example.data.auth.NoxaUser,
+        command: com.example.data.support.RoomAi.Command
+    ) {
+        val room = _roomState.value as? com.example.ui.screens.RoomUiState.InRoom ?: return
+        if (!room.aiEnabled) {
+            safeScope.launch {
+                publishRoomChat(
+                    code, user,
+                    "Mode NOXA sedang dimatikan admin room, jadi aku cuma bisa ikut dengar 🎧",
+                    fromAi = true
+                )
+            }
+            return
+        }
+        if (command.query.isBlank()) {
+            safeScope.launch {
+                publishRoomChat(
+                    code, user,
+                    "Mau lagu apa? Contoh: @noxa puterin lagu Kangen Dewa 19",
+                    fromAi = true
+                )
+            }
+            return
+        }
+        roomAiJob?.cancel()
+        roomAiJob = safeScope.launch {
+            setRoomAiThinking(true)
+            try {
+                val pick = runCatching { repository.search(command.query) }
+                    .getOrDefault(emptyList())
+                    .firstOrNull { it.title.isNotBlank() }
+                if (pick == null) {
+                    publishRoomChat(
+                        code, user,
+                        "Aku belum nemu \"${command.query}\" di katalog. Coba judul atau nama artis lain, ya.",
+                        fromAi = true
+                    )
+                    return@launch
+                }
+                publishRoomChat(code, user, roomAiLine(pick, command), fromAi = true)
+                if (command.mode == com.example.data.support.RoomAi.Mode.NEXT) {
+                    enqueueRoomSong(pick, user)
+                } else {
+                    playRoomSongNow(pick, user)
+                }
+            } finally {
+                setRoomAiThinking(false)
+            }
+        }
+    }
+
+    /** One casual sentence from NOXA, with a deterministic fallback. */
+    private suspend fun roomAiLine(
+        song: Song,
+        command: com.example.data.support.RoomAi.Command
+    ): String {
+        val fallback = when (command.mode) {
+            com.example.data.support.RoomAi.Mode.NEXT ->
+                "Oke, \"${song.title}\" — ${song.artist} masuk antrian berikutnya."
+            else -> "Siap, \"${song.title}\" — ${song.artist} langsung diputar 🎧"
+        }
+        val prompt = buildString {
+            append("Permintaan anggota: \"")
+            append(command.query)
+            append("\". Lagu yang ditemukan: \"")
+            append(song.title)
+            append("\" oleh ")
+            append(song.artist)
+            append(
+                if (command.mode == com.example.data.support.RoomAi.Mode.NEXT) {
+                    ". Aksi: dimasukkan ke antrian setelah lagu ini."
+                } else {
+                    ". Aksi: diputar sekarang."
+                }
+            )
+        }
+        val raw = runCatching { aiRepository.roomLine(prompt) }.getOrNull()
+        val line = raw?.lineSequence()?.firstOrNull()
+            ?.trim()
+            ?.trim('"', '\'', '*', ' ')
+        return line?.takeIf { it.length in 6..160 } ?: fallback
+    }
+
+    private fun setRoomAiThinking(thinking: Boolean) {
+        val current = _roomState.value
+        if (current is com.example.ui.screens.RoomUiState.InRoom) {
+            _roomState.value = current.copy(aiThinking = thinking)
+        }
+    }
+
+    /** Puts [song] on in the room right now and plays it here too. */
+    private suspend fun playRoomSongNow(
+        song: Song,
+        user: com.example.data.auth.NoxaUser
+    ) {
+        val code = roomCode ?: return
+        val published = runCatching {
+            backend.publishRoom(code, user.uid, roomDisplayName(user)) { room ->
+                room.copy(
+                    songId = song.id,
+                    songTitle = song.title,
+                    songArtist = song.artist,
+                    songArtwork = song.artworkUrl,
+                    playing = true,
+                    positionMs = 0L,
+                    durationMs = song.durationMs,
+                    skipVotes = emptyList(),
+                    queue = room.queue.filterNot { it.songId == song.id }
+                )
+            }
+        }.getOrNull() ?: return
+        lastRemoteAt = published.updatedAt
+        roomRadioRecent.clear()
+        roomRadioRecent.add(song.id)
+        applyingRemote = true
+        try {
+            playSong(song)
+            kotlinx.coroutines.delay(400)
+        } finally {
+            applyingRemote = false
+        }
+    }
+
+    /** Queues [song] behind the current track — or starts it when idle. */
+    private fun enqueueRoomSong(song: Song, user: com.example.data.auth.NoxaUser) {
+        val code = roomCode ?: return
+        safeScope.launch {
+            val published = runCatching {
+                backend.publishRoom(code, user.uid, roomDisplayName(user)) { room ->
+                    val item = com.example.data.support.NoxaBackend.RoomQueueItem(
+                        songId = song.id,
+                        title = song.title,
+                        artist = song.artist,
+                        artwork = song.artworkUrl,
+                        addedBy = "NOXA"
+                    )
+                    room.copy(
+                        queue = (room.queue.filterNot { it.songId == song.id } + item)
+                            .takeLast(com.example.data.support.NoxaBackend.RoomState.MAX_QUEUE)
+                    )
+                }
+            }.getOrNull() ?: return@launch
+            lastRemoteAt = published.updatedAt
+            // Nothing playing: "after this song" means right now.
+            if (published.songId.isBlank()) playRoomSongNow(song, user)
+        }
+    }
+
+    /**
+     * Room-wide switches. Only the host may flip them — the check runs here so
+     * a modified client cannot change the room either.
+     */
+    fun setRoomAiEnabled(enabled: Boolean) =
+        publishRoomControls { it.copy(aiEnabled = enabled) }
+
+    fun setRoomAutoRadio(enabled: Boolean) =
+        publishRoomControls { it.copy(autoRadio = enabled) }
+
+    fun clearRoomQueue() = publishRoomControls { it.copy(queue = emptyList()) }
+
+    /** Admin stop: drop what NOXA queued and pause the room immediately. */
+    fun stopRoomDj() = publishRoomControls(pause = true) { it.copy(queue = emptyList()) }
+
+    private fun publishRoomControls(
+        pause: Boolean = false,
+        transform: (com.example.data.support.NoxaBackend.RoomState) ->
+            com.example.data.support.NoxaBackend.RoomState
+    ) {
+        val code = roomCode ?: return
+        val user = authManager.currentUser.value ?: return
+        val room = _roomState.value as? com.example.ui.screens.RoomUiState.InRoom ?: return
+        if (!room.isHost) return
+        safeScope.launch {
+            val song = playerState.value.currentSong
+            val progress = playbackProgress.value
+            val onRoomSong = song != null && song.id == room.songId
+            val published = runCatching {
+                backend.publishRoom(code, user.uid, roomDisplayName(user)) { state ->
+                    val synced = if (onRoomSong) {
+                        state.copy(
+                            playing = if (pause) false else playerState.value.isPlaying,
+                            positionMs = progress.positionMs,
+                            durationMs = progress.durationMs.takeIf { it > 0 } ?: state.durationMs
+                        )
+                    } else {
+                        state
+                    }
+                    transform(synced)
+                }
+            }.getOrNull() ?: return@launch
+            lastRemoteAt = published.updatedAt
+            if (pause && onRoomSong && playerState.value.isPlaying) player.togglePlayPause()
+        }
+    }
+
+    /**
+     * End of a room track: the host promotes the queue (or a similar song when
+     * auto-radio is on) and publishes it once. Everyone else mutes their own
+     * auto-advance for a moment so the room does not split into two songs.
+     */
+    private suspend fun advanceRoomIfEnded(
+        room: com.example.data.support.NoxaBackend.RoomState,
+        selfUid: String
+    ) {
+        if (room.songId.isBlank()) return
+        val localDuration = if (playerState.value.currentSong?.id == room.songId) {
+            playbackProgress.value.durationMs
+        } else {
+            0L
+        }
+        val duration = room.durationMs.takeIf { it > 0 }
+            ?: localDuration.takeIf { it > 0 }
+            ?: return
+        if (!com.example.data.support.RoomRadio.hasEnded(
+                room.playing,
+                estimatedRoomPosition(room),
+                duration
+            )
+        ) {
+            return
+        }
+        if (room.queue.isEmpty() && !room.autoRadio) return
+        val now = System.currentTimeMillis()
+        // The hook runs every second while the track sits at its end; without
+        // this it would hit the catalogue once per poll when nothing matches.
+        if (now - lastRoomAdvanceAttemptAt < 8_000L) return
+        lastRoomAdvanceAttemptAt = now
+        roomMirrorMutedUntil = now + 6_000
+        val driver = room.hostUid.takeIf { host -> room.members.any { it.uid == host } }
+            ?: com.example.data.support.RoomVotes.skipperUid(room.members.map { it.uid })
+            ?: return
+        if (driver != selfUid || roomAdvancing) return
+        roomAdvancing = true
+        try {
+            val head = room.queue.firstOrNull()
+            val queued = head?.let { runCatching { resolveSongId(it.songId) }.getOrNull() }
+            val next = queued ?: pickRoomRadioSong(room) ?: return
+            val newQueue = if (queued != null) room.queue.drop(1) else room.queue
+            val user = authManager.currentUser.value ?: return
+            val published = runCatching {
+                backend.publishRoom(room.code, user.uid, roomDisplayName(user)) { state ->
+                    state.copy(
+                        songId = next.id,
+                        songTitle = next.title,
+                        songArtist = next.artist,
+                        songArtwork = next.artworkUrl,
+                        playing = true,
+                        positionMs = 0L,
+                        durationMs = next.durationMs,
+                        skipVotes = emptyList(),
+                        queue = newQueue
+                    )
+                }
+            }.getOrNull() ?: return
+            lastRemoteAt = published.updatedAt
+            roomRadioRecent.add(next.id)
+            while (roomRadioRecent.size > com.example.data.support.RoomRadio.RECENT_LIMIT) {
+                roomRadioRecent.removeAt(0)
+            }
+            applyingRemote = true
+            try {
+                playSong(next)
+                kotlinx.coroutines.delay(400)
+            } finally {
+                applyingRemote = false
+            }
+        } finally {
+            roomAdvancing = false
+        }
+    }
+
+    /** A track in the current song's lane, never one already played here. */
+    private suspend fun pickRoomRadioSong(
+        room: com.example.data.support.NoxaBackend.RoomState
+    ): Song? {
+        val anchor = room.songArtist
+        if (anchor.isBlank()) return null
+        val candidates = runCatching {
+            val artistId = repository.findArtistId(anchor)
+            if (artistId != null) repository.artistTopTracks(artistId, 20)
+            else repository.search(anchor)
+        }.getOrDefault(emptyList())
+        val recent = roomRadioRecent.toSet() + room.songId
+        return com.example.data.support.RoomRadio.pickSimilar(anchor, candidates, recent)
     }
 
     /** Poll loop: refresh members, apply remote song/playing/position. */
@@ -3367,12 +3739,18 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 val room = runCatching { backend.readRoom(code) }.getOrNull() ?: continue
                 applyRemoteRoom(room, force = false)
                 executeVoteSkipIfNeeded(room, user.uid)
+                advanceRoomIfEnded(room, user.uid)
                 val current = _roomState.value
                 if (current is com.example.ui.screens.RoomUiState.InRoom) {
-                    // Full refresh: song/playing/members may have all moved
-                    // when a peer took over — the header must follow.
-                    _roomState.value = room.toUiState(code, user.uid)
-                        .copy(positionMs = estimatedRoomPosition(room))
+                    // Full refresh: song/playing/members/chat may all have
+                    // moved when a peer took over — the header must follow.
+                    // The local "NOXA is looking…" flag is ours to keep: the
+                    // server knows nothing about it.
+                    _roomState.value = room.toUiState(
+                        code = code,
+                        selfUid = user.uid,
+                        aiThinking = current.aiThinking
+                    ).copy(positionMs = estimatedRoomPosition(room))
                 }
             }
         }
@@ -3524,6 +3902,10 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                         songArtwork = song.artworkUrl,
                         playing = playing,
                         positionMs = positionMs,
+                        // Published so every member can tell when the track
+                        // ends — that is what triggers queue/auto-radio.
+                        durationMs = playbackProgress.value.durationMs
+                            .takeIf { it > 0 } ?: room.durationMs,
                         // A song/play change makes any running skip vote
                         // stale; heartbeats and seeks keep it alive.
                         skipVotes = if (clearVotes) emptyList() else room.skipVotes
@@ -3545,6 +3927,9 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 val key = "${st.currentSong?.id}|${st.isPlaying}"
                 if (applyingRemote || key == lastKey) return@collect
                 lastKey = key
+                // The room just ended a song and is choosing the next one:
+                // this phone's private auto-advance must not hijack it.
+                if (System.currentTimeMillis() < roomMirrorMutedUntil) return@collect
                 // Real content change: a running skip vote is now moot.
                 publishRoomSnapshot(clearVotes = true)
             }
@@ -3553,7 +3938,10 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         safeScope.launch {
             while (isActive) {
                 kotlinx.coroutines.delay(ROOM_HEARTBEAT_MS)
-                if (roomCode != null && !applyingRemote && playerState.value.isPlaying) {
+                if (roomCode != null && !applyingRemote &&
+                    System.currentTimeMillis() >= roomMirrorMutedUntil &&
+                    playerState.value.isPlaying
+                ) {
                     publishRoomSnapshot()
                 }
             }
@@ -3562,10 +3950,12 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun com.example.data.support.NoxaBackend.RoomState.toUiState(
         code: String,
-        selfUid: String
+        selfUid: String,
+        aiThinking: Boolean = false
     ): com.example.ui.screens.RoomUiState.InRoom {
         val roster = members.map { it.uid }
         val validVotes = com.example.data.support.RoomVotes.validVotes(skipVotes, roster)
+        val effectiveHost = hostUid.takeIf { host -> roster.contains(host) } ?: roster.minOrNull()
         return com.example.ui.screens.RoomUiState.InRoom(
             code = code,
             songId = songId,
@@ -3574,6 +3964,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             songArtwork = songArtwork,
             playing = playing,
             positionMs = positionMs,
+            durationMs = durationMs,
             members = members.map { member ->
                 com.example.ui.screens.RoomMemberUi(
                     uid = member.uid,
@@ -3583,7 +3974,31 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             },
             voteCount = validVotes.size,
             votesNeeded = com.example.data.support.RoomVotes.votesNeeded(roster.size),
-            myVote = selfUid in skipVotes
+            myVote = selfUid in skipVotes,
+            hostUid = effectiveHost ?: "",
+            isHost = effectiveHost == selfUid,
+            autoRadio = autoRadio,
+            aiEnabled = aiEnabled,
+            chat = chat.map { message ->
+                com.example.ui.screens.RoomChatUi(
+                    id = message.id,
+                    name = message.name,
+                    text = message.text,
+                    fromAi = message.fromAi,
+                    isSelf = !message.fromAi && message.uid == selfUid,
+                    at = message.at
+                )
+            },
+            queue = queue.map { item ->
+                com.example.ui.screens.RoomQueueUi(
+                    songId = item.songId,
+                    title = item.title,
+                    artist = item.artist,
+                    artwork = item.artwork,
+                    addedBy = item.addedBy
+                )
+            },
+            aiThinking = aiThinking
         )
     }
 

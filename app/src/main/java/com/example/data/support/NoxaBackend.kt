@@ -601,9 +601,13 @@ class NoxaBackend {
                 name = name.trim().ifBlank { "NOXA User" },
                 lastSeen = now
             )
+            val roster = (room.members.filterNot { it.uid == uid } + member).fresh(now)
             val joined = room.copy(
-                members = (room.members.filterNot { it.uid == uid } + member)
-                    .fresh(now)
+                members = roster,
+                // First one in owns the room and its switches. Once the host
+                // has been away long enough to drop off the roster, the room
+                // hands control to whoever joins next.
+                hostUid = room.hostUid.takeIf { host -> roster.any { it.uid == host } } ?: uid
             )
             state.rooms[normalized] = joined
             pruneRooms(state)
@@ -681,13 +685,61 @@ class NoxaBackend {
             )
             val withMember = room.copy(
                 members = (room.members.filterNot { it.uid == uid } + member)
-                    .fresh(now)
+                    .fresh(now),
+                hostUid = room.hostUid.ifBlank { uid }
             )
             val updated = content(withMember).copy(updatedAt = now)
             state.rooms[normalized] = updated
             pruneRooms(state)
             updated
         }
+    }
+
+    /**
+     * Appends one chat line to the room and refreshes this member's presence.
+     * Empty/oversized text is trimmed here, not in the UI, so a pasted
+     * multi-kilobyte message can never bloat the shared document.
+     */
+    suspend fun sendRoomChat(
+        code: String,
+        uid: String,
+        name: String,
+        text: String,
+        fromAi: Boolean = false,
+        /**
+         * The sender's live position, applied only while they are actually on
+         * the room's song. Chatting bumps `updatedAt`, and every member derives
+         * the target timeline from it — without this, a message sent between
+         * heartbeats made every other phone seek backwards.
+         */
+        positionMs: Long? = null,
+        playing: Boolean? = null,
+        durationMs: Long? = null
+    ): RoomState? = publishRoom(code, uid, name) { room ->
+        val clean = text.trim().take(RoomChatMessage.MAX_CHAT_CHARS)
+        if (clean.isBlank()) {
+            return@publishRoom room
+        }
+        val message = RoomChatMessage(
+            // Unique even for two lines posted in the same millisecond — the
+            // chat list uses these as LazyColumn keys.
+            id = "m${System.currentTimeMillis()}-${(1000..9999).random()}",
+            uid = uid,
+            name = name.trim().ifBlank { "NOXA User" },
+            text = clean,
+            at = System.currentTimeMillis(),
+            fromAi = fromAi
+        )
+        val synced = if (positionMs != null) {
+            room.copy(
+                playing = playing ?: room.playing,
+                positionMs = positionMs,
+                durationMs = durationMs ?: room.durationMs
+            )
+        } else {
+            room
+        }
+        synced.copy(chat = (synced.chat + message).takeLast(RoomState.MAX_CHAT))
     }
 
     /**
@@ -850,6 +902,37 @@ class NoxaBackend {
     )
 
     /**
+     * One line in the room chat.
+     *
+     * [fromAi] marks messages NOXA wrote itself (a song it found, an answer in
+     * the room); they render differently and are never attributed to a member.
+     * The whole room lives in one shared document, so chat is intentionally
+     * short: [RoomState.MAX_CHAT] messages, [MAX_CHAT_CHARS] per message.
+     */
+    data class RoomChatMessage(
+        val id: String,
+        val uid: String,
+        val name: String,
+        val text: String,
+        val at: Long,
+        val fromAi: Boolean = false
+    ) {
+        companion object {
+            const val MAX_CHAT_CHARS = 240
+        }
+    }
+
+    /** One song waiting behind the current track ("habis lagu ini"). */
+    data class RoomQueueItem(
+        val songId: String,
+        val title: String,
+        val artist: String,
+        val artwork: String = "",
+        /** Member name that asked for it ("NOXA" for AI picks). */
+        val addedBy: String = ""
+    )
+
+    /**
      * A live "Dengar Bareng" room: everyone hears the same song at roughly
      * the same position. Last-writer-wins by [updatedAt] — whoever acts
      * (song, play/pause, seek) publishes; every other member follows.
@@ -862,9 +945,24 @@ class NoxaBackend {
         val songArtwork: String = "",
         val playing: Boolean = false,
         val positionMs: Long = 0L,
+        /** Length of the current track — lets every member detect "it ended". */
+        val durationMs: Long = 0L,
         /** Bumped ONLY by content changes — never by heartbeats. */
         val updatedAt: Long = 0L,
         val members: List<RoomMember> = emptyList(),
+        /**
+         * The room admin: the first member who joined. Only this uid may turn
+         * NOXA off, clear the queue, or force-stop what the AI started.
+         */
+        val hostUid: String = "",
+        /** Conversation in the room, oldest first, capped at [MAX_CHAT]. */
+        val chat: List<RoomChatMessage> = emptyList(),
+        /** Songs requested for after the current one. */
+        val queue: List<RoomQueueItem> = emptyList(),
+        /** Admin switch: keep the music going with similar songs. */
+        val autoRadio: Boolean = true,
+        /** Admin switch: may members summon NOXA with "@noxa …"? */
+        val aiEnabled: Boolean = true,
         /**
          * Vote Skip: uids of members currently voting to advance. Any local
          * playback change (song/play-pause) clears the ballot — the vote is
@@ -872,7 +970,13 @@ class NoxaBackend {
          * deterministic leader perform the skip (see `RoomVotes`).
          */
         val skipVotes: List<String> = emptyList()
-    )
+    ) {
+        companion object {
+            /** Short by design: the room document is mirrored to one page. */
+            const val MAX_CHAT = 30
+            const val MAX_QUEUE = 12
+        }
+    }
 
     /** Full backend document, mirrored 1:1 onto the Telegraph page. */
     class BackendState {
@@ -959,6 +1063,39 @@ class NoxaBackend {
             for (i in 0 until rawVotes.length()) {
                 rawVotes.optString(i).takeIf { it.isNotBlank() }?.let { skipVotes += it }
             }
+            val rawChat = obj.optJSONArray("chat") ?: JSONArray()
+            val chat = ArrayList<RoomChatMessage>(rawChat.length())
+            for (i in 0 until rawChat.length()) {
+                val c = rawChat.optJSONObject(i) ?: continue
+                val text = c.optString("text").take(RoomChatMessage.MAX_CHAT_CHARS)
+                if (text.isBlank()) continue
+                chat.add(
+                    RoomChatMessage(
+                        id = c.optString("id"),
+                        uid = c.optString("uid"),
+                        name = c.optString("name"),
+                        text = text,
+                        at = c.optLong("at"),
+                        fromAi = c.optBoolean("fromAi")
+                    )
+                )
+            }
+            val rawQueue = obj.optJSONArray("queue") ?: JSONArray()
+            val queue = ArrayList<RoomQueueItem>(rawQueue.length())
+            for (i in 0 until rawQueue.length()) {
+                val q = rawQueue.optJSONObject(i) ?: continue
+                val id = q.optString("songId")
+                if (id.isBlank()) continue
+                queue.add(
+                    RoomQueueItem(
+                        songId = id,
+                        title = q.optString("title"),
+                        artist = q.optString("artist"),
+                        artwork = q.optString("artwork"),
+                        addedBy = q.optString("addedBy")
+                    )
+                )
+            }
             state.rooms[code] = RoomState(
                 code = code,
                 songId = obj.optString("songId"),
@@ -967,8 +1104,14 @@ class NoxaBackend {
                 songArtwork = obj.optString("songArtwork"),
                 playing = obj.optBoolean("playing"),
                 positionMs = obj.optLong("positionMs"),
+                durationMs = obj.optLong("durationMs"),
                 updatedAt = obj.optLong("updatedAt"),
                 members = members,
+                hostUid = obj.optString("hostUid"),
+                chat = chat.takeLast(RoomState.MAX_CHAT),
+                queue = queue.take(RoomState.MAX_QUEUE),
+                autoRadio = !obj.has("autoRadio") || obj.optBoolean("autoRadio"),
+                aiEnabled = !obj.has("aiEnabled") || obj.optBoolean("aiEnabled"),
                 skipVotes = skipVotes
             )
         }
@@ -1108,6 +1251,29 @@ class NoxaBackend {
                         }
                         val votes = JSONArray()
                         room.skipVotes.forEach { uid -> votes.put(uid) }
+                        val chat = JSONArray()
+                        room.chat.forEach { c ->
+                            chat.put(
+                                JSONObject()
+                                    .put("id", c.id)
+                                    .put("uid", c.uid)
+                                    .put("name", c.name)
+                                    .put("text", c.text)
+                                    .put("at", c.at)
+                                    .put("fromAi", c.fromAi)
+                            )
+                        }
+                        val queue = JSONArray()
+                        room.queue.forEach { q ->
+                            queue.put(
+                                JSONObject()
+                                    .put("songId", q.songId)
+                                    .put("title", q.title)
+                                    .put("artist", q.artist)
+                                    .put("artwork", q.artwork)
+                                    .put("addedBy", q.addedBy)
+                            )
+                        }
                         rooms.put(
                             code,
                             JSONObject()
@@ -1117,9 +1283,15 @@ class NoxaBackend {
                                 .put("songArtwork", room.songArtwork)
                                 .put("playing", room.playing)
                                 .put("positionMs", room.positionMs)
+                                .put("durationMs", room.durationMs)
                                 .put("updatedAt", room.updatedAt)
+                                .put("hostUid", room.hostUid)
+                                .put("autoRadio", room.autoRadio)
+                                .put("aiEnabled", room.aiEnabled)
                                 .put("members", members)
                                 .put("skipVotes", votes)
+                                .put("chat", chat)
+                                .put("queue", queue)
                         )
                     }
                     root.put("rooms", rooms)
