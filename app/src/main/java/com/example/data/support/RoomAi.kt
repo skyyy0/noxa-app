@@ -139,8 +139,11 @@ object RoomAi {
         val withoutMention = text.replace(MENTION_STRIP, " ")
         val lower = withoutMention.lowercase(java.util.Locale.ROOT)
         val mode = if (NEXT_MARKERS.any { lower.contains(it) }) Mode.NEXT else Mode.NOW
-        val query = queryOf(withoutMention)
         val intent = intentOf(lower)
+        // A chat mention never carries a search query — that is the whole point
+        // of the intent split, and keeping it blank makes a stray search
+        // impossible even if a future caller forgets to check the intent.
+        val query = if (intent == Intent.PLAY) queryOf(withoutMention) else ""
         return Command(
             query = query,
             mode = mode,

@@ -4010,12 +4010,6 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         }
         if (room.queue.isEmpty() && !room.autoRadio) return
         val now = System.currentTimeMillis()
-        // A snapshot older than a couple of seconds is not a safe basis for a
-        // publish: somebody may have just picked a song by hand (or from the
-        // new search panel) and this older view would overwrite it. That is
-        // exactly what made the room feel like it "refused" a second change
-        // right after auto-radio took over.
-        if (now - room.updatedAt > 2_500L) return
         // The hook runs every second while the track sits at its end; without
         // this it would hit the catalogue once per poll when nothing matches.
         if (now - lastRoomAdvanceAttemptAt < 8_000L) return
@@ -4035,10 +4029,14 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             val published = roomWrite {
                 runCatching {
                     backend.publishRoom(room.code, user.uid, roomDisplayName(user)) { state ->
-                        // Re-check under the write: if the room moved on while we
-                        // were searching, the newer pick wins and this advance
-                        // is simply abandoned.
-                        if (state.songId != room.songId) return@publishRoom state
+                        // Re-check under the write: if the room moved on while
+                        // we were searching (a manual pick, an admin stop), the
+                        // newer decision wins and this advance is abandoned.
+                        // This is the precise guard — a timestamp would also
+                        // reject perfectly fresh snapshots.
+                        if (state.songId != room.songId) {
+                            return@publishRoom state
+                        }
                         state.copy(
                             songId = next.id,
                             songTitle = next.title,
