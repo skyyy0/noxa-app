@@ -48,6 +48,8 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.launch
 
 private const val TAG = "MusicViewModel"
@@ -108,6 +110,13 @@ private const val FORYOU_SONG_LIMIT = 12
  */
 private const val ROOM_POLL_MS = 1_000L
 private const val ROOM_HEARTBEAT_MS = 6_000L
+
+/**
+ * Minimum spacing between two room page edits. Telegraph accepts roughly one
+ * edit per second; sending chat, an AI line and a song change back to back is
+ * what made the later writes disappear.
+ */
+private const val ROOM_WRITE_GAP_MS = 1_100L
 
 /** Radar Rilis: releases younger than this count as "new", and how many
  * followed artists are checked per refresh. */
@@ -3378,6 +3387,10 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         roomMirrorMutedUntil = 0L
         roomAdvancing = false
         roomRadioRecent.clear()
+        roomPendingChat.clear()
+        roomSearchJob?.cancel()
+        roomSearchJob = null
+        _roomSearch.value = com.example.ui.screens.RoomSearchUi()
         _roomState.value = com.example.ui.screens.RoomUiState.Idle
         val user = authManager.currentUser.value
         if (user != null) {
@@ -3388,9 +3401,52 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     // ------------------------------------- room chat, NOXA DJ, admin controls
 
     /**
-     * Sends one chat line. A message that addresses NOXA (`@noxa …`) is also a
-     * request: the line is posted like any other, then NOXA answers in the room
-     * and either plays the track now or queues it ("habis lagu ini").
+     * Chat lines that are on screen but not yet confirmed by the server.
+     * The backend document is one shared page and every write is a full
+     * read-modify-write, so a send can take a second or two. Waiting for that
+     * round-trip before drawing the bubble is what made the room feel laggy;
+     * the bubble now appears immediately and is reconciled when the echo comes
+     * back (a failed send is marked instead of vanishing).
+     */
+    private val roomPendingChat =
+        mutableListOf<com.example.ui.screens.RoomChatUi>()
+
+    private var roomPendingSeq = 0
+
+    /**
+     * Serializes room writes. Telegraph accepts roughly one page edit per
+     * second and v3.6.3 fired chat, AI line and song change back to back — the
+     * later writes were dropped, which is exactly the "chat telat" and "tidak
+     * bisa ganti lagu" report. Writes now leave one at a time, with a single
+     * retry when the page refuses the first attempt.
+     */
+    private val roomWriteMutex = Mutex()
+    private var lastRoomWriteAt = 0L
+
+    private suspend fun <T> roomWrite(block: suspend () -> T?): T? =
+        roomWriteMutex.withLock {
+            val wait = ROOM_WRITE_GAP_MS - (System.currentTimeMillis() - lastRoomWriteAt)
+            if (wait > 0) kotlinx.coroutines.delay(wait)
+            var result = attemptRoomWrite(block)
+            if (result == null) {
+                kotlinx.coroutines.delay(700)
+                result = attemptRoomWrite(block)
+            }
+            lastRoomWriteAt = System.currentTimeMillis()
+            result
+        }
+
+    private suspend fun <T> attemptRoomWrite(block: suspend () -> T?): T? = try {
+        block()
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        null
+    }
+
+    /**
+     * Sends one chat line. A message that asks for a song (`@noxa puterin …`)
+     * also plays/queues it; every other mention is answered as conversation.
      */
     fun sendRoomMessage(text: String) {
         val code = roomCode ?: return
@@ -3398,11 +3454,77 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         val clean = text.trim()
             .take(com.example.data.support.NoxaBackend.RoomChatMessage.MAX_CHAT_CHARS)
         if (clean.isBlank()) return
+        // Optimistic bubble: drawn before the network is touched.
+        val pending = com.example.ui.screens.RoomChatUi(
+            id = "p${System.currentTimeMillis()}-${++roomPendingSeq}",
+            name = roomDisplayName(user),
+            text = clean,
+            isSelf = true,
+            at = System.currentTimeMillis(),
+            pending = true
+        )
+        roomPendingChat.add(pending)
+        pushPendingChat()
         val command = com.example.data.support.RoomAi.command(clean)
         safeScope.launch {
-            publishRoomChat(code, user, clean)
+            val published = publishRoomChat(code, user, clean)
+            if (published != null) {
+                roomPendingChat.removeAll { it.id == pending.id }
+                applyRoomUi(published, user.uid)
+            } else {
+                roomPendingChat.replaceAll {
+                    if (it.id == pending.id) it.copy(pending = false, failed = true) else it
+                }
+                pushPendingChat()
+            }
             if (command != null) handleRoomMention(code, user, command)
         }
+    }
+
+    /** Re-sends a message the backend refused, dropping its failed bubble. */
+    fun resendRoomMessage(text: String) {
+        roomPendingChat.removeAll { it.failed && it.text == text }
+        pushPendingChat()
+        sendRoomMessage(text)
+    }
+
+    /** Redraws the conversation with the local (unconfirmed) bubbles appended. */
+    private fun pushPendingChat() {
+        val current = _roomState.value as? com.example.ui.screens.RoomUiState.InRoom ?: return
+        val confirmed = current.chat
+            .filter { it.isSelf && !it.pending }.map { it.text }.toSet()
+        val waiting = roomPendingChat.filter { it.text !in confirmed }
+        _roomState.value = current.copy(chat = (current.chat + waiting).distinctBy { it.id })
+    }
+
+    /**
+     * Server truth + this device's unconfirmed bubbles. A pending line is
+     * dropped once the same text is back from the server, so the optimistic
+     * copy never renders twice.
+     */
+    private fun mergePendingChat(
+        server: List<com.example.ui.screens.RoomChatUi>
+    ): List<com.example.ui.screens.RoomChatUi> {
+        val confirmed = server.filter { it.isSelf }.map { it.text }.toSet()
+        val waiting = roomPendingChat.filter { it.text !in confirmed }
+        return (server + waiting).sortedBy { it.at }
+    }
+
+    /** Applies a server room document to the UI, keeping local echoes. */
+    private fun applyRoomUi(
+        room: com.example.data.support.NoxaBackend.RoomState,
+        selfUid: String
+    ) {
+        val current = _roomState.value as? com.example.ui.screens.RoomUiState.InRoom
+        val ui = room.toUiState(
+            code = room.code,
+            selfUid = selfUid,
+            aiThinking = current?.aiThinking ?: false
+        )
+        _roomState.value = ui.copy(
+            positionMs = estimatedRoomPosition(room),
+            chat = mergePendingChat(ui.chat)
+        )
     }
 
     /**
@@ -3416,29 +3538,41 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         user: com.example.data.auth.NoxaUser,
         text: String,
         fromAi: Boolean = false
-    ) {
+    ): com.example.data.support.NoxaBackend.RoomState? {
         val room = _roomState.value as? com.example.ui.screens.RoomUiState.InRoom
         val song = playerState.value.currentSong
         val progress = playbackProgress.value
         val onRoomSong = room != null && song != null && song.id == room.songId
-        runCatching {
-            backend.sendRoomChat(
-                code = code,
-                uid = user.uid,
-                name = roomDisplayName(user),
-                text = text,
-                fromAi = fromAi,
-                positionMs = if (onRoomSong) progress.positionMs else null,
-                playing = if (onRoomSong) playerState.value.isPlaying else null,
-                durationMs = if (onRoomSong) progress.durationMs.takeIf { it > 0 } else null
-            )
-        }.getOrNull()?.let { published -> lastRemoteAt = published.updatedAt }
+        val published = roomWrite {
+            runCatching {
+                backend.sendRoomChat(
+                    code = code,
+                    uid = user.uid,
+                    name = if (fromAi) "NOXA" else roomDisplayName(user),
+                    text = text,
+                    fromAi = fromAi,
+                    positionMs = if (onRoomSong) progress.positionMs else null,
+                    playing = if (onRoomSong) playerState.value.isPlaying else null,
+                    durationMs = if (onRoomSong) progress.durationMs.takeIf { it > 0 } else null
+                )
+            }.getOrNull()
+        }
+        published?.let { lastRemoteAt = it.updatedAt }
+        return published
     }
 
+    /** One chat id — unique even for two lines posted in the same millisecond. */
+    private fun newRoomChatId(): String =
+        "m${System.currentTimeMillis()}-${(1000..9999).random()}"
+
     /**
-     * Executes an `@noxa` request. Playback is decided locally and always
-     * happens, even when the model is unreachable; the model only writes the
-     * one-line reply, on the free default model (GLM).
+     * Executes an `@noxa` mention.
+     *
+     * The distinction that used to be missing: only an actual song request
+     * touches the player. `@noxa halo`, `@noxa lagu ini enak ya`, or a real
+     * question (`@noxa lagu apa yang cocok buat kerja?`) get an answer in the
+     * chat and nothing else — v3.6.3 searched the catalogue for every single
+     * mention and hijacked the room on small talk.
      */
     private fun handleRoomMention(
         code: String,
@@ -3447,12 +3581,47 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     ) {
         val room = _roomState.value as? com.example.ui.screens.RoomUiState.InRoom ?: return
         if (!room.aiEnabled) {
-            safeScope.launch {
-                publishRoomChat(
-                    code, user,
-                    "Mode NOXA sedang dimatikan admin room, jadi aku cuma bisa ikut dengar 🎧",
-                    fromAi = true
-                )
+            if (command.intent == com.example.data.support.RoomAi.Intent.PLAY) {
+                safeScope.launch {
+                    publishRoomChat(
+                        code, user,
+                        "Mode NOXA sedang dimatikan admin room, jadi aku cuma bisa ikut dengar.",
+                        fromAi = true
+                    )
+                }
+            }
+            return
+        }
+        val ai = com.example.data.support.RoomAi
+        if (command.intent == com.example.data.support.RoomAi.Intent.CHAT) {
+            answerRoomChat(code, user, command, room)
+            return
+        }
+        if (command.advance) {
+            // "@noxa ganti lagu" — no title, just move on.
+            roomAiJob?.cancel()
+            roomAiJob = safeScope.launch {
+                setRoomAiThinking(true)
+                try {
+                    val next = pickRoomRadioSong(room.songArtist, room.songId)
+                    if (next == null) {
+                        publishRoomChat(
+                            code, user,
+                            "Belum ada lagu lain yang pas setelah ini. Sebut judulnya, nanti kuputar.",
+                            fromAi = true
+                        )
+                    } else {
+                        playRoomSongNow(
+                            next, user,
+                            line = ai.playLine(
+                                next.title, next.artist,
+                                com.example.data.support.RoomAi.Mode.NOW
+                            )
+                        )
+                    }
+                } finally {
+                    setRoomAiThinking(false)
+                }
             }
             return
         }
@@ -3460,7 +3629,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             safeScope.launch {
                 publishRoomChat(
                     code, user,
-                    "Mau lagu apa? Contoh: @noxa puterin lagu Kangen Dewa 19",
+                    "Mau lagu apa? Ketik misalnya: @noxa puterin lagu Kangen Dewa 19",
                     fromAi = true
                 )
             }
@@ -3470,22 +3639,28 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         roomAiJob = safeScope.launch {
             setRoomAiThinking(true)
             try {
-                val pick = runCatching { repository.search(command.query) }
-                    .getOrDefault(emptyList())
-                    .firstOrNull { it.title.isNotBlank() }
-                if (pick == null) {
-                    publishRoomChat(
+                val outcome = searchCatalogue(command.query)
+                val pick = outcome.songs.firstOrNull { it.title.isNotBlank() }
+                when {
+                    pick != null -> {
+                        val line = ai.playLine(pick.title, pick.artist, command.mode)
+                        if (command.mode == com.example.data.support.RoomAi.Mode.NEXT) {
+                            enqueueRoomSong(pick, user, line)
+                        } else {
+                            playRoomSongNow(pick, user, line)
+                        }
+                    }
+                    // A network failure is not "the song does not exist".
+                    outcome.failed -> publishRoomChat(
+                        code, user,
+                        "Katalog NOXA belum bisa kuhubungi. Coba lagi sebentar, ya.",
+                        fromAi = true
+                    )
+                    else -> publishRoomChat(
                         code, user,
                         "Aku belum nemu \"${command.query}\" di katalog. Coba judul atau nama artis lain, ya.",
                         fromAi = true
                     )
-                    return@launch
-                }
-                publishRoomChat(code, user, roomAiLine(pick, command), fromAi = true)
-                if (command.mode == com.example.data.support.RoomAi.Mode.NEXT) {
-                    enqueueRoomSong(pick, user)
-                } else {
-                    playRoomSongNow(pick, user)
                 }
             } finally {
                 setRoomAiThinking(false)
@@ -3493,36 +3668,62 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** One casual sentence from NOXA, with a deterministic fallback. */
-    private suspend fun roomAiLine(
-        song: Song,
-        command: com.example.data.support.RoomAi.Command
-    ): String {
-        val fallback = when (command.mode) {
-            com.example.data.support.RoomAi.Mode.NEXT ->
-                "Oke, \"${song.title}\" — ${song.artist} masuk antrian berikutnya."
-            else -> "Siap, \"${song.title}\" — ${song.artist} langsung diputar 🎧"
+    /** Catalogue search with one retry; distinguishes empty from unreachable. */
+    private data class RoomSearchOutcome(val songs: List<Song>, val failed: Boolean)
+
+    private suspend fun searchCatalogue(query: String): RoomSearchOutcome {
+        repeat(2) { attempt ->
+            val result = runCatching { repository.search(query) }
+            if (result.isSuccess) {
+                return RoomSearchOutcome(result.getOrDefault(emptyList()), failed = false)
+            }
+            if (attempt == 0) kotlinx.coroutines.delay(350)
         }
-        val prompt = buildString {
-            append("Permintaan anggota: \"")
-            append(command.query)
-            append("\". Lagu yang ditemukan: \"")
-            append(song.title)
-            append("\" oleh ")
-            append(song.artist)
-            append(
-                if (command.mode == com.example.data.support.RoomAi.Mode.NEXT) {
-                    ". Aksi: dimasukkan ke antrian setelah lagu ini."
-                } else {
-                    ". Aksi: diputar sekarang."
+        return RoomSearchOutcome(emptyList(), failed = true)
+    }
+
+    /**
+     * Conversational answer. The model writes it on the fast room client; if it
+     * is down or slow, [com.example.data.support.RoomAi.casualReply] answers
+     * instantly so a member is never left talking to a spinner.
+     */
+    private fun answerRoomChat(
+        code: String,
+        user: com.example.data.auth.NoxaUser,
+        command: com.example.data.support.RoomAi.Command,
+        room: com.example.ui.screens.RoomUiState.InRoom
+    ) {
+        // A bare "@noxa" is still a greeting, not silence.
+        val question = command.text.ifBlank { "hai" }
+        roomAiJob?.cancel()
+        roomAiJob = safeScope.launch {
+            setRoomAiThinking(true)
+            try {
+                val nowPlaying = room.songTitle.takeIf { it.isNotBlank() }?.let { title ->
+                    if (room.songArtist.isBlank()) title else "$title — ${room.songArtist}"
                 }
-            )
+                val prompt = buildString {
+                    append("Anggota bernama ").append(roomDisplayName(user))
+                    append(" menulis di room: \"").append(question.take(200)).append("\".\n")
+                    if (nowPlaying != null) {
+                        append("Lagu room saat ini: ").append(nowPlaying).append(". ")
+                    } else {
+                        append("Room belum memutar lagu apa pun. ")
+                    }
+                    append("Pendengar: ").append(room.members.size)
+                    append(". Jawab sebagai NOXA dan jangan mengubah lagu.")
+                }
+                // Six seconds is the whole patience budget of a chat room. If
+                // the model is slower, the instant fallback answers instead.
+                val reply = kotlinx.coroutines.withTimeoutOrNull(6_000L) {
+                    aiRepository.roomReply(prompt)
+                }?.takeIf { it.length in 3..240 }
+                    ?: com.example.data.support.RoomAi.casualReply(question, nowPlaying)
+                publishRoomChat(code, user, reply, fromAi = true)
+            } finally {
+                setRoomAiThinking(false)
+            }
         }
-        val raw = runCatching { aiRepository.roomLine(prompt) }.getOrNull()
-        val line = raw?.lineSequence()?.firstOrNull()
-            ?.trim()
-            ?.trim('"', '\'', '*', ' ')
-        return line?.takeIf { it.length in 6..160 } ?: fallback
     }
 
     private fun setRoomAiThinking(thinking: Boolean) {
@@ -3532,62 +3733,203 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** Puts [song] on in the room right now and plays it here too. */
+    /**
+     * Puts [song] on in the room right now and plays it here too.
+     *
+     * The optional [line] rides in the *same* page write as the song change.
+     * v3.6.3 published the chat line first and the song second: two edits in a
+     * row, and when the provider dropped the second one the song silently
+     * stayed put (the "sudah disuruh ganti tapi tidak mau" bug).
+     */
     private suspend fun playRoomSongNow(
         song: Song,
-        user: com.example.data.auth.NoxaUser
-    ) {
-        val code = roomCode ?: return
-        val published = runCatching {
-            backend.publishRoom(code, user.uid, roomDisplayName(user)) { room ->
-                room.copy(
-                    songId = song.id,
-                    songTitle = song.title,
-                    songArtist = song.artist,
-                    songArtwork = song.artworkUrl,
-                    playing = true,
-                    positionMs = 0L,
-                    durationMs = song.durationMs,
-                    skipVotes = emptyList(),
-                    queue = room.queue.filterNot { it.songId == song.id }
-                )
-            }
-        }.getOrNull() ?: return
+        user: com.example.data.auth.NoxaUser,
+        line: String? = null
+    ): Boolean {
+        val code = roomCode ?: return false
+        // An explicit pick overrides every leftover auto-radio guard.
+        roomMirrorMutedUntil = 0L
+        lastRoomAdvanceAttemptAt = 0L
+        val published = roomWrite {
+            runCatching {
+                backend.publishRoom(code, user.uid, roomDisplayName(user)) { room ->
+                    val withSong = room.copy(
+                        songId = song.id,
+                        songTitle = song.title,
+                        songArtist = song.artist,
+                        songArtwork = song.artworkUrl,
+                        playing = true,
+                        positionMs = 0L,
+                        durationMs = song.durationMs,
+                        skipVotes = emptyList(),
+                        queue = room.queue.filterNot { it.songId == song.id }
+                    )
+                    if (line == null) withSong else withSong.copy(
+                        chat = (withSong.chat + com.example.data.support.NoxaBackend.RoomChatMessage(
+                            id = newRoomChatId(),
+                            uid = user.uid,
+                            name = "NOXA",
+                            text = line,
+                            at = System.currentTimeMillis(),
+                            fromAi = true
+                        )).takeLast(com.example.data.support.NoxaBackend.RoomState.MAX_CHAT)
+                    )
+                }
+            }.getOrNull()
+        } ?: return false
         lastRemoteAt = published.updatedAt
         roomRadioRecent.clear()
         roomRadioRecent.add(song.id)
         applyingRemote = true
         try {
             playSong(song)
+            applyRoomUi(published, user.uid)
             kotlinx.coroutines.delay(400)
         } finally {
             applyingRemote = false
         }
+        return true
     }
 
     /** Queues [song] behind the current track — or starts it when idle. */
-    private fun enqueueRoomSong(song: Song, user: com.example.data.auth.NoxaUser) {
+    private fun enqueueRoomSong(
+        song: Song,
+        user: com.example.data.auth.NoxaUser,
+        line: String? = null
+    ) {
         val code = roomCode ?: return
         safeScope.launch {
-            val published = runCatching {
-                backend.publishRoom(code, user.uid, roomDisplayName(user)) { room ->
-                    val item = com.example.data.support.NoxaBackend.RoomQueueItem(
-                        songId = song.id,
-                        title = song.title,
-                        artist = song.artist,
-                        artwork = song.artworkUrl,
-                        addedBy = "NOXA"
-                    )
-                    room.copy(
-                        queue = (room.queue.filterNot { it.songId == song.id } + item)
-                            .takeLast(com.example.data.support.NoxaBackend.RoomState.MAX_QUEUE)
-                    )
-                }
-            }.getOrNull() ?: return@launch
-            lastRemoteAt = published.updatedAt
+            val room = _roomState.value as? com.example.ui.screens.RoomUiState.InRoom
             // Nothing playing: "after this song" means right now.
-            if (published.songId.isBlank()) playRoomSongNow(song, user)
+            if (room != null && room.songId.isBlank()) {
+                playRoomSongNow(song, user, line)
+                return@launch
+            }
+            val published = roomWrite {
+                runCatching {
+                    backend.publishRoom(code, user.uid, roomDisplayName(user)) { state ->
+                        val item = com.example.data.support.NoxaBackend.RoomQueueItem(
+                            songId = song.id,
+                            title = song.title,
+                            artist = song.artist,
+                            artwork = song.artworkUrl,
+                            addedBy = "NOXA"
+                        )
+                        val queued = state.copy(
+                            queue = (state.queue.filterNot { it.songId == song.id } + item)
+                                .takeLast(com.example.data.support.NoxaBackend.RoomState.MAX_QUEUE)
+                        )
+                        if (line == null) queued else queued.copy(
+                            chat = (queued.chat + com.example.data.support.NoxaBackend.RoomChatMessage(
+                                id = newRoomChatId(),
+                                uid = user.uid,
+                                name = "NOXA",
+                                text = line,
+                                at = System.currentTimeMillis(),
+                                fromAi = true
+                            )).takeLast(com.example.data.support.NoxaBackend.RoomState.MAX_CHAT)
+                        )
+                    }
+                }.getOrNull()
+            } ?: return@launch
+            lastRemoteAt = published.updatedAt
+            applyRoomUi(published, user.uid)
         }
+    }
+
+    // --------------------------------------------- admin: search & queue picks
+
+    /** Local search panel used by the room admin to pick a song for everyone. */
+    private val _roomSearch =
+        MutableStateFlow(com.example.ui.screens.RoomSearchUi())
+    val roomSearch: StateFlow<com.example.ui.screens.RoomSearchUi> =
+        _roomSearch.asStateFlow()
+
+    private var roomSearchJob: kotlinx.coroutines.Job? = null
+
+    /** Debounced catalogue search for the room's "putar untuk semua" panel. */
+    fun searchRoomSongs(query: String) {
+        roomSearchJob?.cancel()
+        val clean = query.trim()
+        if (clean.isBlank()) {
+            _roomSearch.value = com.example.ui.screens.RoomSearchUi()
+            return
+        }
+        _roomSearch.value = _roomSearch.value.copy(query = query, loading = true, error = null)
+        roomSearchJob = safeScope.launch {
+            kotlinx.coroutines.delay(350)
+            val outcome = searchCatalogue(clean)
+            _roomSearch.value = com.example.ui.screens.RoomSearchUi(
+                query = query,
+                results = outcome.songs.filter { it.title.isNotBlank() }.take(12),
+                loading = false,
+                error = when {
+                    outcome.failed -> "Katalog tidak terjangkau. Periksa koneksi."
+                    outcome.songs.isEmpty() -> "Tidak ada hasil untuk \"$clean\"."
+                    else -> null
+                }
+            )
+        }
+    }
+
+    fun clearRoomSearch() {
+        roomSearchJob?.cancel()
+        _roomSearch.value = com.example.ui.screens.RoomSearchUi()
+    }
+
+    /** Admin: play a searched song for the whole room, right now. */
+    fun playRoomSearchResult(song: Song) {
+        val room = _roomState.value as? com.example.ui.screens.RoomUiState.InRoom ?: return
+        val user = authManager.currentUser.value ?: return
+        if (!room.isHost) return
+        _roomSearch.value = com.example.ui.screens.RoomSearchUi()
+        safeScope.launch {
+            playRoomSongNow(
+                song, user,
+                line = com.example.data.support.RoomAi.playLine(
+                    song.title, song.artist, com.example.data.support.RoomAi.Mode.NOW
+                )
+            )
+        }
+    }
+
+    /** Admin: queue a searched song behind the current one. */
+    fun queueRoomSearchResult(song: Song) {
+        val room = _roomState.value as? com.example.ui.screens.RoomUiState.InRoom ?: return
+        val user = authManager.currentUser.value ?: return
+        if (!room.isHost) return
+        _roomSearch.value = com.example.ui.screens.RoomSearchUi()
+        enqueueRoomSong(
+            song, user,
+            line = com.example.data.support.RoomAi.playLine(
+                song.title, song.artist, com.example.data.support.RoomAi.Mode.NEXT
+            )
+        )
+    }
+
+    /** Admin: promote a song from the queue to the room right now. */
+    fun playQueuedSong(songId: String) {
+        val room = _roomState.value as? com.example.ui.screens.RoomUiState.InRoom ?: return
+        val user = authManager.currentUser.value ?: return
+        if (!room.isHost) return
+        val item = room.queue.firstOrNull { it.songId == songId } ?: return
+        safeScope.launch {
+            val song = resolveSongId(item.songId)
+            if (song == null) {
+                publishRoomChat(
+                    room.code, user,
+                    "Lagu \"${item.title}\" tidak bisa dibuka dari katalog. Coba lagu lain, ya.",
+                    fromAi = true
+                )
+                return@launch
+            }
+            playRoomSongNow(song, user)
+        }
+    }
+
+    /** Admin: drop one queued song (the whole queue can still be cleared). */
+    fun removeQueuedSong(songId: String) = publishRoomControls { state ->
+        state.copy(queue = state.queue.filterNot { it.songId == songId })
     }
 
     /**
@@ -3618,21 +3960,24 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             val song = playerState.value.currentSong
             val progress = playbackProgress.value
             val onRoomSong = song != null && song.id == room.songId
-            val published = runCatching {
-                backend.publishRoom(code, user.uid, roomDisplayName(user)) { state ->
-                    val synced = if (onRoomSong) {
-                        state.copy(
-                            playing = if (pause) false else playerState.value.isPlaying,
-                            positionMs = progress.positionMs,
-                            durationMs = progress.durationMs.takeIf { it > 0 } ?: state.durationMs
-                        )
-                    } else {
-                        state
+            val published = roomWrite {
+                runCatching {
+                    backend.publishRoom(code, user.uid, roomDisplayName(user)) { state ->
+                        val synced = if (onRoomSong) {
+                            state.copy(
+                                playing = if (pause) false else playerState.value.isPlaying,
+                                positionMs = progress.positionMs,
+                                durationMs = progress.durationMs.takeIf { it > 0 } ?: state.durationMs
+                            )
+                        } else {
+                            state
+                        }
+                        transform(synced)
                     }
-                    transform(synced)
-                }
-            }.getOrNull() ?: return@launch
+                }.getOrNull()
+            } ?: return@launch
             lastRemoteAt = published.updatedAt
+            applyRoomUi(published, user.uid)
             if (pause && onRoomSong && playerState.value.isPlaying) player.togglePlayPause()
         }
     }
@@ -3665,6 +4010,12 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         }
         if (room.queue.isEmpty() && !room.autoRadio) return
         val now = System.currentTimeMillis()
+        // A snapshot older than a couple of seconds is not a safe basis for a
+        // publish: somebody may have just picked a song by hand (or from the
+        // new search panel) and this older view would overwrite it. That is
+        // exactly what made the room feel like it "refused" a second change
+        // right after auto-radio took over.
+        if (now - room.updatedAt > 2_500L) return
         // The hook runs every second while the track sits at its end; without
         // this it would hit the catalogue once per poll when nothing matches.
         if (now - lastRoomAdvanceAttemptAt < 8_000L) return
@@ -3681,21 +4032,28 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             val next = queued ?: pickRoomRadioSong(room) ?: return
             val newQueue = if (queued != null) room.queue.drop(1) else room.queue
             val user = authManager.currentUser.value ?: return
-            val published = runCatching {
-                backend.publishRoom(room.code, user.uid, roomDisplayName(user)) { state ->
-                    state.copy(
-                        songId = next.id,
-                        songTitle = next.title,
-                        songArtist = next.artist,
-                        songArtwork = next.artworkUrl,
-                        playing = true,
-                        positionMs = 0L,
-                        durationMs = next.durationMs,
-                        skipVotes = emptyList(),
-                        queue = newQueue
-                    )
-                }
-            }.getOrNull() ?: return
+            val published = roomWrite {
+                runCatching {
+                    backend.publishRoom(room.code, user.uid, roomDisplayName(user)) { state ->
+                        // Re-check under the write: if the room moved on while we
+                        // were searching, the newer pick wins and this advance
+                        // is simply abandoned.
+                        if (state.songId != room.songId) return@publishRoom state
+                        state.copy(
+                            songId = next.id,
+                            songTitle = next.title,
+                            songArtist = next.artist,
+                            songArtwork = next.artworkUrl,
+                            playing = true,
+                            positionMs = 0L,
+                            durationMs = next.durationMs,
+                            skipVotes = emptyList(),
+                            queue = newQueue
+                        )
+                    }
+                }.getOrNull()
+            } ?: return
+            if (published.songId != next.id) return
             lastRemoteAt = published.updatedAt
             roomRadioRecent.add(next.id)
             while (roomRadioRecent.size > com.example.data.support.RoomRadio.RECENT_LIMIT) {
@@ -3704,6 +4062,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             applyingRemote = true
             try {
                 playSong(next)
+                applyRoomUi(published, selfUid)
                 kotlinx.coroutines.delay(400)
             } finally {
                 applyingRemote = false
@@ -3716,15 +4075,17 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     /** A track in the current song's lane, never one already played here. */
     private suspend fun pickRoomRadioSong(
         room: com.example.data.support.NoxaBackend.RoomState
-    ): Song? {
-        val anchor = room.songArtist
+    ): Song? = pickRoomRadioSong(room.songArtist, room.songId)
+
+    private suspend fun pickRoomRadioSong(anchorArtist: String, currentSongId: String): Song? {
+        val anchor = anchorArtist
         if (anchor.isBlank()) return null
         val candidates = runCatching {
             val artistId = repository.findArtistId(anchor)
             if (artistId != null) repository.artistTopTracks(artistId, 20)
             else repository.search(anchor)
         }.getOrDefault(emptyList())
-        val recent = roomRadioRecent.toSet() + room.songId
+        val recent = roomRadioRecent.toSet() + currentSongId
         return com.example.data.support.RoomRadio.pickSimilar(anchor, candidates, recent)
     }
 
@@ -3740,18 +4101,10 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 applyRemoteRoom(room, force = false)
                 executeVoteSkipIfNeeded(room, user.uid)
                 advanceRoomIfEnded(room, user.uid)
-                val current = _roomState.value
-                if (current is com.example.ui.screens.RoomUiState.InRoom) {
-                    // Full refresh: song/playing/members/chat may all have
-                    // moved when a peer took over — the header must follow.
-                    // The local "NOXA is looking…" flag is ours to keep: the
-                    // server knows nothing about it.
-                    _roomState.value = room.toUiState(
-                        code = code,
-                        selfUid = user.uid,
-                        aiThinking = current.aiThinking
-                    ).copy(positionMs = estimatedRoomPosition(room))
-                }
+                // Full refresh: song/playing/members/chat may all have moved
+                // when a peer took over. applyRoomUi keeps the local "NOXA is
+                // looking…" flag and this device's unconfirmed chat bubbles.
+                applyRoomUi(room, user.uid)
             }
         }
     }
@@ -3817,7 +4170,8 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         val user = authManager.currentUser.value ?: return
         val song = playerState.value.currentSong ?: return
         safeScope.launch {
-            runCatching {
+            roomWrite {
+                runCatching {
                 backend.publishRoom(
                     code = code,
                     uid = user.uid,
@@ -3842,7 +4196,11 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                     }
                     synced.copy(skipVotes = withVote)
                 }
-            }.getOrNull()?.let { published -> lastRemoteAt = published.updatedAt }
+                }.getOrNull()
+            }?.let { published ->
+                lastRemoteAt = published.updatedAt
+                applyRoomUi(published, user.uid)
+            }
         }
     }
 
@@ -3889,7 +4247,8 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         val playing = playerState.value.isPlaying
         val positionMs = playbackProgress.value.positionMs
         safeScope.launch {
-            runCatching {
+            roomWrite {
+                runCatching {
                 backend.publishRoom(
                     code = code,
                     uid = user.uid,
@@ -3911,7 +4270,8 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                         skipVotes = if (clearVotes) emptyList() else room.skipVotes
                     )
                 }
-            }.getOrNull()?.let { published -> lastRemoteAt = published.updatedAt }
+                }.getOrNull()
+            }?.let { published -> lastRemoteAt = published.updatedAt }
         }
     }
 

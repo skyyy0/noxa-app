@@ -725,6 +725,7 @@ private fun NoxaAppContent(
 
                 composable(Screen.Room.route) {
                     val roomState by viewModel.roomState.collectAsStateWithLifecycle()
+                    val roomSearch by viewModel.roomSearch.collectAsStateWithLifecycle()
                     val roomProgress by viewModel.playbackProgress.collectAsStateWithLifecycle()
                     val roomSongId = roomState.let { s ->
                         (s as? com.example.ui.screens.RoomUiState.InRoom)?.songId.orEmpty()
@@ -748,6 +749,13 @@ private fun NoxaAppContent(
                         onNext = { viewModel.next() },
                         onVoteSkip = { viewModel.toggleSkipVote() },
                         onSendMessage = { text -> viewModel.sendRoomMessage(text) },
+                        onRetryMessage = { text -> viewModel.resendRoomMessage(text) },
+                        search = roomSearch,
+                        onSearchSongs = { query -> viewModel.searchRoomSongs(query) },
+                        onPlaySearchResult = { song -> viewModel.playRoomSearchResult(song) },
+                        onQueueSearchResult = { song -> viewModel.queueRoomSearchResult(song) },
+                        onPlayQueued = { songId -> viewModel.playQueuedSong(songId) },
+                        onRemoveQueued = { songId -> viewModel.removeQueuedSong(songId) },
                         onAiToggle = { enabled -> viewModel.setRoomAiEnabled(enabled) },
                         onRadioToggle = { enabled -> viewModel.setRoomAutoRadio(enabled) },
                         onStopDj = { viewModel.stopRoomDj() },

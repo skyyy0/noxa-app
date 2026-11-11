@@ -4,6 +4,9 @@ import android.content.Context
 import com.example.BuildConfig
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -11,6 +14,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 /**
@@ -194,6 +198,23 @@ class NoxaAiRepository(context: Context) {
         .readTimeout(90, TimeUnit.SECONDS)
         .build()
 
+    /**
+     * Room chat must answer in seconds, not minutes: a 14 s read cap keeps a
+     * stalled provider from leaving the room's typing bubble spinning.
+     */
+    private val roomClient = client.newBuilder()
+        .connectTimeout(8, TimeUnit.SECONDS)
+        .readTimeout(14, TimeUnit.SECONDS)
+        .callTimeout(18, TimeUnit.SECONDS)
+        .build()
+
+    /** Health probes: tiny "ping" completions with a hard, short ceiling. */
+    private val probeClient = client.newBuilder()
+        .connectTimeout(4, TimeUnit.SECONDS)
+        .readTimeout(8, TimeUnit.SECONDS)
+        .callTimeout(10, TimeUnit.SECONDS)
+        .build()
+
     private val json = "application/json; charset=utf-8".toMediaType()
 
     private val quotaStore = AiQuotaStore(prefs)
@@ -250,6 +271,37 @@ class NoxaAiRepository(context: Context) {
         prefs.edit().putString(KEY_MAINTENANCE, JSONObject(marks as Map<*, *>).toString()).apply()
     }
 
+    /**
+     * A model that just answered is healthy — drop any stale maintenance mark
+     * instead of hiding a working model for half an hour.
+     */
+    private fun markHealthy(model: AiModel) {
+        val marks = maintenanceMarks()
+        if (marks.remove(model.id) == null) return
+        prefs.edit().putString(KEY_MAINTENANCE, JSONObject(marks as Map<*, *>).toString()).apply()
+    }
+
+    /** True while a 503/maintenance window is still on record for [model]. */
+    private fun isMarkedDown(model: AiModel): Boolean =
+        maintenanceMarks().containsKey(model.id)
+
+    /**
+     * Free models tried in order after the selected one fails. The room uses
+     * this list directly, so one model's maintenance window can never silence
+     * NOXA in a listening room.
+     */
+    private fun freeChain(): List<AiModel> = buildList {
+        add(AiModel.GLM)
+        AiModel.entries.filter { it.tier == AiTier.FREE }.forEach { if (it !in this) add(it) }
+    }
+
+    /** Fallbacks for [requested]: the free default first, then the rest. */
+    private fun fallbacksFor(requested: AiModel): List<AiModel> = buildList {
+        if (requested != AiModel.DEFAULT) add(AiModel.DEFAULT)
+        AiModel.entries.filter { it.tier == AiTier.FREE }.forEach { if (it !in this) add(it) }
+        removeAll { it == requested }
+    }
+
     private fun maintenanceMarks(): MutableMap<String, Long> {
         val raw = prefs.getString(KEY_MAINTENANCE, null) ?: return mutableMapOf()
         return runCatching {
@@ -270,47 +322,159 @@ class NoxaAiRepository(context: Context) {
      * previous snapshot (never blocks the chat), because the important signal
      * is "absent from a successful list", not "we could not ask".
      */
-    suspend fun refreshModelStatus(): List<AiModelStatus> = withContext(Dispatchers.IO) {
-        val request = Request.Builder()
-            .url(NoxaAiConfig.modelsUrl)
-            .header("Authorization", "Bearer ${NoxaAiConfig.apiKey}")
-            .header("Accept", "application/json")
-            .get()
-            .build()
-        val body = runCatching {
-            client.newCall(request).execute().use { response ->
-                if (response.isSuccessful) response.body?.string() else null
+    suspend fun refreshModelStatus(probe: Boolean = true): List<AiModelStatus> =
+        withContext(Dispatchers.IO) {
+            val listed = modelListings() ?: return@withContext cachedModelStatus()
+            val statuses = AiModel.entries.map { model ->
+                val entry = listed[model.id.lowercase(Locale.ROOT)]
+                // A model that is listed and healthy is healthy again — drop
+                // the stale mark immediately so the picker stops hiding it.
+                if (entry != null && entry.healthy) markHealthy(model)
+                val down = entry == null || !entry.healthy || isMarkedDown(model)
+                AiModelStatus(
+                    model = model,
+                    available = !down,
+                    note = when {
+                        !down -> null
+                        entry == null -> "tidak ada di daftar model"
+                        entry.note != null -> entry.note
+                        else -> "maintenance terjadwal"
+                    }
+                )
+            }.toMutableList()
+
+            // The listing is necessary but not sufficient: a provider may keep
+            // answering for a model that no longer serves requests. A real
+            // completion is the only honest signal, so the free models (the
+            // ones the room depends on) are pinged with one token. Flagship
+            // models are never probed — that would spend paid credit.
+            if (probe) {
+                val probes = coroutineScope {
+                    AiModel.entries
+                        .filter { it.tier == AiTier.FREE }
+                        .map { model -> async { model to probeModel(model) } }
+                        .awaitAll()
+                }
+                probes.forEach { (model, healthy) ->
+                    if (healthy == null) return@forEach
+                    val index = statuses.indexOfFirst { it.model == model }
+                    if (index < 0) return@forEach
+                    if (healthy) markHealthy(model) else markMaintenance(model)
+                    statuses[index] = AiModelStatus(
+                        model = model,
+                        available = healthy,
+                        note = if (healthy) null else "tidak merespons saat diperiksa"
+                    )
+                }
             }
-        }.getOrNull() ?: return@withContext cachedModelStatus()
 
-        val ids = runCatching {
-            val root = JSONObject(body)
-            val data = root.optJSONArray("data") ?: JSONArray()
-            (0 until data.length()).mapNotNull { index ->
-                data.optJSONObject(index)?.optString("id")
+            // Probes may have added or cleared marks after [marks] was read.
+            prefs.edit().putString(
+                KEY_MAINTENANCE,
+                JSONObject(maintenanceMarks() as Map<*, *>).toString()
+            ).apply()
+            val cache = JSONObject()
+            statuses.forEach { cache.put(it.model.id, it.available) }
+            prefs.edit().putString(KEY_MODEL_STATUS, cache.toString()).apply()
+            statuses
+        }
+
+    /** One entry of `GET /v1/models`, reduced to what the picker needs. */
+    private data class ModelListing(val healthy: Boolean, val note: String?)
+
+    /**
+     * Reads `/v1/models` twice before giving up. Besides the plain id list it
+     * honours the provider's own availability hints (`status`, `state`,
+     * `available`, `deprecated`), so a model that is listed but flagged down is
+     * never shown as ready.
+     */
+    private fun modelListings(): Map<String, ModelListing>? {
+        repeat(2) { attempt ->
+            val request = Request.Builder()
+                .url(NoxaAiConfig.modelsUrl)
+                .header("Authorization", "Bearer ${NoxaAiConfig.apiKey}")
+                .header("Accept", "application/json")
+                .get()
+                .build()
+            val body = runCatching {
+                client.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) response.body?.string() else null
+                }
+            }.getOrNull()
+            if (body != null) {
+                val parsed = runCatching { parseModelListings(body) }.getOrNull()
+                if (!parsed.isNullOrEmpty()) return parsed
             }
-        }.getOrNull()
+            if (attempt == 0) Thread.sleep(400L)
+        }
+        return null
+    }
 
-        if (ids.isNullOrEmpty()) return@withContext cachedModelStatus()
-
-        val marks = maintenanceMarks()
-        val statuses = AiModel.entries.map { model ->
-            val listed = ids.any { it.equals(model.id, ignoreCase = true) }
-            // A model that reappears in the official list is healthy again, so
-            // a stale maintenance mark must not hide it.
-            if (listed) marks.remove(model.id)
-            val down = !listed || marks.containsKey(model.id)
-            AiModelStatus(
-                model = model,
-                available = !down,
-                note = if (!down) null else "maintenance terjadwal"
+    private fun parseModelListings(body: String): Map<String, ModelListing> {
+        val root = JSONObject(body)
+        val data = root.optJSONArray("data") ?: JSONArray()
+        val out = mutableMapOf<String, ModelListing>()
+        for (index in 0 until data.length()) {
+            val obj = data.optJSONObject(index) ?: continue
+            val id = obj.optString("id").trim().lowercase(Locale.ROOT)
+            if (id.isBlank()) continue
+            val state = obj.optString("status").ifBlank { obj.optString("state") }
+                .lowercase(Locale.ROOT)
+            val flaggedDown = obj.has("available") && !obj.optBoolean("available", true)
+            val deprecated = obj.optBoolean("deprecated", false)
+            val downState = state.contains("maintenance") || state.contains("down") ||
+                state == "offline" || state == "disabled" || state == "deprecated"
+            out[id] = ModelListing(
+                healthy = !flaggedDown && !deprecated && !downState,
+                note = when {
+                    deprecated -> "dihentikan provider"
+                    flaggedDown || downState -> "maintenance terjadwal"
+                    else -> null
+                }
             )
         }
-        prefs.edit().putString(KEY_MAINTENANCE, JSONObject(marks as Map<*, *>).toString()).apply()
-        val cache = JSONObject()
-        statuses.forEach { cache.put(it.model.id, it.available) }
-        prefs.edit().putString(KEY_MODEL_STATUS, cache.toString()).apply()
-        statuses
+        return out
+    }
+
+    /**
+     * One-token completion against [model]. `true` = answering, `false` = the
+     * provider reports it down, `null` = inconclusive (a network blip or a key
+     * problem is not evidence about the model itself).
+     */
+    private fun probeModel(model: AiModel): Boolean? {
+        val key = keysFor(model).firstOrNull()?.takeIf { it.isNotBlank() } ?: return null
+        val payload = JSONObject()
+            .put("model", model.id)
+            .put(
+                "messages",
+                JSONArray().put(
+                    JSONObject().put("role", "user").put("content", "ping")
+                )
+            )
+            .put("max_tokens", 1)
+            .put("temperature", 0.0)
+            .toString()
+        val request = Request.Builder()
+            .url(NoxaAiConfig.chatUrl)
+            .header("Authorization", "Bearer $key")
+            .header("Content-Type", "application/json")
+            .post(payload.toRequestBody(json))
+            .build()
+        return try {
+            probeClient.newCall(request).execute().use { response ->
+                val text = response.body?.string().orEmpty()
+                when {
+                    response.isSuccessful -> true
+                    text.contains("model_under_maintenance") ||
+                        text.contains("maintenance_error") ||
+                        response.code == 404 || response.code >= 500 -> false
+                    // 401/402/429 say something about the key, not the model.
+                    else -> null
+                }
+            }
+        } catch (e: Exception) {
+            null
+        }
     }
 
     // ---------------------------------------------------------------- chat
@@ -348,16 +512,29 @@ class NoxaAiRepository(context: Context) {
         }
         val raw = attempt.getOrNull()
         if (raw != null) {
+            markHealthy(requested)
             quotaStore.consume(requested.quota)
             return@withContext parseReply(raw, requested, fallbackFrom = null)
         }
         val failure = attempt.exceptionOrNull() ?: IllegalStateException("empty reply")
-        if (requested == AiModel.DEFAULT) throw failure
         // Maintenance or a dead key never costs the user their message: the
-        // free default model answers instead, and the bubble says so.
-        val fallback = requestCompletion(AiModel.DEFAULT, userMessage, memoryContext, null, null)
-            ?: throw failure
-        parseReply(fallback, AiModel.DEFAULT, fallbackFrom = requested)
+        // free models answer in turn (default first) and the bubble says which
+        // one took over. A model recorded as down is skipped — a request that
+        // is known to fail would only add seconds of waiting.
+        var lastError: Throwable = failure
+        for (fallback in fallbacksFor(requested)) {
+            if (isMarkedDown(fallback)) continue
+            val rawFallback = runCatching {
+                requestCompletion(fallback, userMessage, memoryContext, null, null)
+            }.onFailure { if (it is CancellationException) throw it }
+                .getOrNull()
+            if (rawFallback != null) {
+                markHealthy(fallback)
+                return@withContext parseReply(rawFallback, fallback, fallbackFrom = requested)
+            }
+            lastError = failure
+        }
+        throw lastError
     }
 
     /**
@@ -368,11 +545,44 @@ class NoxaAiRepository(context: Context) {
      * answer is one sentence. Playback never waits for this: callers fall back
      * to their own line when it returns null.
      */
-    suspend fun roomLine(prompt: String): String? = withContext(Dispatchers.IO) {
-        runCatching {
-            requestCompletion(AiModel.GLM, prompt, ROOM_DJ_PROMPT, null, null)
-        }.getOrNull()
-    }
+    suspend fun roomLine(prompt: String): String? = roomQuickLine(prompt, ROOM_DJ_PROMPT)
+
+    /**
+     * One short conversational answer for the room (no playback tags, no
+     * transcript). Same free-model chain as [roomLine], so a single model's
+     * maintenance window never leaves a member's question unanswered.
+     */
+    suspend fun roomReply(prompt: String): String? = roomQuickLine(prompt, ROOM_CHAT_PROMPT)
+
+    /**
+     * Tries each free model until one answers, on the fast room client. A model
+     * marked as down is skipped; the first success clears its mark.
+     */
+    private suspend fun roomQuickLine(prompt: String, system: String): String? =
+        withContext(Dispatchers.IO) {
+            for (model in freeChain()) {
+                if (isMarkedDown(model)) continue
+                val raw = runCatching {
+                    requestCompletion(
+                        model = model,
+                        userMessage = prompt,
+                        memoryContext = null,
+                        http = roomClient,
+                        maxTokens = 160,
+                        systemOverride = system
+                    )
+                }.getOrNull()
+                val line = raw?.lineSequence()
+                    ?.firstOrNull { it.isNotBlank() }
+                    ?.trim()
+                    ?.trim('"', '\'', '*', ' ', '-')
+                if (!line.isNullOrBlank()) {
+                    markHealthy(model)
+                    return@withContext line
+                }
+            }
+            null
+        }
 
     /**
      * One POST with key rotation. Flagship models try the primary key first and
@@ -385,14 +595,27 @@ class NoxaAiRepository(context: Context) {
         userMessage: String,
         memoryContext: String?,
         flavor: AiFlavor? = null,
-        lyricReference: String? = null
+        lyricReference: String? = null,
+        http: OkHttpClient = client,
+        maxTokens: Int = 900,
+        systemOverride: String? = null
     ): String? {
         val keys = keysFor(model)
         if (keys.isEmpty()) throw IllegalStateException("kredensial NOXA AI kosong")
         var lastFailure: HttpFailure? = null
         keys.forEachIndexed { index, key ->
             val result = runCatching {
-                requestCompletionWithKey(model, key, userMessage, memoryContext, flavor, lyricReference)
+                requestCompletionWithKey(
+                    model = model,
+                    key = key,
+                    userMessage = userMessage,
+                    memoryContext = memoryContext,
+                    flavor = flavor,
+                    lyricReference = lyricReference,
+                    http = http,
+                    maxTokens = maxTokens,
+                    systemOverride = systemOverride
+                )
             }
             result.getOrNull()?.let { content ->
                 rememberKey(model, index)
@@ -437,31 +660,40 @@ class NoxaAiRepository(context: Context) {
         userMessage: String,
         memoryContext: String?,
         flavor: AiFlavor? = null,
-        lyricReference: String? = null
+        lyricReference: String? = null,
+        http: OkHttpClient = client,
+        maxTokens: Int = 900,
+        systemOverride: String? = null
     ): String? {
         val messages = JSONArray()
         messages.put(
             JSONObject()
                 .put("role", "system")
-                .put("content", systemPrompt(memoryContext, flavor, lyricReference))
-        )
-        // Replay a short window of the transcript for continuity.
-        loadHistory().takeLast(HISTORY_TURNS)
-            .filter { it.text.isNotBlank() }
-            .forEach { message ->
-                messages.put(
-                    JSONObject()
-                        .put("role", if (message.fromUser) "user" else "assistant")
-                        .put("content", message.text)
+                .put(
+                    "content",
+                    systemOverride ?: systemPrompt(memoryContext, flavor, lyricReference)
                 )
-            }
+        )
+        // Replay a short window of the transcript for continuity. Room lines
+        // bring their own prompt and must not inherit the private chat history.
+        if (systemOverride == null) {
+            loadHistory().takeLast(HISTORY_TURNS)
+                .filter { it.text.isNotBlank() }
+                .forEach { message ->
+                    messages.put(
+                        JSONObject()
+                            .put("role", if (message.fromUser) "user" else "assistant")
+                            .put("content", message.text)
+                    )
+                }
+        }
         messages.put(JSONObject().put("role", "user").put("content", userMessage))
 
         val payload = JSONObject()
             .put("model", model.id)
             .put("messages", messages)
             .put("temperature", 0.7)
-            .put("max_tokens", 900)
+            .put("max_tokens", maxTokens)
             .toString()
 
         val request = Request.Builder()
@@ -472,7 +704,7 @@ class NoxaAiRepository(context: Context) {
             .post(payload.toRequestBody(json))
             .build()
 
-        val raw = client.newCall(request).execute().use { response ->
+        val raw = http.newCall(request).execute().use { response ->
             val text = response.body?.string()
             if (!response.isSuccessful) {
                 // Surface the HTTP code so the caller can decide about fallback.
@@ -671,6 +903,20 @@ ATURAN GAYA:
             maksimal 90 karakter, tanpa markdown, tanpa emoji lebih dari satu, tanpa tanda kutip,
             dan JANGAN memakai tag apa pun. Jangan mengarang judul lagu lain — sebut hanya lagu
             yang diberikan di pesan pengguna.
+        """.trimIndent()
+
+        /**
+         * Room conversation voice: answers the member, never touches playback,
+         * no tags, no markdown. Deliberately terse — a chat room is not a
+         * document.
+         */
+        private val ROOM_CHAT_PROMPT = """
+            Kamu NOXA, DJ yang ikut nongkrong di room dengar bareng NOXA Music.
+            Jawab pesan anggota dengan 1-2 kalimat santai bahasa Indonesia (maksimal 160 karakter),
+            tanpa markdown, paling banyak satu emoji, tanpa tanda kutip, dan TANPA tag apa pun.
+            JANGAN memutar atau mengganti lagu dan jangan mengaku sudah memutarnya — kamu hanya
+            menjawab. Kalau anggota minta lagu, cukup bilang dia bisa menyebut judulnya atau
+            menekan tombol cari lagu. Jangan mengarang fakta tentang lagu yang tidak disebut.
         """.trimIndent()
 
         /**

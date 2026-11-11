@@ -54,6 +54,56 @@ class RoomAiTest {
     }
 
     @Test
+    fun `small talk is chat, not a song request`() {
+        val command = RoomAi.command("@noxa halo semuanya")
+        assertEquals(RoomAi.Intent.CHAT, command?.intent)
+        assertEquals("", command?.query)
+        assertEquals(RoomAi.Intent.CHAT, RoomAi.command("@noxa")?.intent)
+    }
+
+    @Test
+    fun `a music question is answered instead of played`() {
+        val command = RoomAi.command("@noxa lagu apa yang cocok buat kerja?")
+        assertEquals(RoomAi.Intent.CHAT, command?.intent)
+        assertEquals(RoomAi.Intent.CHAT, RoomAi.command("@noxa siapa kamu?")?.intent)
+    }
+
+    @Test
+    fun `an opinion about the current song is not a request`() {
+        assertEquals(RoomAi.Intent.CHAT, RoomAi.command("@noxa lagu ini enak ya")?.intent)
+    }
+
+    @Test
+    fun `a bare title still plays`() {
+        val command = RoomAi.command("@noxa lagu Kangen")
+        assertEquals(RoomAi.Intent.PLAY, command?.intent)
+        assertEquals("kangen", command?.query)
+    }
+
+    @Test
+    fun `asking to change the song without a title advances`() {
+        val command = RoomAi.command("@noxa ganti lagu")
+        assertEquals(RoomAi.Intent.PLAY, command?.intent)
+        assertEquals(true, command?.advance)
+        assertEquals("", command?.query)
+    }
+
+    @Test
+    fun `play lines always name the track`() {
+        val now = RoomAi.playLine("Kangen", "Dewa 19", RoomAi.Mode.NOW)
+        assertTrue(now.contains("Kangen"))
+        assertTrue(now.contains("Dewa 19"))
+        val next = RoomAi.playLine("Dan", "Sheila On 7", RoomAi.Mode.NEXT)
+        assertTrue(next.contains("Dan"))
+    }
+
+    @Test
+    fun `casual replies stay personal instead of guessing a song`() {
+        assertTrue(RoomAi.casualReply("halo noxa").contains("NOXA"))
+        assertTrue(RoomAi.casualReply("lagu apa ini", "Kangen — Dewa 19").contains("Kangen"))
+    }
+
+    @Test
     fun `the suggestion appears while the handle is half typed`() {
         assertTrue(RoomAi.suggestsHandle("@"))
         assertTrue(RoomAi.suggestsHandle("@n"))
