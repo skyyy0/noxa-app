@@ -2,6 +2,10 @@ package com.example.ui.viewmodel
 
 import android.app.Activity
 import android.app.Application
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.net.Uri
 import android.util.Log
 import android.view.SurfaceView
 import androidx.lifecycle.AndroidViewModel
@@ -11,6 +15,7 @@ import com.example.data.local.AppSettings
 import com.example.data.local.FavoriteSongEntity
 import com.example.data.local.HeatmapStats
 import com.example.data.local.ListeningHeatmap
+import com.example.data.local.LocalMusicStore
 import com.example.data.local.PlayRecordEntity
 import com.example.data.local.PlaylistEntity
 import com.example.data.local.PlaylistSongEntity
@@ -27,6 +32,7 @@ import com.example.data.support.SharedPlaylistCodes
 import com.example.media.MvPlayer
 import com.example.media.PlaybackProgress
 import com.example.media.PlayerUiState
+import com.example.media.SoundProfiles
 import com.example.data.auth.NoxaUser
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineExceptionHandler
@@ -62,6 +68,9 @@ private const val KEY_SKIPPED_UPDATE = "skipped_update_version"
 
 /** How many preview tracks in a queue get warmed for full audio ahead of time. */
 private const val PREVIEW_WARM_LIMIT = 3
+
+/** A single silent retry for the audio resolver ladder (v3.7.0). */
+private const val RESOLVE_RETRY_DELAY_MS = 350L
 
 /**
  * "Online" window for the dev console: an account whose presence stamp is
@@ -340,7 +349,9 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             mvQualityHeight = settingsStore.mvQualityHeight,
             autoplaySimilar = settingsStore.autoplaySimilar,
             karaokeOverlay = settingsStore.karaokeOverlay,
-            autoResumeOnOpen = settingsStore.autoResumeOnOpen
+            autoResumeOnOpen = settingsStore.autoResumeOnOpen,
+            crossfadeEnabled = settingsStore.crossfadeEnabled,
+            wifiOnlyStreaming = settingsStore.wifiOnlyStreaming
         )
     )
 
@@ -384,6 +395,39 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         settingsStore.crossfadeEnabled = enabled
         _appSettings.value = _appSettings.value.copy(crossfadeEnabled = enabled)
         player.crossfadeEnabled = enabled
+    }
+
+    /**
+     * **Hanya Wi-Fi** (v3.7.0): streaming is refused on mobile data instead of
+     * quietly burning a quota. Local imports and downloaded tracks still play —
+     * they cost no data, so the guard never touches them.
+     */
+    fun setWifiOnlyStreaming(enabled: Boolean) {
+        settingsStore.wifiOnlyStreaming = enabled
+        _appSettings.value = _appSettings.value.copy(wifiOnlyStreaming = enabled)
+    }
+
+    private fun isOnCellular(): Boolean = runCatching {
+        val manager = app.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val capabilities = manager.getNetworkCapabilities(manager.activeNetwork)
+            ?: return@runCatching false
+        capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) &&
+            !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) &&
+            !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
+    }.getOrDefault(false)
+
+    private fun blockedByDataSaver(song: Song): Boolean {
+        if (!settingsStore.wifiOnlyStreaming) return false
+        if (song.source == MusicSource.LOCAL) return false
+        if (offlineVersion(song) != null) return false
+        return isOnCellular()
+    }
+
+    private fun showDataSaverBlock(song: Song) {
+        player.showError(
+            "\"${song.title}\" butuh internet, dan mode Hanya Wi-Fi sedang aktif. " +
+                "Sambungkan ke Wi-Fi atau matikan opsi itu di Pengaturan → Fitur Pemutar."
+        )
     }
 
     val playerState: StateFlow<PlayerUiState> = player.uiState
@@ -1094,9 +1138,9 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             "Profil disiapkan — aktif otomatis saat musik diputar."
         } else {
             buildString {
-                append("${result.bandsApplied} band EQ aktif")
-                result.bassBoostApplied?.let { append(" · Bass +${it / 10}%") }
-                result.virtualizerApplied?.let { append(" · 3D +${it / 10}%") }
+                append("${result.routeLabel} · ${result.bandsApplied} band")
+                append(if (result.dspActive) " · DSP + limiter" else " · mode aman")
+                append(" · headroom ${result.headroomDb.toInt()} dB")
             }
         }
 
@@ -1256,6 +1300,94 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // ------------------------------------------------- musik lokal (v3.7.0)
+
+    /** Files the user imported from this device — the Library "Lokal" tab. */
+    private val _localSongs = MutableStateFlow(LocalMusicStore.load(app))
+    val localSongs: StateFlow<List<Song>> = _localSongs.asStateFlow()
+
+    /**
+     * Imports the URIs returned by the system picker. The persisted read grant
+     * is taken in the UI layer (it needs the Activity's content resolver); here
+     * we only read metadata and store the list.
+     */
+    fun importLocalSongs(uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        safeScope.launch {
+            val known = _localSongs.value.map { it.streamUrl }.toSet()
+            val all = try {
+                LocalMusicStore.import(app, uris)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "Local import failed: ${e.message}")
+                _downloadNotice.value = "Impor musik lokal gagal. Coba pilih file lain."
+                return@launch
+            }
+            _localSongs.value = all
+            val added = all.count { it.streamUrl !in known }
+            _downloadNotice.value = when {
+                added == 0 -> "File itu sudah ada di koleksi lokal."
+                added == 1 -> "1 lagu lokal ditambahkan ke Koleksi."
+                else -> "$added lagu lokal ditambahkan ke Koleksi."
+            }
+        }
+    }
+
+    /** Drops one imported track from the collection; the file stays untouched. */
+    fun removeLocalSong(song: Song) {
+        _localSongs.value = LocalMusicStore.remove(app, song.id)
+        _downloadNotice.value = "\"${song.title}\" dihapus dari koleksi lokal."
+    }
+
+    // ------------------------------------------- cuplikan 30 detik (v3.7.0)
+
+    /**
+     * A track whose full audio could not be found. Instead of silently playing
+     * a 30 second Deezer clip — which looked like a broken song — NOXA asks.
+     */
+    data class PreviewFallback(
+        val song: Song,
+        val queue: List<Song>,
+        val index: Int
+    )
+
+    private val _previewFallback = MutableStateFlow<PreviewFallback?>(null)
+    val previewFallback: StateFlow<PreviewFallback?> = _previewFallback.asStateFlow()
+
+    /** "Putar cuplikan" — explicit consent, never automatic. */
+    fun acceptPreviewFallback() {
+        val pending = _previewFallback.value ?: return
+        _previewFallback.value = null
+        val held = player.uiState.value.currentSong?.id == pending.song.id &&
+            !player.uiState.value.isPlaying
+        if (held) {
+            player.swapCurrentStreamAndRestart(pending.song)
+        } else {
+            player.playSong(pending.song, pending.queue, pending.index)
+        }
+    }
+
+    /** "Lewati" — moves on (or clears the hold) without playing the clip. */
+    fun skipPreviewFallback() {
+        val pending = _previewFallback.value ?: return
+        _previewFallback.value = null
+        val held = player.uiState.value.currentSong?.id == pending.song.id &&
+            !player.uiState.value.isPlaying
+        if (held) {
+            if (player.pendingNextIndex >= 0) {
+                // The player is paused while the full stream was being looked
+                // for; skipping must also hand playback back to the transport.
+                player.next()
+                player.resumeAfterHold()
+            } else {
+                player.endResolving()
+            }
+        } else {
+            player.endResolving()
+        }
+    }
+
     /** The local copy of a song (playable from disk), or null when streaming. */
     private fun offlineVersion(song: Song): Song? =
         offlineById[song.id]?.takeIf { it.audioExists() }?.toSong()
@@ -1287,6 +1419,11 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
      * matcher finds it) plus its artwork, then records the row in Room.
      */
     private fun downloadSong(song: Song) {
+        if (blockedByDataSaver(song)) {
+            _downloadNotice.value =
+                "Mode Hanya Wi-Fi aktif — unduhan menunggu koneksi Wi-Fi."
+            return
+        }
         safeScope.launch {
             _downloadingIds.update { it + song.id }
             try {
@@ -1581,7 +1718,9 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     private fun preloadStream(song: Song) {
         safeScope.launch {
             // Offline tracks are already local — resolving them would only
-            // swap the file back onto the network.
+            // swap the file back onto the network. Imported local files have no
+            // network source at all.
+            if (song.source == MusicSource.LOCAL) return@launch
             if (offlineById.containsKey(song.id)) return@launch
             val resolved = runCatching { resolvePlaybackSource(song) }.getOrNull()
                 ?: return@launch
@@ -1993,6 +2132,16 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun resolveAndPlay(song: Song, queue: List<Song>, index: Int) {
+        // Musik lokal: the URI is already the audio. No resolution, no network,
+        // no policy dialog — it plays even in airplane mode.
+        if (song.source == MusicSource.LOCAL) {
+            player.playSong(song, queue, index)
+            return
+        }
+        if (blockedByDataSaver(song)) {
+            showDataSaverBlock(song)
+            return
+        }
         // Mode offline: the bytes are on disk, so nothing is resolved and the
         // whole queue is re-pointed at its local copies (order and indices are
         // untouched — a downloaded song simply plays from another URI).
@@ -2025,7 +2174,14 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                         "Sumber sedang sibuk atau tidak tersedia — coba lagi nanti."
                 )
 
-                // No confident match: play the honest 30s preview (the badge says so).
+                // No full audio found. A Deezer preview used to start playing
+                // here, which is exactly the "why did my song become 30 s?"
+                // bug. Ask first; silence is better than a surprise clip.
+                song.isPreview -> {
+                    player.endResolving()
+                    _previewFallback.value = PreviewFallback(song, queue, index)
+                }
+
                 else -> player.playSong(song, queue, index)
             }
         }
@@ -2038,16 +2194,32 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
      * song's own (preview) URL was found.
      */
     private suspend fun resolvePlaybackSource(song: Song): Song? {
+        // Local files are their own source; asking the network would be wrong.
+        if (song.source == MusicSource.LOCAL) return null
         streamResolver.resolve(song)?.let { return it }
         if (song.source == MusicSource.YOUTUBE && song.streamUrl.isBlank()) {
-            runCatching { youtubeRepository.resolveAudio(song) }.getOrNull()?.let { return it }
+            retryOnce { runCatching { youtubeRepository.resolveAudio(song) }.getOrNull() }
+                ?.let { return it }
         }
         if (song.source == MusicSource.DEEZER && song.isPreview &&
             usagePolicyStore.isYouTubePolicyAccepted
         ) {
-            runCatching { youtubeRepository.findFullAudio(song) }.getOrNull()?.let { return it }
+            retryOnce { runCatching { youtubeRepository.findFullAudio(song) }.getOrNull() }
+                ?.let { return it }
         }
         return null
+    }
+
+    /**
+     * One quiet second attempt. Public instances answer "no match" and
+     * "instance overloaded" the same way to the caller, and a single retry is
+     * the difference between playing the song and offering a 30 s clip for a
+     * hiccup that lasted 300 ms.
+     */
+    private suspend fun <T> retryOnce(block: suspend () -> T?): T? {
+        block()?.let { return it }
+        delay(RESOLVE_RETRY_DELAY_MS)
+        return block()
     }
 
     /**
@@ -2061,19 +2233,22 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         streamResolver.resolve(song)?.let { return it }
         when (song.source) {
             MusicSource.YOUTUBE ->
-                runCatching { youtubeRepository.refreshAudio(song) }.getOrNull()?.let { return it }
+                retryOnce { runCatching { youtubeRepository.refreshAudio(song) }.getOrNull() }
+                    ?.let { return it }
 
             MusicSource.DEEZER -> {
                 // Full-length Deezer tracks carry their audio on a matched
                 // YouTube video; a raw preview re-runs the matcher instead.
                 if (song.isPreview && usagePolicyStore.isYouTubePolicyAccepted) {
-                    runCatching { youtubeRepository.findFullAudio(song) }.getOrNull()?.let { return it }
+                    retryOnce { runCatching { youtubeRepository.findFullAudio(song) }.getOrNull() }
+                        ?.let { return it }
                 } else {
-                    runCatching { youtubeRepository.refreshAudio(song) }.getOrNull()?.let { return it }
+                    retryOnce { runCatching { youtubeRepository.refreshAudio(song) }.getOrNull() }
+                        ?.let { return it }
                 }
             }
 
-            MusicSource.AUDIUS -> Unit
+            MusicSource.AUDIUS, MusicSource.LOCAL -> Unit
         }
         return null
     }
@@ -2192,6 +2367,10 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
      */
     private fun skipTo(targetIndex: Int, plainSkip: () -> Unit) {
         val target = player.uiState.value.queue.getOrNull(targetIndex)
+        if (target != null && blockedByDataSaver(target)) {
+            showDataSaverBlock(target)
+            return
+        }
         val needsFullAudio = target != null &&
             ((target.source == MusicSource.YOUTUBE && target.streamUrl.isBlank()) ||
                 (target.source == MusicSource.DEEZER && target.isPreview &&
@@ -2205,8 +2384,16 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             val resolved = resolvePlaybackSource(target)
             if (resolved != null) {
                 player.updateSongStream(resolved)
+            } else if (target != null && target.isPreview) {
+                // Don't sneak a 30 s clip in through the skip button either.
+                player.endResolving()
+                _previewFallback.value = PreviewFallback(
+                    song = target,
+                    queue = player.uiState.value.queue,
+                    index = targetIndex
+                )
+                return@launch
             } else {
-                // Nothing better available: the queued (preview) entry plays.
                 player.clearError()
             }
             plainSkip()
@@ -2227,6 +2414,17 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
      * A rolling warm keeps the next few tracks ready so this hold is rare.
      */
     private fun handleAutoAdvance(song: Song) {
+        // Local files need nothing from the network — keep the warm window
+        // rolling and let the next track start instantly.
+        if (song.source == MusicSource.LOCAL) {
+            warmQueueStreams(player.uiState.value.queue)
+            return
+        }
+        if (blockedByDataSaver(song)) {
+            player.pauseForResolve()
+            showDataSaverBlock(song)
+            return
+        }
         val policyAccepted = usagePolicyStore.isYouTubePolicyAccepted
         val needsFullAudio = when {
             // Mode offline: the bytes are already local — never hold playback
@@ -2249,8 +2447,15 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             val resolved = resolvePlaybackSource(song)
             if (resolved != null) {
                 player.swapCurrentStreamAndRestart(resolved)
+            } else if (song.isPreview) {
+                // No full audio: the hold stays and the dialog decides. The
+                // 30 s clip never starts on its own.
+                _previewFallback.value = PreviewFallback(
+                    song = song,
+                    queue = player.uiState.value.queue,
+                    index = player.uiState.value.queueIndex.coerceAtLeast(0)
+                )
             } else {
-                // Nothing better than the 30 s clip: resume it honestly.
                 player.resumeAfterHold()
             }
             warmQueueStreams(player.uiState.value.queue)
@@ -2284,6 +2489,26 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setEqualizerEnabled(enabled: Boolean) {
         player.setEqualizerEnabled(enabled)
+    }
+
+    /** Strength of the whole profile (0..1) — the Studio "Intensitas" slider. */
+    fun setSoundIntensity(value: Float) {
+        player.setSoundIntensity(value)
+    }
+
+    /** Loudness: the 3-band compressor that evens out quiet and loud tracks. */
+    fun setSoundLoudness(enabled: Boolean) {
+        player.setSoundLoudness(enabled)
+    }
+
+    /** Limiter: last line of defence against clipping. */
+    fun setSoundLimiter(enabled: Boolean) {
+        player.setSoundLimiter(enabled)
+    }
+
+    /** Re-tunes for the current output (also runs automatically on route change). */
+    fun refreshSoundRoute() {
+        player.refreshSoundRoute()
     }
 
     fun setBassBoost(strength: Int) {
@@ -4870,6 +5095,21 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     /** Maps the AI's preset name onto the equalizer's real preset list. */
     private fun applyAiEqualizer(requested: String): String {
         val presets = player.uiState.value.equalizerState.presets
+        // The Studio renamed the presets; keep the AI's older vocabulary
+        // working ("bass boost" -> "Bass", "vocal booster" -> "Vokal").
+        val alias = when (requested.lowercase()) {
+            "bass boost", "bassboost", "extra bass", "bass" -> "Bass"
+            "vocal booster", "vocal", "vokal booster" -> "Vokal"
+            "flat", "normal", "netral", "neutral" -> "Netral"
+            "warm", "hangat" -> "Hangat"
+            "detail", "detailed", "treble", "cerah" -> "Detail"
+            "auto", "otomatis", "noxa auto" -> SoundProfiles.AUTO
+            else -> null
+        }
+        alias?.let { matched ->
+            setEqualizerPreset(matched)
+            return "Suara diset ke profil $matched."
+        }
         val wanted = normaliseForMatch(requested)
         val match = presets.firstOrNull { it.equals(requested, ignoreCase = true) }
             ?: presets.firstOrNull { preset ->

@@ -1,7 +1,10 @@
 package com.example.ui
 
 import android.app.Activity
+import android.content.Intent
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -22,7 +25,10 @@ import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -33,6 +39,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -187,6 +194,8 @@ private fun NoxaAppContent(
     val downloadingIds by viewModel.downloadingIds.collectAsStateWithLifecycle()
     val offlineSongs by viewModel.offlineSongs.collectAsStateWithLifecycle()
     val isBuildingRadio by viewModel.isBuildingRadio.collectAsStateWithLifecycle()
+    val localSongs by viewModel.localSongs.collectAsStateWithLifecycle()
+    val previewFallback by viewModel.previewFallback.collectAsStateWithLifecycle()
 
     val sharedPlaylistUi by viewModel.sharedPlaylistUi.collectAsStateWithLifecycle()
     val sharedNotice by viewModel.sharedNotice.collectAsStateWithLifecycle()
@@ -241,6 +250,24 @@ private fun NoxaAppContent(
         val notice = downloadNotice ?: return@LaunchedEffect
         Toast.makeText(context, notice, Toast.LENGTH_SHORT).show()
         viewModel.consumeDownloadNotice()
+    }
+
+    // Musik lokal: the system picker returns content URIs; the read grant is
+    // persisted so the same file keeps playing weeks later without asking
+    // again (and without any storage permission).
+    val localImportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris ->
+        if (uris.isEmpty()) return@rememberLauncherForActivityResult
+        uris.forEach { uri ->
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            }
+        }
+        viewModel.importLocalSongs(uris)
     }
 
     val navBackStackEntry by navController.currentBackStackEntryAsState()
@@ -448,7 +475,12 @@ private fun NoxaAppContent(
                         downloadedIds = downloadedIds,
                         downloadingIds = downloadingIds,
                         onToggleDownload = { viewModel.toggleDownload(it) },
-                        onStartRadio = { viewModel.startSongRadio(it) }
+                        onStartRadio = { viewModel.startSongRadio(it) },
+                        localSongs = localSongs,
+                        onImportLocal = {
+                            localImportLauncher.launch(arrayOf("audio/*"))
+                        },
+                        onRemoveLocalSong = { viewModel.removeLocalSong(it) }
                     )
                 }
 
@@ -579,8 +611,10 @@ private fun NoxaAppContent(
                         onSetEnabled = { viewModel.setEqualizerEnabled(it) },
                         onSelectPreset = { viewModel.setEqualizerPreset(it) },
                         onSetBandLevel = { band, level -> viewModel.setEqualizerBand(band, level) },
-                        onSetBassBoost = { viewModel.setBassBoost(it) },
-                        onSetVirtualizer = { viewModel.setVirtualizer(it) }
+                        onSetIntensity = { viewModel.setSoundIntensity(it) },
+                        onSetLoudness = { viewModel.setSoundLoudness(it) },
+                        onSetLimiter = { viewModel.setSoundLimiter(it) },
+                        onRefreshRoute = { viewModel.refreshSoundRoute() }
                     )
                 }
 
@@ -613,6 +647,7 @@ private fun NoxaAppContent(
                         onSetAutoplaySimilar = { viewModel.setAutoplaySimilar(it) },
                         onSetKaraokeOverlay = { viewModel.setKaraokeOverlay(it) },
                         onSetAutoResumeOnOpen = { viewModel.setAutoResumeOnOpen(it) },
+                        onSetWifiOnlyStreaming = { viewModel.setWifiOnlyStreaming(it) },
                         onSignOut = { viewModel.signOut() },
                         onNavigateToAboutSky = {
                             navController.navigate(Screen.AboutSky.route)
@@ -905,6 +940,40 @@ private fun NoxaAppContent(
                 }
             }
         )
+
+        // No 30-second surprise: when full audio cannot be found, the user
+        // decides whether to hear the clip or move on.
+        previewFallback?.let { pending ->
+            AlertDialog(
+                onDismissRequest = { viewModel.skipPreviewFallback() },
+                containerColor = com.example.ui.theme.NoxaSurfaceElevated,
+                title = {
+                    Text(
+                        text = "Audio penuh belum ditemukan",
+                        color = com.example.ui.theme.NoxaTextPrimary,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+                    )
+                },
+                text = {
+                    Text(
+                        text = "\"${pending.song.title}\" hanya tersedia sebagai cuplikan " +
+                            "30 detik dari katalog. NOXA tidak memutarnya diam-diam.",
+                        color = com.example.ui.theme.NoxaTextSecondary,
+                        fontSize = 13.sp
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = { viewModel.acceptPreviewFallback() }) {
+                        Text("Putar cuplikan", color = com.example.ui.theme.NoxaLime)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { viewModel.skipPreviewFallback() }) {
+                        Text("Lewati", color = com.example.ui.theme.NoxaTextSecondary)
+                    }
+                }
+            )
+        }
 
         // One-time YouTube usage policy, shown before the first YouTube play.
         if (pendingYouTubePlay != null) {

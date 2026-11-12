@@ -141,6 +141,7 @@ fun ProfileScreen(
     onSetAutoplaySimilar: (Boolean) -> Unit,
     onSetKaraokeOverlay: (Boolean) -> Unit,
     onSetAutoResumeOnOpen: (Boolean) -> Unit,
+    onSetWifiOnlyStreaming: (Boolean) -> Unit,
     /** v2.0.0 — crossfade lembut antar lagu (Sistem Pintar mematikan di HP kelas Slow). */
     onSetCrossfade: (Boolean) -> Unit = {},
     /** v2.0.0 — profil perangkat hasil pemindaian sekali di awal. */
@@ -1098,6 +1099,14 @@ fun ProfileScreen(
                 checked = appSettings.autoResumeOnOpen,
                 onCheckedChange = onSetAutoResumeOnOpen,
                 tag = "setting_auto_resume"
+            )
+            SettingsToggleRow(
+                title = "Hanya Wi-Fi untuk streaming",
+                subtitle = "Hemat data: lagu dari internet diblokir saat memakai kuota. " +
+                    "Musik lokal dan unduhan tetap bisa diputar",
+                checked = appSettings.wifiOnlyStreaming,
+                onCheckedChange = onSetWifiOnlyStreaming,
+                tag = "setting_wifi_only"
             )
             SettingsToggleRow(
                 title = "Crossfade lembut",

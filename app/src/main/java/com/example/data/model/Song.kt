@@ -14,7 +14,14 @@ enum class MusicSource {
      * YouTube (metadata via search API or Invidious/Piped, audio & MV resolved
      * through an Invidious/Piped instance at play time). Full-length tracks.
      */
-    YOUTUBE
+    YOUTUBE,
+
+    /**
+     * A file the user imported from this device (v3.7.0). The audio never
+     * leaves the phone: [Song.streamUrl] is a persisted `content://` URI, so
+     * playback works offline and costs no data.
+     */
+    LOCAL
 }
 
 /**
@@ -126,7 +133,8 @@ data class Song(
         val ID_PREFIXES: Map<MusicSource, String> = mapOf(
             MusicSource.AUDIUS to "audius:",
             MusicSource.DEEZER to "deezer:",
-            MusicSource.YOUTUBE to "youtube:"
+            MusicSource.YOUTUBE to "youtube:",
+            MusicSource.LOCAL to "local:"
         )
 
         fun idFor(source: MusicSource, remoteId: String): String =

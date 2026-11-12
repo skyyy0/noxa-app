@@ -250,10 +250,10 @@ fun HomeScreen(
                         // Tone, not outline: the resume row separates from the
                         // canvas by a tonal step alone. The lime border it used
                         // to carry fought with the hero for attention.
-                        .clip(RoundedCornerShape(14.dp))
+                        .clip(RoundedCornerShape(24.dp))
                         .background(NoxaSurfaceElevated)
                         .noxaTap { onResume() }
-                        .padding(12.dp)
+                        .padding(14.dp)
                         .testTag("resume_card"),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -266,7 +266,7 @@ fun HomeScreen(
                         contentScale = ContentScale.Crop,
                         modifier = Modifier
                             .size(44.dp)
-                            .clip(RoundedCornerShape(10.dp))
+                            .clip(RoundedCornerShape(14.dp))
                     )
                     Spacer(modifier = Modifier.width(12.dp))
                     Column(modifier = Modifier.weight(1f)) {
@@ -328,9 +328,9 @@ fun HomeScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 20.dp, vertical = 6.dp)
-                        .clip(RoundedCornerShape(14.dp))
+                        .clip(RoundedCornerShape(24.dp))
                         .background(NoxaSurfaceElevated)
-                        .padding(14.dp)
+                        .padding(16.dp)
                 ) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -535,7 +535,7 @@ fun HomeScreen(
                                         // No outline and no "playing" border: the
                                         // tile is a tonal block, and playback state
                                         // is shown by the bars over its artwork.
-                                        .clip(RoundedCornerShape(12.dp))
+                                        .clip(RoundedCornerShape(18.dp))
                                         .background(NoxaSurfaceElevated)
                                         .noxaAppear(delayMillis = index * 40)
                                         .noxaClickable { onPlaySong(song, gridSongs, index) }
@@ -554,7 +554,7 @@ fun HomeScreen(
                                             contentScale = ContentScale.Crop,
                                             modifier = Modifier
                                                 .size(44.dp)
-                                                .clip(RoundedCornerShape(6.dp))
+                                                .clip(RoundedCornerShape(11.dp))
                                         )
                                         if (tilePlaying) {
                                             NowPlayingBars(
@@ -593,7 +593,7 @@ fun HomeScreen(
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(16.dp))
+                            .clip(RoundedCornerShape(24.dp))
                             // Warm tonal wash instead of a lime one: this card is
                             // about *your* listening, not about playback state.
                             .background(
@@ -712,8 +712,8 @@ fun HomeScreen(
                                 Box(
                                     modifier = Modifier
                                         .size(140.dp)
-                                        .shadow(6.dp, RoundedCornerShape(14.dp))
-                                        .clip(RoundedCornerShape(14.dp))
+                                        .shadow(6.dp, RoundedCornerShape(20.dp))
+                                        .clip(RoundedCornerShape(20.dp))
                                         .background(NoxaSurfaceElevated)
                                 ) {
                                     AsyncImage(
@@ -853,8 +853,8 @@ fun HomeScreen(
                                     contentScale = ContentScale.Crop,
                                     modifier = Modifier
                                         .size(132.dp)
-                                        .shadow(6.dp, RoundedCornerShape(12.dp))
-                                        .clip(RoundedCornerShape(12.dp))
+                                        .shadow(6.dp, RoundedCornerShape(18.dp))
+                                        .clip(RoundedCornerShape(18.dp))
                                 )
                                 Spacer(modifier = Modifier.height(7.dp))
                                 Text(
@@ -978,8 +978,8 @@ fun HomeScreen(
                                 Box(
                                     modifier = Modifier
                                         .size(96.dp)
-                                        .shadow(6.dp, RoundedCornerShape(12.dp))
-                                        .clip(RoundedCornerShape(12.dp))
+                                        .shadow(6.dp, RoundedCornerShape(16.dp))
+                                        .clip(RoundedCornerShape(16.dp))
                                         .background(NoxaSurfaceElevated)
                                 ) {
                                     AsyncImage(
@@ -1046,8 +1046,8 @@ fun HomeScreen(
                                 Box(
                                     modifier = Modifier
                                         .size(140.dp)
-                                        .shadow(6.dp, RoundedCornerShape(14.dp))
-                                        .clip(RoundedCornerShape(14.dp))
+                                        .shadow(6.dp, RoundedCornerShape(20.dp))
+                                        .clip(RoundedCornerShape(20.dp))
                                         .background(NoxaSurfaceElevated)
                                 ) {
                                     AsyncImage(
@@ -1165,8 +1165,8 @@ private fun PinnedShelfCard(
     Column(
         modifier = modifier
             .width(280.dp)
-            .shadow(8.dp, RoundedCornerShape(16.dp))
-            .clip(RoundedCornerShape(16.dp))
+            .shadow(8.dp, RoundedCornerShape(24.dp))
+            .clip(RoundedCornerShape(24.dp))
             .background(NoxaSurfaceElevated)
             .noxaClickable { onClick() }
             .padding(12.dp)
@@ -1185,8 +1185,9 @@ private fun PinnedShelfCard(
                     contentScale = ContentScale.Crop,
                     modifier = Modifier
                         .size(58.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .border(1.dp, NoxaBorder, RoundedCornerShape(10.dp))
+                        // Rounded sleeve, no hairline: the cover's own edge is
+                        // the boundary.
+                        .clip(RoundedCornerShape(14.dp))
                 )
                 Box(
                     modifier = Modifier

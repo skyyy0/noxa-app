@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PlaylistPlay
 import androidx.compose.material.icons.filled.Shuffle
@@ -68,6 +69,7 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.example.data.local.PlaylistSummary
 import com.example.data.model.Song
+import com.example.ui.components.SettingsGroup
 import com.example.ui.components.SongListItem
 import com.example.ui.components.noxaAppear
 import com.example.ui.components.noxaTap
@@ -119,6 +121,10 @@ fun LibraryScreen(
     downloadingIds: Set<String> = emptySet(),
     onToggleDownload: (Song) -> Unit = {},
     onStartRadio: (Song) -> Unit = {},
+    // ------------------------------------------------ v3.7.0: musik lokal
+    localSongs: List<Song> = emptyList(),
+    onImportLocal: () -> Unit = {},
+    onRemoveLocalSong: (Song) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var selectedTab by remember { mutableIntStateOf(0) }
@@ -139,12 +145,13 @@ fun LibraryScreen(
 
     // Short words only: an iOS segmented control keeps every label on one line,
     // and counts now live in the section header instead of inside the control.
-    val tabs = listOf("Favorit", "Playlist", "Riwayat", "Unduhan")
+    val tabs = listOf("Favorit", "Playlist", "Riwayat", "Unduhan", "Lokal")
     val tabsWithCounts = listOf(
         "Favorit (${favorites.size})",
         "Playlist (${playlistSummaries.size})",
         "Riwayat",
-        "Unduhan (${offlineSongs.size})"
+        "Unduhan (${offlineSongs.size})",
+        "Musik lokal (${localSongs.size})"
     )
 
     Box(
@@ -231,6 +238,22 @@ fun LibraryScreen(
                     modifier = Modifier.testTag("clear_history_btn")
                 ) {
                     Text("Bersihkan", color = NoxaTextTertiary, fontSize = 13.sp)
+                }
+            } else if (selectedTab == 4) {
+                IconButton(
+                    onClick = onImportLocal,
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .background(NoxaSurfaceSecondary)
+                        .testTag("import_local_music_btn")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Add,
+                        contentDescription = "Impor musik dari perangkat",
+                        tint = NoxaTextPrimary,
+                        modifier = Modifier.size(20.dp)
+                    )
                 }
             }
         }
@@ -352,6 +375,7 @@ fun LibraryScreen(
                                 song = song,
                                 isPlaying = song.id == currentPlayingSongId,
                                 isFavorite = true,
+                                showDivider = true,
                                 onPlay = { onPlaySong(song, favorites, index) },
                                 onToggleFavorite = { onToggleFavorite(song) },
                                 onPlayNext = { onPlayNext(song) },
@@ -386,18 +410,21 @@ fun LibraryScreen(
                 } else {
                     LazyColumn(
                         modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(bottom = 24.dp, top = 12.dp, start = 16.dp, end = 16.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {                        items(playlistSummaries, key = { it.playlistId }) { playlist ->
+                        contentPadding = PaddingValues(bottom = 24.dp, top = 12.dp)
+                    ) {
+                        item(key = "playlist_group") {
+                            // One inset group instead of a stack of outlined
+                            // cards: the playlists read as a single sheet of
+                            // material, separated by hairlines the way an iOS
+                            // grouped list does.
+                            SettingsGroup {
+                                playlistSummaries.forEachIndexed { index, playlist ->
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .clip(RoundedCornerShape(14.dp))
-                                    .background(NoxaSurfaceElevated)
-                                    .border(1.dp, NoxaBorder, RoundedCornerShape(14.dp))
                                     // Press-dip + light tick instead of a flat web-style row.
                                     .noxaTap { onOpenPlaylist(playlist.playlistId) }
-                                    .padding(14.dp)
+                                    .padding(horizontal = 16.dp, vertical = 13.dp)
                                     .testTag("playlist_row_${playlist.playlistId}"),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
@@ -455,6 +482,17 @@ fun LibraryScreen(
                                         tint = NoxaTextTertiary,
                                         modifier = Modifier.size(20.dp)
                                     )
+                                }
+                            }
+                            if (index != playlistSummaries.lastIndex) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(start = 72.dp)
+                                        .height(1.dp)
+                                        .background(NoxaBorder)
+                                )
+                            }
                                 }
                             }
                         }
@@ -579,6 +617,102 @@ fun LibraryScreen(
                                 isDownloading = downloadingIds.contains(song.id),
                                 rating = songRatings[song.id] ?: 0,
                                 onRate = onRateSong,
+                                modifier = Modifier.padding(horizontal = 4.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            4 -> {
+                // Musik lokal (v3.7.0): files the user picked, played from their
+                // own URI. No streaming, no quota, works in airplane mode.
+                if (localSongs.isEmpty()) {
+                    EmptyState(
+                        icon = Icons.Default.MusicNote,
+                        title = "Belum ada musik lokal",
+                        subtitle = "Impor MP3, M4A, atau FLAC dari penyimpanan HP — " +
+                            "diputar tanpa internet dan tanpa kuota",
+                        actionLabel = "Impor musik",
+                        onAction = onImportLocal
+                    )
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(
+                            bottom = 24.dp, top = 8.dp, start = 8.dp, end = 8.dp
+                        )
+                    ) {
+                        item(key = "local_actions") {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(50))
+                                        .background(NoxaLime)
+                                        .noxaTap { onPlaySong(localSongs[0], localSongs, 0) }
+                                        .padding(horizontal = 16.dp, vertical = 9.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.PlayArrow,
+                                        contentDescription = null,
+                                        tint = NoxaBlack,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        "Putar semua",
+                                        color = NoxaBlack,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Box(
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .clip(CircleShape)
+                                        .background(NoxaSurfaceSecondary)
+                                        .noxaTap {
+                                            val shuffled = localSongs.shuffled()
+                                            onPlaySong(shuffled[0], shuffled, 0)
+                                        },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Shuffle,
+                                        contentDescription = "Acak musik lokal",
+                                        tint = NoxaTextPrimary,
+                                        modifier = Modifier.size(17.dp)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.weight(1f))
+                                Text(
+                                    text = "${localSongs.size} file",
+                                    color = NoxaTextTertiary,
+                                    fontSize = 11.sp
+                                )
+                            }
+                        }
+
+                        itemsIndexed(localSongs, key = { _, song -> song.id }) { index, song ->
+                            SongListItem(
+                                song = song,
+                                isPlaying = song.id == currentPlayingSongId,
+                                isFavorite = favoriteIds.contains(song.id),
+                                showDivider = true,
+                                onPlay = { onPlaySong(song, localSongs, index) },
+                                onToggleFavorite = { onToggleFavorite(song) },
+                                onPlayNext = { onPlayNext(song) },
+                                onAddToQueue = { onAddToQueue(song) },
+                                onAddToPlaylist = { onAddToPlaylist(song) },
+                                onShare = { onShare(song) },
+                                onRemoveLocal = { onRemoveLocalSong(song) },
                                 modifier = Modifier.padding(horizontal = 4.dp)
                             )
                         }
@@ -907,9 +1041,8 @@ private fun JoinSharedPlaylistSheet(
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(20.dp))
+                            .clip(RoundedCornerShape(24.dp))
                             .background(NoxaSurfaceElevated)
-                            .border(1.dp, NoxaBorder, RoundedCornerShape(20.dp))
                             .padding(18.dp)
                             .noxaAppear()
                     ) {

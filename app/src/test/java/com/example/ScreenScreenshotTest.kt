@@ -275,6 +275,7 @@ class ScreenScreenshotTest {
                 onSetAutoplaySimilar = {},
                 onSetKaraokeOverlay = {},
                 onSetAutoResumeOnOpen = {},
+                onSetWifiOnlyStreaming = {},
                 onSignOut = {},
                 onNavigateToAboutSky = {},
                 onOpenAiChat = {},

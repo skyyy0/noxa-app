@@ -282,7 +282,7 @@ fun SearchScreen(
         Row(
             modifier = Modifier
                 .padding(horizontal = 20.dp, vertical = 6.dp)
-                .clip(RoundedCornerShape(50))
+                .clip(RoundedCornerShape(14.dp))
                 .background(NoxaSurfaceSecondary)
                 .padding(3.dp),
             horizontalArrangement = Arrangement.spacedBy(3.dp)
@@ -473,6 +473,7 @@ fun SearchScreen(
                         song = song,
                         isPlaying = song.id == currentPlayingSongId,
                         isFavorite = favoriteIds.contains(song.id),
+                        showDivider = true,
                         onPlay = { onPlaySong(song, filteredResults, index) },
                         onToggleFavorite = { onToggleFavorite(song) },
                         onPlayNext = { onPlayNext(song) },
@@ -516,7 +517,7 @@ fun SearchScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(96.dp)
-                                .clip(RoundedCornerShape(16.dp))
+                                .clip(RoundedCornerShape(20.dp))
                                 // A tinted placeholder instead of a drawn border:
                                 // iOS cards separate by colour and shadow, not by
                                 // outlines around every tile.

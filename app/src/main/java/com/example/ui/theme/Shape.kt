@@ -10,11 +10,16 @@ import androidx.compose.ui.unit.dp
  * The whole app draws from these four steps plus `full`. Anything that needs
  * a corner picks the step that matches its *role*, not its size:
  *
- *  - [xs]  6dp  — chips, tags, small inline controls, thumbnails inside rows.
- *  - [sm]  10dp — compact cards, list groups, search field.
- *  - [md]  14dp — standard cards, artwork tiles, dialogs.
- *  - [lg]  20dp — sheets, hero panels, anything that owns a whole region.
+ *  - [xs]  8dp  — tags, inline controls, thumbnail corner inside a dense row.
+ *  - [sm]  12dp — chips, small artwork, inset controls.
+ *  - [md]  18dp — standard cards, artwork tiles, inset list groups, dialogs.
+ *  - [lg]  26dp — sheets, hero panels, anything that owns a whole region.
+ *  - [xl]  30dp — full-bleed feature cards and the top edge of a sheet.
  *  - [full]      — pills, avatars, circular play buttons (clamped to a round end).
+ *
+ * The scale deliberately sits larger than a generic Material app: iOS-style
+ * surfaces have a soft, continuous silhouette, and anything under ~14dp reads
+ * as a hard little box rather than a sheet of material.
  *
  * Having one scale is what stops the app drifting into "every screen rounds
  * corners differently". New surfaces must pick from here before inventing a
@@ -23,17 +28,20 @@ import androidx.compose.ui.unit.dp
  */
 object NoxaRadius {
 
-    /** Chips, tags, inline controls, small in-row thumbnails. */
-    val xs = 6.dp
+    /** Tags, inline controls, the corner of a thumbnail inside a dense row. */
+    val xs = 8.dp
 
-    /** Compact cards, list groups, the search field. */
-    val sm = 10.dp
+    /** Chips, small artwork, inset controls. */
+    val sm = 12.dp
 
-    /** Standard cards and artwork tiles. */
-    val md = 14.dp
+    /** Standard cards, artwork tiles and inset list groups. */
+    val md = 18.dp
 
     /** Sheets, hero panels and other region-owning surfaces. */
-    val lg = 20.dp
+    val lg = 26.dp
+
+    /** Full-bleed feature cards and the top edge of a large sheet. */
+    val xl = 30.dp
 
     /**
      * Perfect pill / circle. Deliberately larger than half of any element we
@@ -57,5 +65,5 @@ val NoxaShapes = Shapes(
     small = RoundedCornerShape(NoxaRadius.sm),
     medium = RoundedCornerShape(NoxaRadius.md),
     large = RoundedCornerShape(NoxaRadius.lg),
-    extraLarge = RoundedCornerShape(NoxaRadius.lg)
+    extraLarge = RoundedCornerShape(NoxaRadius.xl)
 )

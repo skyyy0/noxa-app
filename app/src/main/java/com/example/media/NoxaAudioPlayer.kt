@@ -2,8 +2,13 @@ package com.example.media
 
 import android.content.Context
 import android.content.Intent
+import android.media.AudioDeviceCallback
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
 import android.net.Uri
 import android.os.CountDownTimer
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -16,6 +21,7 @@ import com.example.data.local.HistorySongEntity
 import com.example.data.local.NoxaDatabase
 import com.example.data.local.PlaybackSession
 import com.example.data.local.PlaybackSessionStore
+import com.example.data.local.TrackPositionStore
 import com.example.data.model.Song
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -87,7 +93,10 @@ class NoxaAudioPlayer(private val context: Context) {
     private val scope = CoroutineScope(Dispatchers.Main + Job())
     private val database = NoxaDatabase.getDatabase(context)
     private val sessionStore = PlaybackSessionStore(context)
-    val equalizerManager = EqualizerManager()
+    private val trackPositions = TrackPositionStore(context)
+    private val audioManager =
+        context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    val equalizerManager = EqualizerManager(context)
 
     val exoPlayer: ExoPlayer = ExoPlayer.Builder(context)
         .setAudioAttributes(
@@ -118,6 +127,69 @@ class NoxaAudioPlayer(private val context: Context) {
     private var positionUpdateJob: Job? = null
     private var sleepTimer: CountDownTimer? = null
     private var lastSessionSaveMs = 0L
+    private var lastPositionSaveMs = 0L
+
+    /**
+     * **Lanjut saat headphone tersambung lagi** (v3.7.0). We only offer this
+     * after a disconnect that actually interrupted playback — a headset plugged
+     * in while the user had already paused must never start music on its own.
+     */
+    private var lastKnownPlaying = false
+    private var resumeAfterReconnect = false
+
+    /**
+     * Timestamp of the last moment playback was actually running. ExoPlayer's
+     * own "becoming noisy" pause can fire before the device-removed callback,
+     * which would otherwise clear [lastKnownPlaying] and lose the reconnect
+     * offer entirely.
+     */
+    private var lastPlayingAtMs = 0L
+
+    /**
+     * Watches the physical output: refreshes the sound profile for the new
+     * route, pauses on a disconnect and resumes once the headset is back.
+     * Registering costs nothing extra — NOXA already holds MODIFY_AUDIO_SETTINGS.
+     */
+    private val routeCallback = object : AudioDeviceCallback() {
+        override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) {
+            if (addedDevices.none { it.isSink }) return
+            scope.launch {
+                // Give the sink a moment to settle; the profile is applied to
+                // the *new* route, never to the one that just disappeared.
+                delay(ROUTE_SETTLE_MS)
+                equalizerManager.refreshRoute()
+                publishEqualizerState()
+            }
+            if (resumeAfterReconnect) {
+                resumeAfterReconnect = false
+                scope.launch {
+                    delay(RECONNECT_RESUME_MS)
+                    if (!exoPlayer.isPlaying) {
+                        exoPlayer.play()
+                        _uiState.update { it.copy(errorMessage = null) }
+                    }
+                }
+            }
+        }
+
+        override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) {
+            if (removedDevices.none { it.isWirelessSink() }) return
+            // `lastKnownPlaying` is read before the noisy-broadcast pause:
+            // if music was running, this disconnect interrupted it.
+            val wasAudible = lastKnownPlaying ||
+                (System.currentTimeMillis() - lastPlayingAtMs) < 2_500L
+            if (wasAudible) {
+                resumeAfterReconnect = true
+                if (exoPlayer.isPlaying) exoPlayer.pause()
+            }
+            scope.launch {
+                delay(ROUTE_SETTLE_MS)
+                equalizerManager.refreshRoute()
+                publishEqualizerState()
+            }
+        }
+    }
+    private var routeCallbackRegistered = false
 
     /**
      * Invoked when ExoPlayer advances to a new track **on its own** (a song
@@ -170,6 +242,38 @@ class NoxaAudioPlayer(private val context: Context) {
         // asynchronously and this constructor-time id is still invalid (0).
         equalizerManager.init(exoPlayer.audioSessionId)
         _uiState.update { it.copy(equalizerState = equalizerManager.currentState) }
+
+        runCatching {
+            audioManager.registerAudioDeviceCallback(routeCallback, Handler(Looper.getMainLooper()))
+            routeCallbackRegistered = true
+        }.onFailure { Log.w(TAG, "Audio route watcher unavailable: ${it.message}") }
+        equalizerManager.refreshRoute()
+        publishEqualizerState()
+    }
+
+    private fun publishEqualizerState() {
+        _uiState.update { it.copy(equalizerState = equalizerManager.currentState) }
+    }
+
+    private fun AudioDeviceInfo.isWirelessSink(): Boolean =
+        isSink && (
+            type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
+                type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+                type == AudioDeviceInfo.TYPE_BLE_HEADSET ||
+                type == AudioDeviceInfo.TYPE_BLE_SPEAKER
+            )
+
+    /**
+     * Remembers where the current song was left, so reopening it feels like
+     * pressing play on a paused player instead of starting over.
+     */
+    private fun rememberPosition() {
+        val song = _uiState.value.currentSong ?: return
+        val duration = if (exoPlayer.duration > 0) exoPlayer.duration else song.durationMs
+        val position = exoPlayer.currentPosition
+        if (duration > 0 && position > 0) {
+            trackPositions.remember(song.id, position, duration)
+        }
     }
 
     /**
@@ -200,9 +304,18 @@ class NoxaAudioPlayer(private val context: Context) {
             }
 
             override fun onIsPlayingChanged(isPlaying: Boolean) {
+                val wasPlaying = lastKnownPlaying
+                lastKnownPlaying = isPlaying
+                if (isPlaying) lastPlayingAtMs = System.currentTimeMillis()
                 _uiState.update { it.copy(isPlaying = isPlaying) }
                 if (isPlaying) startPositionUpdater() else stopPositionUpdater()
-                if (!isPlaying) persistSession(force = true)
+                if (!isPlaying) {
+                    rememberPosition()
+                    persistSession(force = true)
+                    // A pause the user asked for cancels any pending
+                    // "resume when the headset returns".
+                    if (wasPlaying && !resumeAfterReconnect) resumeAfterReconnect = false
+                }
             }
 
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
@@ -390,7 +503,14 @@ class NoxaAudioPlayer(private val context: Context) {
                 errorMessage = null
             )
         }
-        _progress.update { PlaybackProgress(positionMs = 0L, durationMs = safeSong.durationMs) }
+        // Per-song resume: picking this track again lands where it was left,
+        // not at 0:00. The store ignores positions that are too close to the
+        // start or the end, so a finished song still begins from the top.
+        val resumeMs = trackPositions.positionFor(safeSong.id, safeSong.durationMs)
+        _progress.update {
+            PlaybackProgress(positionMs = resumeMs, durationMs = safeSong.durationMs)
+        }
+        resumeAfterReconnect = false
 
         if (!isPlayable(safeSong.streamUrl)) {
             _uiState.update {
@@ -405,7 +525,11 @@ class NoxaAudioPlayer(private val context: Context) {
 
         // The whole queue goes into ExoPlayer: that is what gives the system
         // notification its previous/next buttons and its seek bar.
-        exoPlayer.setMediaItems(songs.map { it.toMediaItem() }, targetIndex, C.TIME_UNSET)
+        exoPlayer.setMediaItems(
+            songs.map { it.toMediaItem() },
+            targetIndex,
+            if (resumeMs > 0) resumeMs else C.TIME_UNSET
+        )
         exoPlayer.prepare()
         exoPlayer.play()
 
@@ -583,7 +707,10 @@ class NoxaAudioPlayer(private val context: Context) {
     }
 
     fun togglePlayPause() {
+        // Any explicit transport action overrules the headset-reconnect offer.
+        resumeAfterReconnect = false
         if (exoPlayer.isPlaying) {
+            rememberPosition()
             exoPlayer.pause()
         } else {
             if (exoPlayer.playbackState == Player.STATE_IDLE || exoPlayer.mediaItemCount == 0) {
@@ -769,6 +896,33 @@ class NoxaAudioPlayer(private val context: Context) {
         _uiState.update { it.copy(equalizerState = equalizerManager.currentState) }
     }
 
+    /** Strength of the whole profile — one control instead of six sliders. */
+    fun setSoundIntensity(value: Float) {
+        equalizerManager.setIntensity(value)
+        publishEqualizerState()
+    }
+
+    fun setSoundLoudness(enabled: Boolean) {
+        equalizerManager.setLoudnessEnabled(enabled)
+        publishEqualizerState()
+    }
+
+    fun setSoundLimiter(enabled: Boolean) {
+        equalizerManager.setLimiterEnabled(enabled)
+        publishEqualizerState()
+    }
+
+    /** Re-detects the output and applies its profile immediately. */
+    fun refreshSoundRoute() {
+        equalizerManager.refreshRoute()
+        publishEqualizerState()
+    }
+
+    /** Leaves the "resolving" spinner without starting playback. */
+    fun endResolving() {
+        _uiState.update { it.copy(isBuffering = false) }
+    }
+
     fun clearError() {
         _uiState.update { it.copy(errorMessage = null) }
     }
@@ -851,6 +1005,13 @@ class NoxaAudioPlayer(private val context: Context) {
                 applyCrossfadeVolume(current, duration)
                 updateEndOfTrackTick()
                 persistSession(force = false)
+                // Writing every tick would hammer SharedPreferences; five
+                // seconds is finer than any resume needs to be.
+                val now = System.currentTimeMillis()
+                if (now - lastPositionSaveMs >= POSITION_SAVE_INTERVAL_MS) {
+                    lastPositionSaveMs = now
+                    rememberPosition()
+                }
                 delay(POSITION_TICK_MS)
             }
         }
@@ -910,6 +1071,11 @@ class NoxaAudioPlayer(private val context: Context) {
             url.startsWith("file://") || url.startsWith("content://")
 
     fun release() {
+        rememberPosition()
+        if (routeCallbackRegistered) {
+            runCatching { audioManager.unregisterAudioDeviceCallback(routeCallback) }
+            routeCallbackRegistered = false
+        }
         stopPositionUpdater()
         cancelSleepTimer(restoreVolume = false)
         equalizerManager.release()
@@ -919,6 +1085,10 @@ class NoxaAudioPlayer(private val context: Context) {
     private companion object {
         const val POSITION_TICK_MS = 500L
         const val SESSION_SAVE_INTERVAL_MS = 10_000L
+        const val POSITION_SAVE_INTERVAL_MS = 5_000L
+        const val ROUTE_SETTLE_MS = 450L
+        const val RECONNECT_RESUME_MS = 900L
+        const val TAG = "NoxaAudioPlayer"
 
         /** Silent network-error retries per failure burst, per track. */
         const val MAX_STREAM_RETRIES = 2

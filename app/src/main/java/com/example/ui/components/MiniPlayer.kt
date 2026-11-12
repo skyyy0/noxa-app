@@ -66,7 +66,7 @@ import androidx.compose.runtime.collectAsState
  * The panel's silhouette — shared by the surface, the sheen and the edge so
  * the three layers never disagree about where the corners are.
  */
-private val MiniPlayerShape = RoundedCornerShape(22.dp)
+private val MiniPlayerShape = RoundedCornerShape(26.dp)
 
 @Composable
 fun MiniPlayer(
@@ -158,7 +158,7 @@ fun MiniPlayer(
                             .size(44.dp)
                             // Sleeve radius: album art is nearly square everywhere
                             // in NOXA so artwork reads as artwork, not as a chip.
-                            .clip(RoundedCornerShape(10.dp))
+                            .clip(RoundedCornerShape(14.dp))
                     )
 
                     Spacer(modifier = Modifier.width(12.dp))

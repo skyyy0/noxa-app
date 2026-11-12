@@ -8,7 +8,6 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
@@ -78,7 +77,7 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.example.data.model.Song
 import com.example.ui.theme.NoxaBlack
-import com.example.ui.theme.NoxaBorder
+import com.example.ui.theme.NoxaBorderSubtle
 import com.example.ui.theme.NoxaLime
 import com.example.ui.theme.NoxaSurface
 import com.example.ui.theme.NoxaSurfaceElevated
@@ -148,14 +147,12 @@ fun CategoryChipsRow(
             Box(
                 modifier = Modifier
                     .clip(CircleShape)
-                    .background(if (isSelected) NoxaLime else NoxaSurfaceSecondary)
-                    .border(
-                        1.dp,
-                        if (isSelected) NoxaLime else NoxaBorder,
-                        CircleShape
-                    )
+                    // No outline: a chip is a pill of material, and the edge
+                    // of a pill is already its own boundary. Selected chips
+                    // step up to lime instead of growing a ring.
+                    .background(if (isSelected) NoxaLime else NoxaSurfaceElevated)
                     .noxaTap { onSelectCategory(category) }
-                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                    .padding(horizontal = 16.dp, vertical = 9.dp)
                     .testTag("category_chip_$category")
             ) {
                 Text(
@@ -317,6 +314,8 @@ fun SongListItem(
     onStartRadio: (() -> Unit)? = null,
     /** v2.1 — offline download; null hides the item. */
     onToggleDownload: (() -> Unit)? = null,
+    /** v3.7.0 — remove an imported local file from the collection. */
+    onRemoveLocal: (() -> Unit)? = null,
     /** v2.1 — already stored on this device (menu says "Hapus unduhan"). */
     isDownloaded: Boolean = false,
     /** v2.1 — download in flight (menu says "Mengunduh…" and ignores taps). */
@@ -328,14 +327,21 @@ fun SongListItem(
      */
     metaText: String? = null,
     metaHighlight: Boolean = false,
+    /**
+     * Draws the iOS list hairline under the row, inset to where the title
+     * starts. Long lists use it so the rows read as one grouped block instead
+     * of a stack of separate cards.
+     */
+    showDivider: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     var menuOpen by remember { mutableStateOf(false) }
 
+    Column(modifier = modifier.fillMaxWidth()) {
     Row(
-        modifier = modifier
+        modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(16.dp))
             // Tap plays; long-press opens the same quick menu as the ⋮ button —
             // the gesture Spotify users expect on every song row. Wrapped in
             // the NOXA row feedback so the row dips and ticks under the finger.
@@ -364,8 +370,9 @@ fun SongListItem(
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
                     .size(48.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .border(0.5.dp, NoxaBorder, RoundedCornerShape(8.dp))
+                    // Rounded sleeve, no hairline: the artwork's own edge is
+                    // the boundary, and an outline made covers look pasted on.
+                    .clip(RoundedCornerShape(12.dp))
             )
             // Spotify-style "now playing" bars over the artwork corner — the
             // glanceable sign that THIS row is what you are hearing.
@@ -447,7 +454,7 @@ fun SongListItem(
         // sharing.
         if (onPlayNext != null || onAddToQueue != null || onAddToPlaylist != null ||
             onShare != null || onRate != null || onMuteSong != null || onMuteArtist != null ||
-            onStartRadio != null || onToggleDownload != null
+            onStartRadio != null || onToggleDownload != null || onRemoveLocal != null
         ) {
             Box {
                 IconButton(
@@ -548,6 +555,28 @@ fun SongListItem(
                             }
                         )
                     }
+                    if (onRemoveLocal != null) {
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    "Hapus dari koleksi lokal",
+                                    color = NoxaTextPrimary,
+                                    fontSize = 14.sp
+                                )
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Default.Delete,
+                                    contentDescription = null,
+                                    tint = NoxaError
+                                )
+                            },
+                            onClick = {
+                                menuOpen = false
+                                onRemoveLocal()
+                            }
+                        )
+                    }
                     if (onShare != null) {
                         DropdownMenuItem(
                             text = { Text("Bagikan", color = NoxaTextPrimary, fontSize = 14.sp) },
@@ -627,6 +656,17 @@ fun SongListItem(
                 }
             }
         }
+    }
+
+    if (showDivider) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = if (rank != null) 100.dp else 72.dp, end = 12.dp)
+                .height(1.dp)
+                .background(NoxaBorderSubtle)
+        )
+    }
     }
 }
 
