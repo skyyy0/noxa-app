@@ -88,16 +88,29 @@ fun LyricsPanel(
         if (sharingLyrics || lines.isEmpty()) return
         sharingLyrics = true
         shareScope.launch {
-            val ok = withContext(Dispatchers.IO) {
+            val result = withContext(Dispatchers.IO) {
                 ShareCardRenderer.shareLyrics(context, song, lines, highlight)
             }
             sharingLyrics = false
-            if (!ok) {
-                android.widget.Toast.makeText(
-                    context,
-                    "Gagal membuat gambar lirik. Coba lagi.",
-                    android.widget.Toast.LENGTH_SHORT
-                ).show()
+            when (result) {
+                ShareCardRenderer.ShareResult.SHARED -> Unit
+                ShareCardRenderer.ShareResult.SAVED_ONLY -> {
+                    // The picture exists; only the chooser could not open. Say
+                    // where it went instead of pretending it failed.
+                    android.widget.Toast.makeText(
+                        context,
+                        "Gambar lirik tersimpan di galeri (Pictures/NOXA).",
+                        android.widget.Toast.LENGTH_LONG
+                    ).show()
+                }
+
+                ShareCardRenderer.ShareResult.FAILED -> {
+                    android.widget.Toast.makeText(
+                        context,
+                        "Gambar lirik gagal dibuat. Pastikan lirik sudah termuat, lalu coba lagi.",
+                        android.widget.Toast.LENGTH_LONG
+                    ).show()
+                }
             }
         }
     }

@@ -39,6 +39,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ExitToApp
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Headphones
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.OpenInNew
@@ -142,6 +143,7 @@ fun ProfileScreen(
     onSetKaraokeOverlay: (Boolean) -> Unit,
     onSetAutoResumeOnOpen: (Boolean) -> Unit,
     onSetWifiOnlyStreaming: (Boolean) -> Unit,
+    onOpenCollage: () -> Unit = {},
     /** v2.0.0 — crossfade lembut antar lagu (Sistem Pintar mematikan di HP kelas Slow). */
     onSetCrossfade: (Boolean) -> Unit = {},
     /** v2.0.0 — profil perangkat hasil pemindaian sekali di awal. */
@@ -1058,6 +1060,18 @@ fun ProfileScreen(
         }
 
         // PLAYER FEATURES — MV quality + toggles dalam satu grup.
+        SettingsSectionLabel("Kreatif")
+        SettingsGroup(tag = "creative_group") {
+            SettingsRow(
+                icon = Icons.Default.Image,
+                iconTint = NoxaLime,
+                title = "Noxa Kolase",
+                subtitle = "Susun 4 lagu + foto galeri jadi poster siap dibagikan",
+                tag = "open_collage",
+                onClick = onOpenCollage
+            )
+        }
+
         SettingsSectionLabel("Fitur Pemutar")
         SettingsGroup(tag = "player_features_group") {
             Text(

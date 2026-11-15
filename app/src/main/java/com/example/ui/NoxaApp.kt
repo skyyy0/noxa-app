@@ -21,6 +21,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
@@ -52,11 +53,13 @@ import com.example.data.model.Song
 import com.example.ui.components.AddToPlaylistDialog
 import com.example.ui.components.FullPlayerSheet
 import com.example.ui.components.NoxaBottomStack
+import com.example.ui.components.NoxaSplash
 import com.example.ui.components.ShareSheetDialog
 import com.example.ui.components.SongCommentsSheet
 import com.example.ui.components.YouTubePolicyDialog
 import com.example.ui.screens.AboutSkyScreen
 import com.example.ui.screens.AiChatScreen
+import com.example.ui.screens.CollageScreen
 import com.example.ui.screens.AlbumScreen
 import com.example.ui.screens.ArtistScreen
 import com.example.ui.screens.DeviceScanScreen
@@ -123,6 +126,7 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector)
 
     /** NOXA Wrapped tahunan — the year in listening, story-style. */
     object Wrapped : Screen("wrapped", "Wrapped", Icons.Default.BarChart)
+    object Collage : Screen("collage", "Noxa Kolase", Icons.Default.Image)
 }
 
 @Composable
@@ -229,6 +233,14 @@ private fun NoxaAppContent(
     val albumUiState by viewModel.albumUiState.collectAsStateWithLifecycle()
 
     val context = LocalContext.current
+
+    // The splash owns the screen for a beat so the brand registers and the
+    // black-until-loaded feeling is gone, regardless of network speed.
+    var splashVisible by remember { mutableStateOf(true) }
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.delay(1_250)
+        splashVisible = false
+    }
 
     // Song awaiting "which playlist?".
     var songPendingPlaylist by remember { mutableStateOf<Song?>(null) }
@@ -648,6 +660,9 @@ private fun NoxaAppContent(
                         onSetKaraokeOverlay = { viewModel.setKaraokeOverlay(it) },
                         onSetAutoResumeOnOpen = { viewModel.setAutoResumeOnOpen(it) },
                         onSetWifiOnlyStreaming = { viewModel.setWifiOnlyStreaming(it) },
+                        onOpenCollage = {
+                            navController.navigate(Screen.Collage.route) { launchSingleTop = true }
+                        },
                         onSignOut = { viewModel.signOut() },
                         onNavigateToAboutSky = {
                             navController.navigate(Screen.AboutSky.route)
@@ -814,6 +829,17 @@ private fun NoxaAppContent(
                         onRefresh = { viewModel.refreshSupportChat() },
                         onSend = { viewModel.sendSupportMessage(it) },
                         onLoginHint = { navigateToTab(Screen.Profile) }
+                    )
+                }
+
+                composable(Screen.Collage.route) {
+                    CollageScreen(
+                        songs = (favoriteSongs + historySongs + pinnedSongs + localSongs)
+                            .distinctBy { it.id },
+                        onBack = { navController.popBackStack() },
+                        onNotice = { message ->
+                            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                        }
                     )
                 }
 
@@ -1011,6 +1037,10 @@ private fun NoxaAppContent(
                 onDismiss = { songPendingShare = null }
             )
         }
+
+        // Brand splash — above every screen, below nothing: it is the first
+        // thing the process draws and it fades itself out.
+        NoxaSplash(visible = splashVisible)
 
         // Komentar per Lagu — shared thread keyed by the song id.
         songComments?.let { commentsUi ->

@@ -14,6 +14,7 @@ import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
+import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
@@ -73,6 +74,13 @@ object ShareCardRenderer {
     private const val LYRIC_CARD_MAX_LINES = 7
     private const val FILE_PROVIDER_SUFFIX = ".fileprovider"
     private const val TAG = "ShareCard"
+
+    /**
+     * What actually happened, so the UI can tell the truth instead of a
+     * generic "gagal". v3.7.5: the image is saved first and *then* shared, so
+     * a device with no share target still keeps the picture.
+     */
+    enum class ShareResult { SHARED, SAVED_ONLY, FAILED }
 
     /** Colors tuned to the NOXA theme (near-black with lime accents). */
     private val BG_TOP = Color.rgb(24, 30, 12)
@@ -277,47 +285,75 @@ object ShareCardRenderer {
         song: Song?,
         lines: List<String>,
         highlightIndex: Int
-    ): Boolean {
-        val file = try {
-            val bitmap = renderLyricsCard(context, song, lines, highlightIndex) ?: return false
-            saveToGallery(context, bitmap, safeName(song?.title ?: "lirik", "lyrics"))
-            writeToCache(context, bitmap, "lyrics-${(song?.id ?: "card").hashCode()}")
+    ): ShareResult {
+        val bitmap = try {
+            renderLyricsCard(context, song, lines, highlightIndex)
         } catch (e: Exception) {
-            Log.e(TAG, "Rendering/saving the lyric card failed", e)
-            return false
+            Log.e(TAG, "Rendering the lyric card failed", e)
+            null
+        } ?: return ShareResult.FAILED
+
+        val text = buildString {
+            if (song != null) {
+                append('"').append(song.title).append('"').append(" — ").append(song.artist)
+                append('\n')
+                append(NoxaLinks.songLink(song))
+                append("\n\n")
+            }
+            append(lines.joinToString("\n"))
+            append("\n\nDidengarkan lewat NOXA Music")
         }
+        return saveAndShare(
+            context = context,
+            bitmap = bitmap,
+            baseName = song?.title ?: "lirik",
+            text = text,
+            title = "Bagikan lirik"
+        )
+    }
+
+    /**
+     * Saves the bitmap to the gallery **first**, then opens the system share
+     * sheet. A share failure no longer throws away the picture — the result
+     * says `SAVED_ONLY` and the UI can point the user to `Pictures/NOXA`.
+     */
+    suspend fun saveAndShare(
+        context: Context,
+        bitmap: Bitmap,
+        baseName: String,
+        text: String,
+        title: String
+    ): ShareResult {
+        val saved = saveToGallery(context, bitmap, safeName(baseName, "noxa")) != null
+        val file = try {
+            writeToCache(context, bitmap, "card-${System.currentTimeMillis()}")
+        } catch (e: Exception) {
+            Log.e(TAG, "Could not write the share cache copy", e)
+            return if (saved) ShareResult.SAVED_ONLY else ShareResult.FAILED
+        }
+
         return try {
             val uri = FileProvider.getUriForFile(
                 context,
                 context.packageName + FILE_PROVIDER_SUFFIX,
                 file
             )
-            val text = buildString {
-                if (song != null) {
-                    append('"').append(song.title).append('"').append(" — ").append(song.artist)
-                    append('\n')
-                    append(NoxaLinks.songLink(song))
-                    append("\n\n")
-                }
-                append(lines.joinToString("\n"))
-                append("\n\nDidengarkan lewat NOXA Music")
-            }
             val send = Intent(Intent.ACTION_SEND).apply {
                 type = "image/png"
                 putExtra(Intent.EXTRA_STREAM, uri)
-                putExtra(Intent.EXTRA_TEXT, text)
+                if (text.isNotBlank()) putExtra(Intent.EXTRA_TEXT, text)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                clipData = ClipData.newUri(context.contentResolver, "NOXA lyric card", uri)
+                clipData = ClipData.newUri(context.contentResolver, "NOXA card", uri)
             }
-            val chooser = Intent.createChooser(send, "Bagikan lirik").apply {
+            val chooser = Intent.createChooser(send, title).apply {
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 if (context !is Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             context.startActivity(chooser)
-            true
+            ShareResult.SHARED
         } catch (e: Exception) {
-            Log.e(TAG, "Opening the lyric share sheet failed", e)
-            false
+            Log.e(TAG, "Opening the share sheet failed", e)
+            if (saved) ShareResult.SAVED_ONLY else ShareResult.FAILED
         }
     }
 
@@ -748,7 +784,7 @@ object ShareCardRenderer {
      * permission; below that it needs WRITE_EXTERNAL_STORAGE, so failures are
      * swallowed — the share sheet still works through the FileProvider copy.
      */
-    private fun saveToGallery(context: Context, bitmap: Bitmap, baseName: String): Uri? {
+    internal fun saveToGallery(context: Context, bitmap: Bitmap, baseName: String): Uri? {
         val name = "NOXA-$baseName.png"
         return try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -769,18 +805,23 @@ object ShareCardRenderer {
                 resolver.update(uri, values, null, null)
                 uri
             } else {
-                @Suppress("DEPRECATION")
-                val dir = File(
-                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES),
-                    "NOXA"
-                )
-                dir.mkdirs()
+                // Android 7–9: writing to the public Pictures folder needs
+                // WRITE_EXTERNAL_STORAGE, which NOXA deliberately never asks
+                // for. App-scoped external storage needs no permission, and the
+                // media scanner makes the file visible to the gallery anyway.
+                val root = context.getExternalFilesDir(Environment.DIRECTORY_PICTURES)
+                    ?: context.filesDir
+                val dir = File(root, "NOXA").apply { mkdirs() }
                 val file = File(dir, name)
                 file.outputStream().use { stream ->
                     bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)
                 }
-                @Suppress("DEPRECATION")
-                MediaStore.Images.Media.insertImage(context.contentResolver, file.absolutePath, name, null)
+                MediaScannerConnection.scanFile(
+                    context,
+                    arrayOf(file.absolutePath),
+                    arrayOf("image/png"),
+                    null
+                )
                 Uri.fromFile(file)
             }
         } catch (e: Exception) {
@@ -789,7 +830,7 @@ object ShareCardRenderer {
     }
 
     /** The FileProvider copy the share sheet actually hands out. */
-    private fun writeToCache(context: Context, bitmap: Bitmap, key: String): File {
+    internal fun writeToCache(context: Context, bitmap: Bitmap, key: String): File {
         val dir = File(context.cacheDir, "share").apply { mkdirs() }
         val file = File(dir, "noxa-share-$key.png")
         file.outputStream().use { stream ->

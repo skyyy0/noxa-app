@@ -43,7 +43,15 @@ data class EqualizerState(
     val headroomDb: Float = 0f,
     val intensity: Float = 0.7f,
     val loudnessEnabled: Boolean = true,
-    val limiterEnabled: Boolean = true
+    val limiterEnabled: Boolean = true,
+    /** Friendly name of the output the engine is currently tuned for. */
+    val deviceLabel: String = "",
+    /** True once a tuning for this output exists (restored or just saved). */
+    val deviceRemembered: Boolean = false,
+    /** Extra low/high lift the engine added because the volume is low. */
+    val volumeLiftDb: Float = 0f,
+    /** Current media volume as 0..1, as seen by the volume observer. */
+    val volumeFraction: Float = 1f
 )
 
 /** What the automatic tuning actually managed to apply. */
@@ -105,6 +113,20 @@ class EqualizerManager(private val context: Context? = null) {
     private var legacyVirtual: Int = 0
     private var autoTunePending = false
 
+    // ── v3.7.5: per-device memory + equal-loudness compensation ─────────────
+    // `deviceKey` identifies the physical output (route + product name) so a
+    // remembered tuning follows the headphones, not the app install.
+    private val memory: SoundDeviceMemory? by lazy { context?.let { SoundDeviceMemory(it) } }
+    private var deviceKey: String = ""
+    private var deviceLabel: String = ""
+    private var deviceRemembered: Boolean = false
+    private var volumeFraction: Float = 1f
+    private var volumeLiftDb: Float = 0f
+
+    // Sliders fire per pixel; writing prefs on every tick janks the drag.
+    private val saveHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val saveRunnable = Runnable { writeDeviceProfileNow() }
+
     var currentState: EqualizerState = EqualizerState()
         private set
 
@@ -122,6 +144,7 @@ class EqualizerManager(private val context: Context? = null) {
         releaseEffects()
         boundSessionId = audioSessionId
         route = detectRoute()
+        restoreDeviceProfile()
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             backend = if (buildDsp(audioSessionId)) Backend.DSP else Backend.LEGACY
@@ -171,12 +194,114 @@ class EqualizerManager(private val context: Context? = null) {
     /** Re-detects the physical output — call when headphones come or go. */
     fun refreshRoute() {
         val detected = detectRoute()
+        val previousKey = deviceKey
         if (detected != route) {
-            // A new route means a different correction, not a louder one; the
-            // per-band user trim is deliberately kept so a manual bass cut
-            // does not silently come back when a headset reconnects.
+            // A new route means a different correction, not a louder one.
             route = detected
         }
+        restoreDeviceProfile()
+        // A reconnect is exactly when a remembered tuning should come back.
+        if (deviceKey != previousKey) {
+            Log.d(TAG, "Output changed → ${deviceLabel.ifBlank { deviceKey }} (remembered=$deviceRemembered)")
+        }
+        apply()
+    }
+
+    // -------------------------------------------------------------- device memory
+
+    /**
+     * Works out which physical output is live and, if NOXA has tuned it before,
+     * restores that exact curve — preset, intensity, switches and manual trims.
+     * Without this, every TWS reconnect looked like a brand-new device and the
+     * careful tuning was silently replaced by the automatic profile.
+     */
+    private fun restoreDeviceProfile() {
+        val signature = detectDeviceSignature()
+        deviceLabel = signature.label
+        if (signature.key == deviceKey) return
+        deviceKey = signature.key
+        val stored = memory?.profileFor(deviceKey)
+        deviceRemembered = stored != null
+        if (stored != null) {
+            presetName = stored.preset
+            intensity = stored.intensity
+            loudnessEnabled = stored.loudness
+            limiterEnabled = stored.limiter
+            for (index in trimDb.indices) {
+                trimDb[index] = stored.trimDb.getOrElse(index) { 0f }.coerceIn(-12f, 12f)
+            }
+        }
+    }
+
+    private data class DeviceSignature(val key: String, val label: String)
+
+    private fun detectDeviceSignature(): DeviceSignature {
+        val manager = context?.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+        val devices = runCatching {
+            manager?.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+        }.getOrNull().orEmpty()
+
+        val current = devices.filter { it.isSink }.maxByOrNull { device ->
+            when (device.type) {
+                AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
+                AudioDeviceInfo.TYPE_BLE_HEADSET,
+                AudioDeviceInfo.TYPE_BLE_SPEAKER,
+                AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> 3
+                AudioDeviceInfo.TYPE_USB_HEADSET,
+                AudioDeviceInfo.TYPE_USB_DEVICE,
+                AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+                AudioDeviceInfo.TYPE_WIRED_HEADSET -> 2
+                else -> 1
+            }
+        }
+        val product = current?.productName?.toString()?.trim().orEmpty()
+        val label = when {
+            product.isNotBlank() && product != "unknown" -> product
+            route == SoundRoute.BLUETOOTH -> "Bluetooth"
+            route == SoundRoute.USB -> "Audio USB"
+            route == SoundRoute.WIRED -> "Headset kabel"
+            else -> "Speaker ponsel"
+        }
+        // The key uses the stable route + product name; Android often reports
+        // "unknown" for cheap TWS, so the route alone still groups them.
+        val key = "${route.name}:${product.ifBlank { "default" }.lowercase()}"
+        return DeviceSignature(key, label)
+    }
+
+    /** Debounced save: the UI updates instantly, the disk settles after. */
+    private fun rememberDeviceProfile() {
+        if (memory == null || deviceKey.isBlank()) return
+        deviceRemembered = true
+        saveHandler.removeCallbacks(saveRunnable)
+        saveHandler.postDelayed(saveRunnable, 450L)
+    }
+
+    private fun writeDeviceProfileNow() {
+        val store = memory ?: return
+        if (deviceKey.isBlank()) return
+        store.save(
+            deviceKey,
+            SoundDeviceProfile(
+                preset = presetName,
+                intensity = intensity,
+                loudness = loudnessEnabled,
+                limiter = limiterEnabled,
+                trimDb = trimDb.toList()
+            )
+        )
+        deviceRemembered = true
+    }
+
+    /**
+     * **Kompensasi kenyaringan** — at low volume the ear loses bass and treble
+     * first (equal-loudness curves). Rather than a bass boost button, the
+     * engine adds a small, smooth lift to the extremes as the slider goes down
+     * and folds it into the same headroom calculation, so it can never clip.
+     */
+    fun setVolumeFraction(fraction: Float) {
+        val clamped = fraction.coerceIn(0f, 1f)
+        if (kotlin.math.abs(clamped - volumeFraction) < 0.01f) return
+        volumeFraction = clamped
         apply()
     }
 
@@ -216,6 +341,7 @@ class EqualizerManager(private val context: Context? = null) {
         // shape, not this shape plus whatever was dragged before.
         trimDb.fill(0f)
         apply()
+        rememberDeviceProfile()
     }
 
     /** Absolute band gain from the UI, in hundredths of a dB. */
@@ -224,21 +350,25 @@ class EqualizerManager(private val context: Context? = null) {
         val target = (levelMilliBels / 100f).coerceIn(-12f, 12f)
         trimDb[bandIndex] = target - scaledCurve()[bandIndex]
         apply()
+        rememberDeviceProfile()
     }
 
     fun setIntensity(value: Float) {
         intensity = value.coerceIn(0f, 1f)
         apply()
+        rememberDeviceProfile()
     }
 
     fun setLoudnessEnabled(value: Boolean) {
         loudnessEnabled = value
         apply()
+        rememberDeviceProfile()
     }
 
     fun setLimiterEnabled(value: Boolean) {
         limiterEnabled = value
         apply()
+        rememberDeviceProfile()
     }
 
     fun setEnabled(isEnabled: Boolean) {
@@ -294,8 +424,13 @@ class EqualizerManager(private val context: Context? = null) {
 
     private fun effectiveGains(): FloatArray {
         val scaled = scaledCurve()
+        // Low volume: lift the extremes a little, never the mids, so voices
+        // stay centred while the mix keeps its body at quiet listening levels.
+        volumeLiftDb = ((1f - volumeFraction).coerceIn(0f, 1f) * 4.5f)
+        val tilt = floatArrayOf(0.62f, 0.34f, 0.08f, 0f, 0.26f, 0.52f)
         return FloatArray(scaled.size) { index ->
-            (scaled[index] + trimDb[index]).coerceIn(-12f, 12f)
+            (scaled[index] + trimDb[index] + volumeLiftDb * tilt[index])
+                .coerceIn(-12f, 12f)
         }
     }
 
@@ -453,11 +588,18 @@ class EqualizerManager(private val context: Context? = null) {
             headroomDb = headroom,
             intensity = intensity,
             loudnessEnabled = loudnessEnabled,
-            limiterEnabled = limiterEnabled
+            limiterEnabled = limiterEnabled,
+            deviceLabel = deviceLabel,
+            deviceRemembered = deviceRemembered,
+            volumeLiftDb = volumeLiftDb,
+            volumeFraction = volumeFraction
         )
     }
 
     fun release() {
+        // Do not lose the last few hundred milliseconds of tuning.
+        saveHandler.removeCallbacks(saveRunnable)
+        writeDeviceProfileNow()
         releaseEffects()
         boundSessionId = 0
         backend = Backend.NONE

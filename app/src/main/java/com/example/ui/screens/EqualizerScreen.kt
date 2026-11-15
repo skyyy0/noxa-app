@@ -2,6 +2,8 @@ package com.example.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -172,6 +174,18 @@ fun EqualizerScreen(
                         fontSize = 11.5.sp,
                         fontWeight = FontWeight.SemiBold
                     )
+                    if (equalizerState.deviceLabel.isNotBlank()) {
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = equalizerState.deviceLabel +
+                                if (equalizerState.deviceRemembered) " · tuning diingat"
+                                else " · tuning baru",
+                            color = NoxaTextTertiary,
+                            fontSize = 10.5.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 }
                 IconButton(
                     onClick = {
@@ -198,11 +212,17 @@ fun EqualizerScreen(
             )
 
             Spacer(modifier = Modifier.height(12.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.horizontalScroll(rememberScrollState())
+            ) {
                 ChainPill("Preamp ${equalizerState.headroomDb.roundToInt()} dB")
                 ChainPill(if (equalizerState.dspActive) "6 band" else "EQ hardware")
                 ChainPill(if (equalizerState.loudnessEnabled) "Kompresor" else "Tanpa kompresor")
                 ChainPill(if (equalizerState.limiterEnabled) "Limiter" else "Tanpa limiter")
+                if (equalizerState.volumeLiftDb >= 0.5f) {
+                    ChainPill("Volume +${equalizerState.volumeLiftDb.roundToInt()} dB")
+                }
             }
 
             if (!active) {

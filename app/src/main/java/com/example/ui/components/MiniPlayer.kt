@@ -66,7 +66,7 @@ import androidx.compose.runtime.collectAsState
  * The panel's silhouette — shared by the surface, the sheen and the edge so
  * the three layers never disagree about where the corners are.
  */
-private val MiniPlayerShape = RoundedCornerShape(26.dp)
+private val MiniPlayerShape = RoundedCornerShape(30.dp)
 
 @Composable
 fun MiniPlayer(
@@ -106,13 +106,16 @@ fun MiniPlayer(
                 // top edge, and a hairline that fades before it reaches the
                 // bottom. Deliberately NOT welded to the navigation below —
                 // the gap between the two is what makes the stack feel light.
-                .shadow(14.dp, MiniPlayerShape, clip = false)
+                // A floating glass capsule: softer elevation, more translucency
+                // (so the scrim below reads through it) and light that gathers
+                // along the top edge instead of a full drawn outline.
+                .shadow(16.dp, MiniPlayerShape, clip = false, ambientColor = Color.Black)
                 .clip(MiniPlayerShape)
                 .background(
                     Brush.verticalGradient(
                         listOf(
-                            NoxaSurface.copy(alpha = 0.97f),
-                            NoxaBlack.copy(alpha = 0.93f)
+                            NoxaSurface.copy(alpha = 0.94f),
+                            NoxaBlack.copy(alpha = 0.86f)
                         )
                     )
                 )
@@ -129,8 +132,8 @@ fun MiniPlayer(
                     1.dp,
                     Brush.verticalGradient(
                         listOf(
-                            Color.White.copy(alpha = 0.18f),
-                            Color.White.copy(alpha = 0.04f)
+                            Color.White.copy(alpha = 0.10f),
+                            Color.Transparent
                         )
                     ),
                     MiniPlayerShape

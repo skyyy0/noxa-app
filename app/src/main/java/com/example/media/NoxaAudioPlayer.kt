@@ -4,7 +4,9 @@ import android.content.Context
 import android.content.Intent
 import android.media.AudioDeviceCallback
 import android.media.AudioDeviceInfo
+import android.database.ContentObserver
 import android.media.AudioManager
+import android.provider.Settings
 import android.net.Uri
 import android.os.CountDownTimer
 import android.os.Handler
@@ -96,6 +98,17 @@ class NoxaAudioPlayer(private val context: Context) {
     private val trackPositions = TrackPositionStore(context)
     private val audioManager =
         context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+
+    /**
+     * Watches the media volume so the equal-loudness compensation follows the
+     * hardware buttons live instead of only when the app asks.
+     */
+    private val volumeObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
+        override fun onChange(selfChange: Boolean) {
+            updateVolumeCompensation()
+        }
+    }
+    private var volumeObserverRegistered = false
     val equalizerManager = EqualizerManager(context)
 
     val exoPlayer: ExoPlayer = ExoPlayer.Builder(context)
@@ -247,7 +260,28 @@ class NoxaAudioPlayer(private val context: Context) {
             audioManager.registerAudioDeviceCallback(routeCallback, Handler(Looper.getMainLooper()))
             routeCallbackRegistered = true
         }.onFailure { Log.w(TAG, "Audio route watcher unavailable: ${it.message}") }
+
+        runCatching {
+            context.contentResolver.registerContentObserver(
+                Settings.System.CONTENT_URI,
+                true,
+                volumeObserver
+            )
+            volumeObserverRegistered = true
+        }.onFailure { Log.w(TAG, "Volume watcher unavailable: ${it.message}") }
+
         equalizerManager.refreshRoute()
+        updateVolumeCompensation()
+        publishEqualizerState()
+    }
+
+    /** Feeds the current media volume (0..1) into the engine's loudness trim. */
+    private fun updateVolumeCompensation() {
+        val max = runCatching { audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC) }
+            .getOrDefault(1).coerceAtLeast(1)
+        val current = runCatching { audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) }
+            .getOrDefault(0)
+        equalizerManager.setVolumeFraction(current.toFloat() / max)
         publishEqualizerState()
     }
 
@@ -1075,6 +1109,10 @@ class NoxaAudioPlayer(private val context: Context) {
         if (routeCallbackRegistered) {
             runCatching { audioManager.unregisterAudioDeviceCallback(routeCallback) }
             routeCallbackRegistered = false
+        }
+        if (volumeObserverRegistered) {
+            runCatching { context.contentResolver.unregisterContentObserver(volumeObserver) }
+            volumeObserverRegistered = false
         }
         stopPositionUpdater()
         cancelSleepTimer(restoreVolume = false)
