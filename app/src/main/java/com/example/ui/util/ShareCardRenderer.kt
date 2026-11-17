@@ -324,20 +324,30 @@ object ShareCardRenderer {
         text: String,
         title: String
     ): ShareResult {
-        val saved = saveToGallery(context, bitmap, safeName(baseName, "noxa")) != null
+        val galleryUri = saveToGallery(context, bitmap, safeName(baseName, "noxa"))
         val file = try {
             writeToCache(context, bitmap, "card-${System.currentTimeMillis()}")
         } catch (e: Exception) {
+            // The private cache can be unavailable (full storage, restricted
+            // profile). If the gallery accepted the image we can still share
+            // that copy, so the user is not left with a failed button.
             Log.e(TAG, "Could not write the share cache copy", e)
-            return if (saved) ShareResult.SAVED_ONLY else ShareResult.FAILED
+            null
         }
 
+        val shareable = file?.let { cached ->
+            runCatching {
+                FileProvider.getUriForFile(
+                    context,
+                    context.packageName + FILE_PROVIDER_SUFFIX,
+                    cached
+                )
+            }.getOrNull()
+        } ?: galleryUri
+        if (shareable == null) return ShareResult.FAILED
+
         return try {
-            val uri = FileProvider.getUriForFile(
-                context,
-                context.packageName + FILE_PROVIDER_SUFFIX,
-                file
-            )
+            val uri = shareable
             val send = Intent(Intent.ACTION_SEND).apply {
                 type = "image/png"
                 putExtra(Intent.EXTRA_STREAM, uri)
@@ -353,7 +363,7 @@ object ShareCardRenderer {
             ShareResult.SHARED
         } catch (e: Exception) {
             Log.e(TAG, "Opening the share sheet failed", e)
-            if (saved) ShareResult.SAVED_ONLY else ShareResult.FAILED
+            if (galleryUri != null) ShareResult.SAVED_ONLY else ShareResult.FAILED
         }
     }
 
@@ -372,10 +382,13 @@ object ShareCardRenderer {
         }
         canvas.drawRect(0f, 0f, CARD_SIZE.toFloat(), CARD_SIZE.toFloat(), bgPaint)
 
-        // Artwork: rounded square, centered.
-        val artSize = 700f
+        // Artwork: rounded square, centered. Sized so title, artist, divider,
+        // brand and link all stay INSIDE the 1080 canvas — the old layout drew
+        // the last two lines past the bottom edge, which looked like a broken
+        // export.
+        val artSize = 640f
         val artLeft = (CARD_SIZE - artSize) / 2f
-        val artTop = 130f
+        val artTop = 96f
         val artRect = RectF(artLeft, artTop, artLeft + artSize, artTop + artSize)
         if (artwork != null) {
             val scaled = Bitmap.createScaledBitmap(artwork, artSize.toInt(), artSize.toInt(), true)
@@ -419,7 +432,7 @@ object ShareCardRenderer {
             typeface = Typeface.DEFAULT_BOLD
         }
         val title = TextUtils.ellipsize(song.title, titlePaint, CARD_SIZE - 160f, TextUtils.TruncateAt.END)
-        canvas.drawText(title, 0, title.length, CARD_SIZE / 2f, 930f, titlePaint)
+        canvas.drawText(title, 0, title.length, CARD_SIZE / 2f, 838f, titlePaint)
 
         val artistPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
             color = TEXT_SECONDARY
@@ -427,11 +440,11 @@ object ShareCardRenderer {
             textAlign = Paint.Align.CENTER
         }
         val artist = TextUtils.ellipsize(song.artist, artistPaint, CARD_SIZE - 200f, TextUtils.TruncateAt.END)
-        canvas.drawText(artist, 0, artist.length, CARD_SIZE / 2f, 1000f, artistPaint)
+        canvas.drawText(artist, 0, artist.length, CARD_SIZE / 2f, 900f, artistPaint)
 
         // Lime divider + NOXA branding footer.
         val linePaint = Paint().apply { color = LIME }
-        canvas.drawRect(CARD_SIZE / 2f - 60f, 1042f, CARD_SIZE / 2f + 60f, 1048f, linePaint)
+        canvas.drawRect(CARD_SIZE / 2f - 60f, 942f, CARD_SIZE / 2f + 60f, 948f, linePaint)
 
         val brandPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
             color = TEXT_PRIMARY
@@ -440,14 +453,14 @@ object ShareCardRenderer {
             typeface = Typeface.DEFAULT_BOLD
             letterSpacing = 0.12f
         }
-        canvas.drawText("NOXA MUSIC", CARD_SIZE / 2f, 1105f, brandPaint)
+        canvas.drawText("NOXA MUSIC", CARD_SIZE / 2f, 1004f, brandPaint)
 
         val linkPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
             color = TEXT_SECONDARY
             textSize = 30f
             textAlign = Paint.Align.CENTER
         }
-        canvas.drawText("skydev.my.id", CARD_SIZE / 2f, 1150f, linkPaint)
+        canvas.drawText("skydev.my.id", CARD_SIZE / 2f, 1046f, linkPaint)
 
         return bitmap
     }
@@ -464,7 +477,13 @@ object ShareCardRenderer {
         lines: List<String>,
         highlightIndex: Int
     ): Bitmap? {
-        val visible = lines.map { it.trim() }.filter { it.isNotBlank() }.take(LYRIC_CARD_MAX_LINES)
+        // Fallback to the track's own lyrics when the caller could not pass a
+        // window (unsynced lyrics have no timestamps to pick a verse from).
+        val source = lines.filter { it.isNotBlank() }.ifEmpty {
+            song?.lyrics?.lineSequence()?.map { it.trim() }?.filter { it.isNotBlank() }?.toList()
+                .orEmpty()
+        }
+        val visible = source.take(LYRIC_CARD_MAX_LINES)
         if (visible.isEmpty()) return null
         val artwork = loadArtwork(context, song?.artworkUrl)
         val bitmap = Bitmap.createBitmap(CARD_SIZE, LYRIC_CARD_HEIGHT, Bitmap.Config.ARGB_8888)

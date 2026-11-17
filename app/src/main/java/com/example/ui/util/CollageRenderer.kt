@@ -89,9 +89,11 @@ object CollageRenderer {
             }
         )
 
-        // Four cards, back to front so overlaps look natural.
+        // Four cards, back to front so overlaps look natural. One card's
+        // artwork failing must not throw away the whole poster.
         SLOTS.forEachIndexed { index, slot ->
-            drawCard(canvas, context, slot, songs.getOrNull(index))
+            runCatching { drawCard(canvas, context, slot, songs.getOrNull(index)) }
+                .onFailure { Log.w(TAG, "Card $index skipped: ${it.message}") }
         }
 
         drawFooter(canvas, caption)
@@ -104,16 +106,18 @@ object CollageRenderer {
     private suspend fun drawBackground(canvas: Canvas, context: Context, uri: String?) {
         val photo = uri?.let { loadPhoto(context, it) }
         if (photo != null) {
-            // Center-crop the photo, then draw it through a downscale/upscale
-            // pass: a cheap, dependency-free "blur" that keeps the cards legible
-            // without pulling in RenderScript.
-            val scaled = centerCrop(photo, WIDTH, HEIGHT)
-            val small = Bitmap.createScaledBitmap(scaled, WIDTH / 10, HEIGHT / 10, true)
+            // A cheap, dependency-free "blur": crop small, then let the canvas
+            // stretch it back to poster size. No full-size intermediate list is
+            // allocated, which is what used to blow the heap on large photos
+            // (and made the export fail with "gagal dibuat").
+            val small = centerCrop(photo, WIDTH / 10, HEIGHT / 10)
             canvas.drawBitmap(
-                Bitmap.createScaledBitmap(small, WIDTH, HEIGHT, true),
-                0f, 0f,
+                small, null,
+                RectF(0f, 0f, WIDTH.toFloat(), HEIGHT.toFloat()),
                 Paint(Paint.FILTER_BITMAP_FLAG)
             )
+            if (small !== photo) small.recycle()
+            photo.recycle()
             canvas.drawRect(
                 0f, 0f, WIDTH.toFloat(), HEIGHT.toFloat(),
                 Paint().apply { color = Color.argb(150, 6, 7, 8) }
@@ -187,6 +191,8 @@ object CollageRenderer {
             canvas.clipPath(path)
             canvas.drawBitmap(scaled, artRect.left, artRect.top, Paint(Paint.FILTER_BITMAP_FLAG))
             canvas.restore()
+            if (scaled !== artwork) scaled.recycle()
+            artwork.recycle()
         } else {
             canvas.drawRoundRect(
                 artRect, 22f, 22f,
@@ -346,7 +352,11 @@ object CollageRenderer {
 
     private suspend fun loadArtwork(context: Context, url: String): Bitmap? = try {
         context.imageLoader.execute(
-            ImageRequest.Builder(context).data(url).crossfade(false).build()
+            ImageRequest.Builder(context)
+                .data(url)
+                .crossfade(false)
+                .size(420)
+                .build()
         ).drawable?.toBitmap()
     } catch (e: Exception) {
         null

@@ -2064,7 +2064,17 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun playSong(song: Song, queue: List<Song> = listOf(song), index: Int = 0) {
+    /**
+     * [allowPreviewFallback] is for NOXA AI: a command must never end in a
+     * dialog, so a track that only exists as a provider clip plays and the
+     * caller is told about it. Direct taps keep the honest prompt.
+     */
+    fun playSong(
+        song: Song,
+        queue: List<Song> = listOf(song),
+        index: Int = 0,
+        allowPreviewFallback: Boolean = false
+    ) {
         _resumableSong.value = null
         autoplayAppendedFor = null
         preloadedForId = null
@@ -2087,7 +2097,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             _pendingYouTubePlay.value = PendingYouTubePlay(song, queue, index)
             return
         }
-        resolveAndPlay(song, queue, index)
+        resolveAndPlay(song, queue, index, allowPreviewFallback)
     }
 
     /**
@@ -2131,7 +2141,12 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         _pendingYouTubePlay.value = null
     }
 
-    private fun resolveAndPlay(song: Song, queue: List<Song>, index: Int) {
+    private fun resolveAndPlay(
+        song: Song,
+        queue: List<Song>,
+        index: Int,
+        allowPreviewFallback: Boolean = false
+    ) {
         // Musik lokal: the URI is already the audio. No resolution, no network,
         // no policy dialog — it plays even in airplane mode.
         if (song.source == MusicSource.LOCAL) {
@@ -2177,9 +2192,17 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 // No full audio found. A Deezer preview used to start playing
                 // here, which is exactly the "why did my song become 30 s?"
                 // bug. Ask first; silence is better than a surprise clip.
-                song.isPreview -> {
+                song.isPreview && !allowPreviewFallback -> {
                     player.endResolving()
                     _previewFallback.value = PreviewFallback(song, queue, index)
+                }
+
+                // AI-driven plays already asked for this song explicitly; play
+                // the clip instead of stalling on a dialog, and say so.
+                song.isPreview -> {
+                    player.playSong(song, queue, index)
+                    _downloadNotice.value =
+                        "\"${song.title}\" hanya tersedia sebagai cuplikan 30 detik."
                 }
 
                 else -> player.playSong(song, queue, index)
@@ -4842,7 +4865,13 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             var note: String? = null
             val notes = mutableListOf<String>()
             var builtPlaylist: AiPlaylistBuild? = null
-            for (action in reply.actions) {
+            // If the model forgot its action tags, reconstruct only the
+            // obvious intent from the request + reply. This is what keeps
+            // "putarkan lagu X" working across model swaps.
+            val actionsToRun = reply.actions.ifEmpty {
+                com.example.data.ai.AiActionFallback.parse(trimmed, reply.text)
+            }
+            for (action in actionsToRun) {
                 when (action) {
                     is com.example.data.ai.NoxaAiAction.Play -> {
                         val song = resolveAiTrack(
@@ -4850,7 +4879,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                         )
                         if (song != null) {
                             cardSong = song
-                            playSong(song)
+                            playSong(song, listOf(song), 0, allowPreviewFallback = true)
                         } else {
                             note = "lagu tidak ditemukan di katalog NOXA"
                         }
@@ -4991,19 +5020,39 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             .filter { it.isNotBlank() }
             .joinToString(" ")
             .ifBlank { ref.title }
-        val results = runCatching { repository.search(query) }.getOrDefault(emptyList())
-        val pool = if (results.isEmpty() && ref.artist.isNotBlank()) {
-            runCatching { repository.search(ref.title) }.getOrDefault(emptyList())
-        } else {
-            results
-        }
-        return pool.firstOrNull { song ->
+
+        fun bestMatch(pool: List<Song>): Song? = pool.firstOrNull { song ->
             val songTitle = normaliseForMatch(song.title)
             val titleOk = songTitle == wantedTitle ||
                 songTitle.contains(wantedTitle) ||
                 wantedTitle.contains(songTitle)
             titleOk && (wantedArtist.isBlank() || artistMatches(song.artist, wantedArtist))
         }
+
+        val results = runCatching { repository.search(query) }.getOrDefault(emptyList())
+        val pool = if (results.isEmpty() && ref.artist.isNotBlank()) {
+            runCatching { repository.search(ref.title) }.getOrDefault(emptyList())
+        } else {
+            results
+        }
+        bestMatch(pool)?.let { return it }
+
+        // Deezer can be rate-limited or blocked on a given network. The AI
+        // command must still work, so the same match is attempted against the
+        // YouTube catalogue before reporting "not found".
+        val youtube = runCatching { youtubeRepository.search(query) }.getOrDefault(emptyList())
+        bestMatch(youtube)?.let { return it }
+
+        // Last resort: the title alone, when the assistant attached a wrong or
+        // extra artist name but the song itself does exist.
+        if (wantedArtist.isNotBlank()) {
+            val titleOnly = runCatching { repository.search(ref.title) }.getOrDefault(emptyList())
+            titleOnly.firstOrNull { song ->
+                val songTitle = normaliseForMatch(song.title)
+                songTitle == wantedTitle || songTitle.contains(wantedTitle)
+            }?.let { return it }
+        }
+        return null
     }
 
     /**

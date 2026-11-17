@@ -85,7 +85,9 @@ fun LyricsPanel(
 
     /** Renders the verse as a story card and hands it to the system sheet. */
     fun shareLines(lines: List<String>, highlight: Int) {
-        if (sharingLyrics || lines.isEmpty()) return
+        // An empty window is not a reason to do nothing: the renderer falls
+        // back to the track's own lyrics, and a real failure gets its toast.
+        if (sharingLyrics) return
         sharingLyrics = true
         shareScope.launch {
             val result = withContext(Dispatchers.IO) {

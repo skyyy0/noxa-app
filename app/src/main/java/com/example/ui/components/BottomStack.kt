@@ -105,7 +105,7 @@ internal fun NoxaBottomStack(
             modifier = Modifier
                 .fillMaxWidth()
                 .navigationBarsPadding()
-                .padding(top = 26.dp)
+                .padding(top = 15.dp)
         ) {
             AnimatedVisibility(
                 visible = miniPlayerVisible,
@@ -130,11 +130,11 @@ internal fun NoxaBottomStack(
                         onToggleFavorite = onToggleFavorite,
                         onClick = onOpenPlayer,
                         // Floats clear of both edges: a panel, not a strip.
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp)
                     )
 
                     if (currentSong != null) {
-                        Spacer(modifier = Modifier.height(10.dp))
+                        Spacer(modifier = Modifier.height(7.dp))
                     }
                 }
             }
@@ -168,7 +168,7 @@ internal fun NoxaBottomStack(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 6.dp, vertical = 5.dp),
+                        .padding(horizontal = 6.dp, vertical = 4.dp),
                     horizontalArrangement = Arrangement.SpaceEvenly,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -184,7 +184,7 @@ internal fun NoxaBottomStack(
                                 .weight(1f)
                                 .clip(RoundedCornerShape(22.dp))
                                 .noxaTap { onNavigateTab(screen) }
-                                .padding(vertical = 5.dp)
+                                .padding(vertical = 4.dp)
                                 .testTag("nav_item_${screen.route}"),
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
@@ -193,7 +193,7 @@ internal fun NoxaBottomStack(
                             // the whole bar.
                             Box(
                                 modifier = Modifier
-                                    .size(width = 40.dp, height = 26.dp)
+                                    .size(width = 38.dp, height = 24.dp)
                                     .clip(RoundedCornerShape(percent = 50))
                                     .background(
                                         if (isSelected) NoxaLime.copy(alpha = 0.16f)
@@ -232,7 +232,7 @@ internal fun NoxaBottomStack(
                 }
             }
 
-            Spacer(modifier = Modifier.height(6.dp))
+            Spacer(modifier = Modifier.height(4.dp))
         }
     }
 }

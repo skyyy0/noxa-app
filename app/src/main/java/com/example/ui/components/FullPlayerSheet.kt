@@ -480,11 +480,26 @@ fun FullPlayerSheet(
                     Box(
                         modifier = Modifier
                             .weight(1f)
-                            .padding(horizontal = if (canHaveMv) 0.dp else 14.dp)
+                            // v3.7.6: the art is inset instead of bleeding to
+                            // the edges, so the player reads as a floating
+                            // glass card rather than a full-bleed sticker.
+                            .padding(horizontal = if (canHaveMv) 0.dp else 34.dp)
                             .aspectRatio(if (isVideoActive) VIDEO_ASPECT_RATIO else 1f)
-                            .clip(RoundedCornerShape(24.dp))
+                            .clip(RoundedCornerShape(30.dp))
                             .background(NoxaSurfaceElevated)
-                            .border(1.dp, NoxaBorder, RoundedCornerShape(24.dp)),
+                            // Only light: a hairline that fades before the
+                            // bottom edge, like glass catching a window.
+                            .border(
+                                1.dp,
+                                Brush.verticalGradient(
+                                    listOf(
+                                        Color.White.copy(alpha = 0.20f),
+                                        Color.White.copy(alpha = 0.04f),
+                                        Color.Transparent
+                                    )
+                                ),
+                                RoundedCornerShape(30.dp)
+                            ),
                         contentAlignment = Alignment.Center
                     ) {
                         when {
@@ -565,7 +580,7 @@ fun FullPlayerSheet(
                     )
                 }
 
-                Spacer(modifier = Modifier.height(if (canHaveMv) 14.dp else 28.dp))
+                Spacer(modifier = Modifier.height(if (canHaveMv) 12.dp else 20.dp))
 
                 // Title & Artist & Favorite
                 Row(
@@ -579,7 +594,7 @@ fun FullPlayerSheet(
                             // CharSequence to the text measurer.
                             text = song.displayTitle,
                             color = NoxaTextPrimary,
-                            fontSize = 20.sp,
+                            fontSize = 19.sp,
                             fontWeight = FontWeight.Bold,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
@@ -834,7 +849,7 @@ fun FullPlayerSheet(
 
                     Box(
                         modifier = Modifier
-                            .size(56.dp)
+                            .size(50.dp)
                             .clip(CircleShape)
                             // Tap dips the glyph and ticks under the finger,
                             // the way the transport row feels on iOS.
@@ -846,13 +861,13 @@ fun FullPlayerSheet(
                             imageVector = Icons.Default.SkipPrevious,
                             contentDescription = "Previous",
                             tint = NoxaTextPrimary,
-                            modifier = Modifier.size(36.dp)
+                            modifier = Modifier.size(32.dp)
                         )
                     }
 
                     Box(
                         modifier = Modifier
-                            .size(68.dp)
+                            .size(62.dp)
                             .clip(CircleShape)
                             .background(NoxaLime)
                             .noxaTap { onTogglePlayPause() }
@@ -871,7 +886,7 @@ fun FullPlayerSheet(
                         }
                         if (playerState.isBuffering) {
                             CircularProgressIndicator(
-                                modifier = Modifier.size(30.dp),
+                                modifier = Modifier.size(26.dp),
                                 color = Color.Black,
                                 strokeWidth = 3.dp
                             )
@@ -881,7 +896,7 @@ fun FullPlayerSheet(
                                 contentDescription = if (playerState.isPlaying) "Pause" else "Play",
                                 tint = Color.Black,
                                 modifier = Modifier
-                                    .size(36.dp)
+                                    .size(32.dp)
                                     .graphicsLayer {
                                         scaleX = iconPop.value
                                         scaleY = iconPop.value
@@ -892,7 +907,7 @@ fun FullPlayerSheet(
 
                     Box(
                         modifier = Modifier
-                            .size(56.dp)
+                            .size(50.dp)
                             .clip(CircleShape)
                             .noxaTap { onNext() }
                             .testTag("full_player_next_btn"),
@@ -902,7 +917,7 @@ fun FullPlayerSheet(
                             imageVector = Icons.Default.SkipNext,
                             contentDescription = "Next",
                             tint = NoxaTextPrimary,
-                            modifier = Modifier.size(36.dp)
+                            modifier = Modifier.size(32.dp)
                         )
                     }
 
@@ -924,7 +939,7 @@ fun FullPlayerSheet(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(24.dp))
+                Spacer(modifier = Modifier.height(18.dp))
 
                 // Bottom Secondary Actions (Sleep Timer, Lyrics, Queue)
                 Row(

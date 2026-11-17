@@ -863,10 +863,11 @@ KEMAMPUAN KHUSUS: kamu TERHUBUNG ke pemutar musik NOXA. Semua perintah ditulis s
 [NOXA_QUEUE|Artis - Judul;Artis - Judul]
 4. Ganti satu lagu yang tidak cocok di dalam playlist:
 [NOXA_REPLACE|Nama Playlist|Artis Lama - Judul Lama|Artis Baru - Judul Baru]
-5. Atur equalizer (pilihan: Flat, Bass, Vocal, Rock, Pop, Jazz, Elektronik, Akustik):
+5. Atur equalizer (pilihan: Otomatis, Netral, Hangat, Vokal, Bass, Detail):
 [NOXA_EQ|Bass]
 
 ATURAN LAGU (SANGAT PENTING):
+- WAJIB menyertakan tag aksi di baris terakhir setiap kali pengguna meminta lagu diputar, diantrikan, atau dibuatkan playlist. Tanpa tag, aplikasi tidak bisa memutar apa pun.
 - Setiap lagu WAJIB ditulis "Artis - Judul" lengkap, karena aplikasi mencocokkannya ke katalog nyata dan akan MENOLAK lagu yang artisnya tidak cocok.
 - Kalau pengguna meminta album atau lagu dari satu artis (contoh: "album Dewa 19"), SEMUA lagu dalam daftar harus dari artis itu. Jangan menyisipkan lagu artis lain.
 - Jangan mengarang judul. Kalau ragu apakah lagu ada, pilih lagu yang paling terkenal dari artis tersebut dan sebutkan pilihanmu.

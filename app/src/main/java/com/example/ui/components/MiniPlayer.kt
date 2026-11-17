@@ -66,7 +66,7 @@ import androidx.compose.runtime.collectAsState
  * The panel's silhouette — shared by the surface, the sheen and the edge so
  * the three layers never disagree about where the corners are.
  */
-private val MiniPlayerShape = RoundedCornerShape(30.dp)
+private val MiniPlayerShape = RoundedCornerShape(26.dp)
 
 @Composable
 fun MiniPlayer(
@@ -148,7 +148,7 @@ fun MiniPlayer(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
@@ -158,10 +158,10 @@ fun MiniPlayer(
                         contentDescription = "Mini player artwork",
                         contentScale = ContentScale.Crop,
                         modifier = Modifier
-                            .size(44.dp)
+                            .size(40.dp)
                             // Sleeve radius: album art is nearly square everywhere
                             // in NOXA so artwork reads as artwork, not as a chip.
-                            .clip(RoundedCornerShape(14.dp))
+                            .clip(RoundedCornerShape(12.dp))
                     )
 
                     Spacer(modifier = Modifier.width(12.dp))
@@ -199,14 +199,14 @@ fun MiniPlayer(
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             onToggleFavorite()
                         },
-                        modifier = Modifier.size(36.dp).testTag("mini_player_fav_btn")
+                        modifier = Modifier.size(30.dp).testTag("mini_player_fav_btn")
                     ) {
                         Icon(
                             imageVector = if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
                             contentDescription = "Favorite",
                             tint = if (isFavorite) NoxaLime else NoxaTextSecondary,
                             modifier = Modifier
-                                .size(20.dp)
+                                .size(18.dp)
                                 // Pops when the heart fills, settles when it empties.
                                 .noxaPop(trigger = isFavorite)
                         )
@@ -215,7 +215,7 @@ fun MiniPlayer(
                     // Play/Pause Button
                     Box(
                         modifier = Modifier
-                        .size(38.dp)
+                        .size(34.dp)
                         .clip(CircleShape)
                         .background(NoxaLime)
                         .noxaTap { onTogglePlayPause() }
@@ -224,7 +224,7 @@ fun MiniPlayer(
                     ) {
                         if (isBuffering) {
                             CircularProgressIndicator(
-                                modifier = Modifier.size(20.dp),
+                                modifier = Modifier.size(18.dp),
                                 color = Color.Black,
                                 strokeWidth = 2.dp
                             )
@@ -233,7 +233,7 @@ fun MiniPlayer(
                                 imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                                 contentDescription = if (isPlaying) "Pause" else "Play",
                                 tint = Color.Black,
-                                modifier = Modifier.size(22.dp)
+                                modifier = Modifier.size(19.dp)
                             )
                         }
                     }
@@ -243,13 +243,13 @@ fun MiniPlayer(
                     // Skip Next Button
                     IconButton(
                         onClick = onNext,
-                        modifier = Modifier.size(36.dp).testTag("mini_player_next_btn")
+                        modifier = Modifier.size(30.dp).testTag("mini_player_next_btn")
                     ) {
                         Icon(
                             imageVector = Icons.Default.SkipNext,
                             contentDescription = "Next",
                             tint = NoxaTextPrimary,
-                            modifier = Modifier.size(22.dp)
+                            modifier = Modifier.size(19.dp)
                         )
                     }
                 }
